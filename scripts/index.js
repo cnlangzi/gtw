@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * github-work skill - GitHub Team Workflow
- * Commands: start, new, update, confirm, fix, pr, push, review, issue, show, poll, config
+ * gtw skill - GitHub Team Workflow
+ * Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config
  */
 
 const fs = require('fs');
@@ -122,7 +122,7 @@ const REVIEW_ITEMS = [
 
 async function cmdStart(args) {
   const workdir = args[0];
-  if (!workdir) throw new Error('Usage: /gtw start <workdir>');
+  if (!workdir) throw new Error('Usage: /gtw on <workdir>');
   const expandedWorkdir = workdir.startsWith('~') ? path.join(os.homedir(), workdir.slice(1)) : workdir;
   const absWorkdir = path.isAbsolute(expandedWorkdir) ? expandedWorkdir : path.join(process.cwd(), expandedWorkdir);
   if (!path.isAbsolute(absWorkdir)) throw new Error('Please use an absolute path, e.g. /Users/name/code/myproject or ~/code/myproject');
@@ -130,12 +130,18 @@ async function cmdStart(args) {
   const repo = getRemoteRepo(absWorkdir);
   const wip = { workdir: absWorkdir, repo, createdAt: new Date().toISOString() };
   saveWip(wip);
-  return { ok: true, workdir: absWorkdir, repo, message: `workdir set to ${absWorkdir}, repo: ${repo}` };
+  return {
+    ok: true,
+    workdir: absWorkdir,
+    repo,
+    display: `✅ 已切换工作目录\n\n📁 ${absWorkdir}\n🔗 ${repo}`,
+    message: `workdir set to ${absWorkdir}, repo: ${repo}`,
+  };
 }
 
 async function cmdNew(args) {
   const wip = getWip();
-  if (!wip.repo) throw new Error('No repo set. Run /gtw start <workdir> first');
+  if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
   const title = args[0] || '';
   const body = args.slice(1).join(' ') || '';
   const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
@@ -147,7 +153,7 @@ async function cmdUpdate(args) {
   const id = parseInt(args[0], 10);
   if (isNaN(id)) throw new Error('Usage: /gtw update #<id> [title] [body...]');
   const wip = getWip();
-  if (!wip.repo) throw new Error('No repo set. Run /gtw start <workdir> first');
+  if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
   // Parse remaining args as title body pairs
   const rest = args.slice(1).join(' ');
   const updated = { ...wip, issue: { action: 'update', id, title: rest, body: '' }, updatedAt: new Date().toISOString() };
@@ -158,7 +164,7 @@ async function cmdUpdate(args) {
 async function cmdConfirm(args) {
   const token = getToken();
   const wip = getWip();
-  if (!wip.repo) throw new Error('No pending action. Run /gtw start + /gtw new first');
+  if (!wip.repo) throw new Error('No pending action. Run /gtw on + /gtw new first');
   const results = [];
 
   if (wip.issue?.title) {
@@ -194,7 +200,7 @@ async function cmdConfirm(args) {
 
 async function cmdFix(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
   const workdir = wip.workdir;
   const branchName = args[0] || `fix/${Date.now()}`;
   const defaultBranch = getDefaultBranch(workdir);
@@ -209,7 +215,7 @@ async function cmdFix(args) {
 
 async function cmdPr(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
   if (!wip.branch?.name) throw new Error('No branch. Run /gtw fix [name] first');
   const workdir = wip.workdir;
   const branchName = wip.branch.name;
@@ -229,7 +235,7 @@ async function cmdPr(args) {
 
 async function cmdPush(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
   const workdir = wip.workdir;
   const branch = getCurrentBranch(workdir);
   const diff = git('git diff --cached', workdir) || git('git diff', workdir) || '';
@@ -246,7 +252,7 @@ async function cmdReview(args) {
   const verdictArg = args.find(a => a === 'approved' || a === 'changes') || null;
   const repo = wip.repo || (args.find(a => String(a).includes('/')) || '');
 
-  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
 
   const myLogin = (await apiRequest('GET', '/user', token)).login;
 
@@ -340,7 +346,7 @@ async function cmdIssue(args) {
   const token = getToken();
   const wip = getWip();
   const repo = args[0] && String(args[0]).includes('/') ? args[0] : wip.repo;
-  if (!repo) throw new Error('No repo. Run /gtw start <workdir> first, or pass owner/repo');
+  if (!repo) throw new Error('No repo. Run /gtw on <workdir> first, or pass owner/repo');
   const params = new URLSearchParams({ state: 'open', per_page: '50' });
   const data = await apiRequest('GET', `/repos/${repo}/issues?${params}`, token);
   const issues = data.filter(i => !i.pull_request);
@@ -354,7 +360,7 @@ async function cmdShow(args) {
   const id = parseInt(args[0], 10);
   if (isNaN(id)) throw new Error('Usage: /gtw show #<id>');
   const repo = args[1] && String(args[1]).includes('/') ? args[1] : wip.repo;
-  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
   const data = await apiRequest('GET', `/repos/${repo}/issues/${id}`, token);
   return { ok: true, issue: { number: data.number, title: data.title, body: data.body, state: data.state, url: data.html_url, assignee: data.assignee?.login }, display: `[#${data.number}] ${data.title}\n\n${data.body || ''}\n\nState: ${data.state}\nURL: ${data.html_url}` };
 }
@@ -363,7 +369,7 @@ async function cmdPoll(args) {
   const token = getToken();
   const wip = getWip();
   const repo = wip.repo;
-  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
 
   const sub = args[0];
 
