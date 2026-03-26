@@ -422,7 +422,7 @@ async function main() {
   try {
     switch (cmd) {
       case 'auth': result = await deviceFlow(); break;
-      case 'start': result = await cmdStart(args); break;
+      case 'on': result = await cmdStart(args); break;
       case 'new': result = await cmdNew(args); break;
       case 'update': result = await cmdUpdate(args); break;
       case 'confirm': result = await cmdConfirm(args); break;

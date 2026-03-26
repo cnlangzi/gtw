@@ -36,7 +36,7 @@ GitHub team collaboration workflow skill. Session-based design: drafts go to wip
 ### Workflow Setup
 
 ```
-/gtw start <workdir>
+/gtw on <workdir>
 ```
 Resolves git remote from a local directory and writes it to wip.json. All subsequent commands use this repo.
 
@@ -140,7 +140,7 @@ File: `~/.openclaw/gtw/wip.json`
 ## Standard Workflow
 
 ```
-You: /gtw start ~/code/myproject
+You: /gtw on ~/code/myproject
 Agent: workdir set, repo: owner/repo
 
 You: /gtw new

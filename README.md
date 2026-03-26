@@ -10,7 +10,7 @@
 - **LLM-assisted issue creation** - `/gtw new` reads the conversation and generates a properly structured issue. No copy-paste.
 - **Git operations** - `fix`, `push`, and `pr` commands wrap standard git workflows with semantic commit log generation.
 - **Emoji review protocol** - eyes claim -> checklist -> approved/changes verdict. No concurrent reviews, no confusion.
-- **Multi-repo ready** - Start with any repo by pointing to its local working copy. Switch repos mid-session with `/gtw start`.
+- **Multi-repo ready** - Start with any repo by pointing to its local working copy. Switch repos mid-session with `/gtw on`.
 - **Zero external dependencies** - Plain Node.js, no npm packages needed.
 
 ## Installation
@@ -90,14 +90,14 @@ All commands are invoked via `/gtw <command>` in your OpenClaw chat interface.
 ### Workflow Setup
 
 ```bash
-/gtw start <workdir>
+/gtw on <workdir>
 ```
 Resolves the git remote from a local directory and writes it to `wip.json`. All subsequent commands use this repo.
 
 ```bash
 # Examples
-/gtw start ~/code/myproject
-/gtw start /Users/name/code/myproject
+/gtw on ~/code/myproject
+/gtw on /Users/name/code/myproject
 ```
 
 ---
@@ -219,7 +219,7 @@ Shows current configuration, token status, and `wip.json` contents.
 ## Workflow Example
 
 ```
-You: /gtw start ~/code/myproject
+You: /gtw on ~/code/myproject
 Agent: workdir set, repo: cnlangzi/myproject
 
 You: /gtw new
