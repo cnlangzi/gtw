@@ -10,7 +10,7 @@ const https = require('https');
 const { execSync } = require('child_process');
 const os = require('os');
 
-const CONFIG_DIR = path.join(os.homedir(), '.openclaw', 'ghw');
+const CONFIG_DIR = path.join(os.homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = path.join(CONFIG_DIR, 'token.json');
 const wip_FILE = path.join(CONFIG_DIR, 'wip.json');
 
@@ -54,7 +54,7 @@ function writeJSON(file, data) { fs.writeFileSync(file, JSON.stringify(data, nul
 function getToken() {
   if (ACCESS_TOKEN) return ACCESS_TOKEN;
   const t = readJSON(TOKEN_FILE);
-  if (!t?.access_token) throw new Error('Not authenticated. Run /ghw auth or set GITHUB_ACCESS_TOKEN');
+  if (!t?.access_token) throw new Error('Not authenticated. Run /gtw auth or set GITHUB_ACCESS_TOKEN');
   return t.access_token;
 }
 function saveToken(t) { writeJSON(TOKEN_FILE, t); }
@@ -122,7 +122,7 @@ const REVIEW_ITEMS = [
 
 async function cmdStart(args) {
   const workdir = args[0];
-  if (!workdir) throw new Error('Usage: /ghw start <workdir>');
+  if (!workdir) throw new Error('Usage: /gtw start <workdir>');
   const expandedWorkdir = workdir.startsWith('~') ? path.join(os.homedir(), workdir.slice(1)) : workdir;
   const absWorkdir = path.isAbsolute(expandedWorkdir) ? expandedWorkdir : path.join(process.cwd(), expandedWorkdir);
   if (!path.isAbsolute(absWorkdir)) throw new Error('Please use an absolute path, e.g. /Users/name/code/myproject or ~/code/myproject');
@@ -135,7 +135,7 @@ async function cmdStart(args) {
 
 async function cmdNew(args) {
   const wip = getWip();
-  if (!wip.repo) throw new Error('No repo set. Run /ghw start <workdir> first');
+  if (!wip.repo) throw new Error('No repo set. Run /gtw start <workdir> first');
   const title = args[0] || '';
   const body = args.slice(1).join(' ') || '';
   const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
@@ -145,9 +145,9 @@ async function cmdNew(args) {
 
 async function cmdUpdate(args) {
   const id = parseInt(args[0], 10);
-  if (isNaN(id)) throw new Error('Usage: /ghw update #<id> [title] [body...]');
+  if (isNaN(id)) throw new Error('Usage: /gtw update #<id> [title] [body...]');
   const wip = getWip();
-  if (!wip.repo) throw new Error('No repo set. Run /ghw start <workdir> first');
+  if (!wip.repo) throw new Error('No repo set. Run /gtw start <workdir> first');
   // Parse remaining args as title body pairs
   const rest = args.slice(1).join(' ');
   const updated = { ...wip, issue: { action: 'update', id, title: rest, body: '' }, updatedAt: new Date().toISOString() };
@@ -158,7 +158,7 @@ async function cmdUpdate(args) {
 async function cmdConfirm(args) {
   const token = getToken();
   const wip = getWip();
-  if (!wip.repo) throw new Error('No pending action. Run /ghw start + /ghw new first');
+  if (!wip.repo) throw new Error('No pending action. Run /gtw start + /gtw new first');
   const results = [];
 
   if (wip.issue?.title) {
@@ -194,7 +194,7 @@ async function cmdConfirm(args) {
 
 async function cmdFix(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /ghw start <workdir> first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
   const workdir = wip.workdir;
   const branchName = args[0] || `fix/${Date.now()}`;
   const defaultBranch = getDefaultBranch(workdir);
@@ -209,8 +209,8 @@ async function cmdFix(args) {
 
 async function cmdPr(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /ghw start <workdir> first');
-  if (!wip.branch?.name) throw new Error('No branch. Run /ghw fix [name] first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
+  if (!wip.branch?.name) throw new Error('No branch. Run /gtw fix [name] first');
   const workdir = wip.workdir;
   const branchName = wip.branch.name;
   git(`git push -u origin ${branchName}`, workdir);
@@ -224,19 +224,19 @@ async function cmdPr(args) {
   }
   const updated = { ...wip, pr: { title: wip.pr?.title || `Fix #${wip.issue?.id || ''}: ${branchName}`, body: prBody }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, branch: branchName, message: `Branch pushed. Run /ghw confirm to create PR` };
+  return { ok: true, branch: branchName, message: `Branch pushed. Run /gtw confirm to create PR` };
 }
 
 async function cmdPush(args) {
   const wip = getWip();
-  if (!wip.workdir) throw new Error('No workdir set. Run /ghw start <workdir> first');
+  if (!wip.workdir) throw new Error('No workdir set. Run /gtw start <workdir> first');
   const workdir = wip.workdir;
   const branch = getCurrentBranch(workdir);
   const diff = git('git diff --cached', workdir) || git('git diff', workdir) || '';
   const stats = git('git diff --stat --cached', workdir) || git('git diff --stat', workdir) || '';
   const updated = { ...wip, push: { branch, diff, stats, staged: !!git('git diff --cached', workdir) }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, branch, stats, message: `Changes staged. Commit message needed. Use /ghw confirm push` };
+  return { ok: true, branch, stats, message: `Changes staged. Commit message needed. Use /gtw confirm push` };
 }
 
 // review: fully automatic - claim -> agent reviews -> verdict -> release claim
@@ -246,7 +246,7 @@ async function cmdReview(args) {
   const verdictArg = args.find(a => a === 'approved' || a === 'changes') || null;
   const repo = wip.repo || (args.find(a => String(a).includes('/')) || '');
 
-  if (!repo) throw new Error('No repo set. Run /ghw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
 
   const myLogin = (await apiRequest('GET', '/user', token)).login;
 
@@ -264,7 +264,7 @@ async function cmdReview(args) {
       if (verdictArg === null) {
         const comments = await apiRequest('GET', `/repos/${repo}/issues/${targetPrNum}/comments`, token);
         const hasClaim = comments.some(c => c.body?.includes('eyes'));
-        if (hasClaim) return { ok: true, claimed: false, message: `PR #${targetPrNum} already claimed. Call /ghw review #${targetPrNum} approved|changes after reviewing` };
+        if (hasClaim) return { ok: true, claimed: false, message: `PR #${targetPrNum} already claimed. Call /gtw review #${targetPrNum} approved|changes after reviewing` };
       }
     } catch (e) { throw new Error(`PR #${targetPrNum} not found`); }
   } else {
@@ -317,7 +317,7 @@ async function cmdReview(args) {
   const checklistLines = checklistItems.map(i => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
 
   await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
-    body: `eyes **Review claimed** by @${myLogin}\n\n_Emoji: eyes = in progress, approved = done, changes = needs changes_\n\n## Review Checklist\n\n${checklistLines}\n\n---\n_Agent: review the diff and linked issue, then call:\n  /ghw review #${prNum} approved   # or changes_`,
+    body: `eyes **Review claimed** by @${myLogin}\n\n_Emoji: eyes = in progress, approved = done, changes = needs changes_\n\n## Review Checklist\n\n${checklistLines}\n\n---\n_Agent: review the diff and linked issue, then call:\n  /gtw review #${prNum} approved   # or changes_`,
   });
 
   const files = await apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token);
@@ -331,8 +331,8 @@ async function cmdReview(args) {
     checklist: checklistItems,
     hasPrevReview: myPrevComments.length > 0,
     repo,
-    verdictNeeded: `/ghw review #${prNum} approved   # or changes`,
-    message: `eyes Claimed PR #${prNum}: ${targetPr.title}\n\nLinked Issue: ${linkedIssue.title || 'none'}\n\nFiles changed (${files.length}):\n${filesSummary}\n\nReview the diff against the issue requirements, then call:\n/ghw review #${prNum} approved   # or changes`,
+    verdictNeeded: `/gtw review #${prNum} approved   # or changes`,
+    message: `eyes Claimed PR #${prNum}: ${targetPr.title}\n\nLinked Issue: ${linkedIssue.title || 'none'}\n\nFiles changed (${files.length}):\n${filesSummary}\n\nReview the diff against the issue requirements, then call:\n/gtw review #${prNum} approved   # or changes`,
   };
 }
 
@@ -340,7 +340,7 @@ async function cmdIssue(args) {
   const token = getToken();
   const wip = getWip();
   const repo = args[0] && String(args[0]).includes('/') ? args[0] : wip.repo;
-  if (!repo) throw new Error('No repo. Run /ghw start <workdir> first, or pass owner/repo');
+  if (!repo) throw new Error('No repo. Run /gtw start <workdir> first, or pass owner/repo');
   const params = new URLSearchParams({ state: 'open', per_page: '50' });
   const data = await apiRequest('GET', `/repos/${repo}/issues?${params}`, token);
   const issues = data.filter(i => !i.pull_request);
@@ -352,9 +352,9 @@ async function cmdShow(args) {
   const token = getToken();
   const wip = getWip();
   const id = parseInt(args[0], 10);
-  if (isNaN(id)) throw new Error('Usage: /ghw show #<id>');
+  if (isNaN(id)) throw new Error('Usage: /gtw show #<id>');
   const repo = args[1] && String(args[1]).includes('/') ? args[1] : wip.repo;
-  if (!repo) throw new Error('No repo set. Run /ghw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
   const data = await apiRequest('GET', `/repos/${repo}/issues/${id}`, token);
   return { ok: true, issue: { number: data.number, title: data.title, body: data.body, state: data.state, url: data.html_url, assignee: data.assignee?.login }, display: `[#${data.number}] ${data.title}\n\n${data.body || ''}\n\nState: ${data.state}\nURL: ${data.html_url}` };
 }
@@ -363,7 +363,7 @@ async function cmdPoll(args) {
   const token = getToken();
   const wip = getWip();
   const repo = wip.repo;
-  if (!repo) throw new Error('No repo set. Run /ghw start <workdir> first');
+  if (!repo) throw new Error('No repo set. Run /gtw start <workdir> first');
 
   const sub = args[0];
 

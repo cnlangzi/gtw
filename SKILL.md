@@ -1,17 +1,17 @@
 ---
-name: ghw
-description: ghw - GitHub team workflow skill. Session-based workflow with LLM-assisted issue generation and git operations.
+name: gtw
+description: gtw - GitHub team workflow skill. Session-based workflow with LLM-assisted issue generation and git operations.
 metadata: {"openclaw":{"user-invocable":true,"emoji":"🔧"}}
 ---
 
-# ghw (ghw)
+# gtw (gtw)
 
 GitHub team collaboration workflow skill. Session-based design: drafts go to wip.json, confirm before executing.
 
 ## Usage
 
 ```
-/ghw <command> [args]
+/gtw <command> [args]
 ```
 
 ## Configuration
@@ -19,7 +19,7 @@ GitHub team collaboration workflow skill. Session-based design: drafts go to wip
 ```json
 "skills": {
   "entries": {
-    "ghw": {
+    "gtw": {
       "env": {
         "GITHUB_ACCESS_TOKEN": "ghp_xxx",
       }
@@ -36,22 +36,22 @@ GitHub team collaboration workflow skill. Session-based design: drafts go to wip
 ### Workflow Setup
 
 ```
-/ghw start <workdir>
+/gtw start <workdir>
 ```
 Resolves git remote from a local directory and writes it to wip.json. All subsequent commands use this repo.
 
 ```
-/ghw new
+/gtw new
 ```
 LLM reads the conversation, generates an Issue draft (title + body), and writes it to wip.json. No GitHub API call.
 
 ```
-/ghw update #<id>
+/gtw update #<id>
 ```
 LLM re-reads the conversation to update Issue #<id>'s draft in wip.json.
 
 ```
-/ghw confirm
+/gtw confirm
 ```
 Executes all pending operations in wip.json:
 - `issue.action == 'create'` -> creates Issue
@@ -65,7 +65,7 @@ After execution, wip.json is cleared.
 ### Git Operations
 
 ```
-/ghw fix [name]
+/gtw fix [name]
 ```
 - `git fetch origin`
 - `git checkout main`
@@ -74,14 +74,14 @@ After execution, wip.json is cleared.
 Result written to wip.json.branch.
 
 ```
-/ghw pr
+/gtw pr
 ```
 - `git push -u origin <branch>`
 - Generates PR title/body (linked to issue)
-- Result written to wip.json.pr — execute with `/ghw confirm`
+- Result written to wip.json.pr — execute with `/gtw confirm`
 
 ```
-/ghw push
+/gtw push
 ```
 - `git add -A`
 - Shows staged changes summary
@@ -93,7 +93,7 @@ Result written to wip.json.branch.
 ### Review
 
 ```
-/ghw review
+/gtw review
 ```
 Finds the earliest unclaimed open PR in wip.json's repo and:
 1. Claims it with eyes
@@ -102,7 +102,7 @@ Finds the earliest unclaimed open PR in wip.json's repo and:
 
 Agent reviews the diff against the issue, then calls:
 ```
-/ghw review #<pr> approved   # or changes
+/gtw review #<pr> approved   # or changes
 ```
 Posts verdict, releases claim, submits GitHub Official Review.
 
@@ -111,18 +111,18 @@ Posts verdict, releases claim, submits GitHub Official Review.
 ### Information
 
 ```
-/ghw issue              # Lists open issues in current repo (from wip.json)
-/ghw show #<id>         # Shows Issue #<id> details
-/ghw poll issue         # Top 10 open issues, oldest first
-/ghw poll pr           # Top 10 open PRs, oldest first
-/ghw config            # Shows config and wip.json contents
+/gtw issue              # Lists open issues in current repo (from wip.json)
+/gtw show #<id>         # Shows Issue #<id> details
+/gtw poll issue         # Top 10 open issues, oldest first
+/gtw poll pr           # Top 10 open PRs, oldest first
+/gtw config            # Shows config and wip.json contents
 ```
 
 ---
 
 ## wip.json Schema
 
-File: `~/.openclaw/ghw/wip.json`
+File: `~/.openclaw/gtw/wip.json`
 
 ```json
 {
@@ -140,23 +140,23 @@ File: `~/.openclaw/ghw/wip.json`
 ## Standard Workflow
 
 ```
-You: /ghw start ~/code/myproject
+You: /gtw start ~/code/myproject
 Agent: workdir set, repo: owner/repo
 
-You: /ghw new
+You: /gtw new
 Agent: Generates Issue draft:
        Title: xxx
        Body: ...
-       [wip.json — run /ghw confirm]
+       [wip.json — run /gtw confirm]
 
-You: /ghw fix login-bug
+You: /gtw fix login-bug
 Agent: Branch fix/login-bug created (rebased on main)
-       [wip.json — run /ghw confirm]
+       [wip.json — run /gtw confirm]
 
-You: /ghw pr
-Agent: Branch pushed. Run /ghw confirm
+You: /gtw pr
+Agent: Branch pushed. Run /gtw confirm
 
-You: /ghw confirm
+You: /gtw confirm
 Agent: Issue #45 created
        Branch created
        PR #78 created
@@ -170,9 +170,9 @@ Agent: Issue #45 created
 ```json
 "cron": {
   "entries": {
-    "ghw-poll": {
+    "gtw-poll": {
       "schedule": "*/15 * * * *",
-      "task": "/ghw poll",
+      "task": "/gtw poll",
       "enabled": false
     }
   }
@@ -187,5 +187,5 @@ Agent: Issue #45 created
 - **Token**: PAT or OAuth Device Flow
 - **Git**: Direct local git command execution
 - **GitHub API**: REST API v3
-- **Storage**: `~/.openclaw/ghw/wip.json` (0600)
+- **Storage**: `~/.openclaw/gtw/wip.json` (0600)
 - **Dependencies**: None (pure Node.js built-ins only)

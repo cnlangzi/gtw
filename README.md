@@ -1,16 +1,16 @@
-# ghw
+# gtw
 
 > GitHub team workflow automation - session-based issue generation, git operations, and PR review coordination via CLI.
 
-`ghw` is a skill for [OpenClaw](https://github.com/openclaw/openclaw) that brings structured, LLM-assisted GitHub workflows to your chat interface. Define issues from conversations, manage branches and PRs with a two-phase confirm pattern, and coordinate reviews with an emoji protocol.
+`gtw` is a skill for [OpenClaw](https://github.com/openclaw/openclaw) that brings structured, LLM-assisted GitHub workflows to your chat interface. Define issues from conversations, manage branches and PRs with a two-phase confirm pattern, and coordinate reviews with an emoji protocol.
 
 ## Features
 
 - **Session-based workflow** - Draft in `wip.json`, confirm when ready. No accidental API calls.
-- **LLM-assisted issue creation** - `/ghw new` reads the conversation and generates a properly structured issue. No copy-paste.
+- **LLM-assisted issue creation** - `/gtw new` reads the conversation and generates a properly structured issue. No copy-paste.
 - **Git operations** - `fix`, `push`, and `pr` commands wrap standard git workflows with semantic commit log generation.
 - **Emoji review protocol** - eyes claim -> checklist -> approved/changes verdict. No concurrent reviews, no confusion.
-- **Multi-repo ready** - Start with any repo by pointing to its local working copy. Switch repos mid-session with `/ghw start`.
+- **Multi-repo ready** - Start with any repo by pointing to its local working copy. Switch repos mid-session with `/gtw start`.
 - **Zero external dependencies** - Plain Node.js, no npm packages needed.
 
 ## Installation
@@ -18,8 +18,8 @@
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/cnlangzi/ghw.git
-cd ghw
+git clone https://github.com/cnlangzi/gtw.git
+cd gtw
 ```
 
 ### 2. Install the skill
@@ -27,7 +27,7 @@ cd ghw
 The skill follows the OpenClaw AgentSkills directory structure:
 
 ```
-ghw/     <- skill directory (name used as /ghw slash command)
+gtw/     <- skill directory (name used as /gtw slash command)
 ├── SKILL.md     <- this file
 ├── README.md
 ├── scripts/
@@ -38,13 +38,13 @@ ghw/     <- skill directory (name used as /ghw slash command)
 Copy or symlink to your OpenClaw workspace:
 
 ```bash
-cp -r ghw ~/workspace/skills/
+cp -r gtw ~/workspace/skills/
 ```
 
 Or use the OpenClaw CLI:
 
 ```bash
-openclaw skills install ./ghw
+openclaw skills install ./gtw
 ```
 
 ### 3. Configure credentials
@@ -55,7 +55,7 @@ Add to `~/.openclaw/openclaw.json`:
 {
   "skills": {
     "entries": {
-      "ghw": {
+      "gtw": {
         "enabled": true,
         "env": {
           "GITHUB_ACCESS_TOKEN": "ghp_your_personal_access_token",
@@ -79,25 +79,25 @@ If you prefer OAuth instead of PAT:
 1. Create a GitHub OAuth App: **Settings -> Developer settings -> OAuth Apps -> New OAuth App**
    - Callback URL: `http://localhost`
 2. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in the skill env
-3. Run `/ghw auth` to initiate the OAuth flow
+3. Run `/gtw auth` to initiate the OAuth flow
 
 ---
 
 ## Commands
 
-All commands are invoked via `/ghw <command>` in your OpenClaw chat interface.
+All commands are invoked via `/gtw <command>` in your OpenClaw chat interface.
 
 ### Workflow Setup
 
 ```bash
-/ghw start <workdir>
+/gtw start <workdir>
 ```
 Resolves the git remote from a local directory and writes it to `wip.json`. All subsequent commands use this repo.
 
 ```bash
 # Examples
-/ghw start ~/code/myproject
-/ghw start /Users/name/code/myproject
+/gtw start ~/code/myproject
+/gtw start /Users/name/code/myproject
 ```
 
 ---
@@ -105,17 +105,17 @@ Resolves the git remote from a local directory and writes it to `wip.json`. All 
 ### Issue Management
 
 ```bash
-/ghw new
+/gtw new
 ```
 Reads the conversation history, uses LLM to extract and structure a GitHub issue (title + body), and writes it to `wip.json`. **No GitHub API call is made.**
 
 ```bash
-/ghw update #<id>
+/gtw update #<id>
 ```
 LLM re-reads the conversation to update Issue `#<id>`'s draft in `wip.json`.
 
 ```bash
-/ghw confirm
+/gtw confirm
 ```
 Executes all pending operations in `wip.json`:
 - `issue.action == 'create'` -> creates a new GitHub Issue
@@ -126,12 +126,12 @@ Executes all pending operations in `wip.json`:
 After execution, `wip.json` is cleared.
 
 ```bash
-/ghw issue
+/gtw issue
 ```
 Lists all open issues in the current repo (from `wip.json`).
 
 ```bash
-/ghw show #<id>
+/gtw show #<id>
 ```
 Shows full details of Issue `#<id>`.
 
@@ -140,7 +140,7 @@ Shows full details of Issue `#<id>`.
 ### Git Operations
 
 ```bash
-/ghw fix [name]
+/gtw fix [name]
 ```
 Performs a clean branch workflow:
 1. `git fetch origin`
@@ -151,14 +151,14 @@ Performs a clean branch workflow:
 Result is written to `wip.json` as the pending branch.
 
 ```bash
-/ghw pr
+/gtw pr
 ```
 1. Pushes the current branch to origin
 2. Generates a PR title and body linked to the associated issue
-3. Writes to `wip.json` - execute with `/ghw confirm`
+3. Writes to `wip.json` - execute with `/gtw confirm`
 
 ```bash
-/ghw push
+/gtw push
 ```
 1. `git add -A`
 2. Shows staged changes summary
@@ -169,7 +169,7 @@ Result is written to `wip.json` as the pending branch.
 ### Code Review
 
 ```bash
-/ghw review
+/gtw review
 ```
 From wip.json's repo, finds the earliest unclaimed open PR and:
 1. Claims it with eyes (prevents other reviewers)
@@ -179,15 +179,15 @@ From wip.json's repo, finds the earliest unclaimed open PR and:
 Agent then reviews the PR diff against the linked issue and checklist, then calls:
 
 ```bash
-/ghw review #<pr> approved    # Approves PR
-/ghw review #<pr> changes     # Requests changes
+/gtw review #<pr> approved    # Approves PR
+/gtw review #<pr> changes     # Requests changes
 ```
 
 ```bash
 # Examples
-/ghw review                     # Auto-find and claim earliest unclaimed PR
-/ghw review #45 approved    # Approve PR #45
-/ghw review #78 changes     # Request changes on PR #78
+/gtw review                     # Auto-find and claim earliest unclaimed PR
+/gtw review #45 approved    # Approve PR #45
+/gtw review #78 changes     # Request changes on PR #78
 ```
 
 ---
@@ -195,22 +195,22 @@ Agent then reviews the PR diff against the linked issue and checklist, then call
 ### Utilities
 
 ```bash
-/ghw poll issue
+/gtw poll issue
 ```
 Lists top 10 open issues in `wip.json`'s repo (oldest first).
 
 ```bash
-/ghw poll pr
+/gtw poll pr
 ```
 Lists top 10 open PRs in `wip.json`'s repo (oldest first).
 
 ```bash
-/ghw poll
+/gtw poll
 ```
 Lists both open issues and PRs (oldest first).
 
 ```bash
-/ghw config
+/gtw config
 ```
 Shows current configuration, token status, and `wip.json` contents.
 
@@ -219,36 +219,36 @@ Shows current configuration, token status, and `wip.json` contents.
 ## Workflow Example
 
 ```
-You: /ghw start ~/code/myproject
+You: /gtw start ~/code/myproject
 Agent: workdir set, repo: cnlangzi/myproject
 
-You: /ghw new
+You: /gtw new
 Agent: Based on the conversation, here's the issue draft:
        Title: Add OAuth login support
        Body:  ## Description ...
               ## Scope ...
               ## Acceptance Criteria ...
-       [Written to wip.json - run /ghw confirm]
+       [Written to wip.json - run /gtw confirm]
 
-You: /ghw fix login-oauth
+You: /gtw fix login-oauth
 Agent: Branch fix/login-oauth created (rebased on main)
-       [Written to wip.json - run /ghw confirm]
+       [Written to wip.json - run /gtw confirm]
 
-You: /ghw pr
-Agent: Branch pushed. Run /ghw confirm to create PR
+You: /gtw pr
+Agent: Branch pushed. Run /gtw confirm to create PR
 
-You: /ghw confirm
+You: /gtw confirm
 Agent: Issue #45 created
        Branch created
        PR #78 created
        [wip.json cleared]
 
 # --- Later, another developer picks up the PR review ---
-You: /ghw review
+You: /gtw review
 Agent: eyes Claimed PR #78: Add OAuth login support
        Linked Issue: Add OAuth login support
        Files changed: 3 (+120 -45)
-       Agent reviews the diff, then: /ghw review #78 approved
+       Agent reviews the diff, then: /gtw review #78 approved
 ```
 
 ---
@@ -256,13 +256,13 @@ Agent: eyes Claimed PR #78: Add OAuth login support
 ## Architecture
 
 ```
-~/.openclaw/ghw/          # Runtime state (skill creates this)
+~/.openclaw/gtw/          # Runtime state (skill creates this)
 ├── wip.json      # Work In Progress draft state
 ├── token.json    # OAuth access token (0600)
 └── state.json    # Optional persistent state
 
 skill directory structure:
-ghw/
+gtw/
 ├── SKILL.md       # This file
 ├── README.md
 ├── scripts/
