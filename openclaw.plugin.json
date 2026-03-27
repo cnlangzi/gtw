@@ -1,0 +1,9 @@
+{
+  "id": "gtw",
+  "name": "GitHub Team Workflow",
+  "description": "GitHub team collaboration workflow. Session-based: drafts go to wip.json, confirm before executing. Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
