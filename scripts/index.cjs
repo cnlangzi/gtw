@@ -16,8 +16,6 @@ const wip_FILE = path.join(CONFIG_DIR, 'wip.json');
 
 [CONFIG_DIR].forEach(d => { if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); fs.chmodSync(d, '0700'); } });
 
-const CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
-const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
 const ACCESS_TOKEN = process.env.GITHUB_ACCESS_TOKEN || '';
 
 function apiRequest(method, endpoint, token, body = null) {
@@ -46,44 +44,47 @@ function apiRequest(method, endpoint, token, body = null) {
   });
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 function readJSON(file) { try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch (e) { return null; } }
 function writeJSON(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8'); fs.chmodSync(file, '0600'); }
 
-function getToken() {
+function getGhToken() {
+  try {
+    return execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch (e) {
+    throw new Error('Not authenticated with gh CLI. Run: gh auth login');
+  }
+}
+
+async function getValidToken() {
   if (ACCESS_TOKEN) return ACCESS_TOKEN;
-  const t = readJSON(TOKEN_FILE);
-  if (!t?.access_token) throw new Error('Not authenticated. Run /gtw auth or set GITHUB_ACCESS_TOKEN');
-  return t.access_token;
+  // Try gh CLI first (always up-to-date, no expiry worries)
+  try {
+    const token = getGhToken();
+    // Save a snapshot for reference but gh owns the token lifecycle
+    saveToken({ source: 'gh', access_token: token, cached_at: Date.now() });
+    return token;
+  } catch (e) {
+    // Fall back to cached token
+    const t = readJSON(TOKEN_FILE);
+    if (!t?.access_token) throw new Error('Not authenticated. Run: gh auth login');
+    return t.access_token;
+  }
 }
 function saveToken(t) { writeJSON(TOKEN_FILE, t); }
 
-async function deviceFlow() {
-  if (!CLIENT_ID) throw new Error('GITHUB_CLIENT_ID not configured');
-  const codeResp = await postForm('https://github.com/login/device/code', { client_id: CLIENT_ID, scope: 'repo workflow' });
-  if (!codeResp.device_code) throw new Error(`Device flow failed: ${JSON.stringify(codeResp)}`);
-  console.log(`\nOpen: https://github.com/login/device\n   Enter code: ${codeResp.user_code}\nWaiting...`);
-  let attempts = (codeResp.expires_in || 300) / (codeResp.interval || 5);
-  while (attempts-- > 0) {
-    await sleep((codeResp.interval || 5) * 1000);
-    const r = await postForm('https://github.com/login/oauth/access_token', { client_id: CLIENT_ID, device_code: codeResp.device_code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' });
-    if (r.access_token) { saveToken({ access_token: r.access_token }); console.log('Auth successful!'); return readJSON(TOKEN_FILE); }
-    if (r.error === 'authorization_pending') { process.stdout.write('.'); continue; }
-    if (r.error === 'slow_down') { await sleep((codeResp.interval || 5) * 1000); continue; }
-    throw new Error(`OAuth error: ${r.error}`);
+async function cmdAuth(args) {
+  try {
+    const token = getGhToken();
+    const user = await apiRequest('GET', '/user', token);
+    return {
+      ok: true,
+      user: { login: user.login, name: user.name },
+      token_source: 'gh-cli',
+      display: `✅ Authenticated as @${user.login}${user.name ? ` (${user.name})` : ''}\n\nToken source: gh CLI`,
+    };
+  } catch (e) {
+    throw new Error(`Auth check failed: ${e.message}`);
   }
-  throw new Error('Auth timed out');
-}
-
-function postForm(urlStr, data) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(urlStr);
-    const body = Object.entries(data).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
-    const options = { hostname: urlObj.hostname, port: 443, path: urlObj.pathname, method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body), 'Accept': 'application/json', 'User-Agent': 'github-work-skill/1.0' } };
-    const req = https.request(options, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { resolve(d); } }); });
-    req.on('error', reject); req.write(body); req.end();
-  });
 }
 
 function getWip() { return readJSON(wip_FILE) || {}; }
@@ -144,9 +145,26 @@ async function cmdNew(args) {
   if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
   const title = args[0] || '';
   const body = args.slice(1).join(' ') || '';
+  if (!title) {
+    // No args: return current draft for review
+    const current = wip.issue || {};
+    return {
+      ok: true,
+      hasDraft: !!(current.title || current.body),
+      draft: { title: current.title || '', body: current.body || '' },
+      display: current.title
+        ? `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}`
+        : 'No issue draft yet. Run /gtw new <title> <body> to create one.',
+    };
+  }
   const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, wip: updated, message: title ? `Issue draft saved: "${title}"` : 'Issue draft saved (title/body will be filled by agent)', display: title ? `📝 Issue 草稿已保存\n\n标题: ${title}` : '📝 Issue 草稿已保存\n\n（agent 将填写标题和正文）' };
+  return {
+    ok: true,
+    wip: updated,
+    message: `Issue draft saved: "${title}"`,
+    display: `📝 Issue draft saved\n\nTitle: ${title}\n\nBody:\n${body || '(none)'}\n\nRun /gtw confirm if satisfied, or describe changes to regenerate.`,
+  };
 }
 
 async function cmdUpdate(args) {
@@ -162,7 +180,7 @@ async function cmdUpdate(args) {
 }
 
 async function cmdConfirm(args) {
-  const token = getToken();
+  const token = await getValidToken();
   const wip = getWip();
   if (!wip.repo) throw new Error('No pending action. Run /gtw on + /gtw new first');
   const results = [];
@@ -223,7 +241,7 @@ async function cmdPr(args) {
   let prBody = '';
   if (wip.issue?.id) {
     try {
-      const token = getToken();
+      const token = await getValidToken();
       const issue = await apiRequest('GET', `/repos/${wip.repo}/issues/${wip.issue.id}`, token);
       prBody = `## Linked Issue\\nCloses #${wip.issue.id}\\n\\n${issue.body || ''}\\n\\n---\\n_Generated by github-work skill_`;
     } catch(e) {}
@@ -279,7 +297,7 @@ async function cmdPush(args) {
 
 // review: fully automatic - claim -> agent reviews -> verdict -> release claim
 async function cmdReview(args) {
-  const token = getToken();
+  const token = await getValidToken();
   const wip = getWip();
   const verdictArg = args.find(a => a === 'approved' || a === 'changes') || null;
   const repo = wip.repo || (args.find(a => String(a).includes('/')) || '');
@@ -375,7 +393,7 @@ async function cmdReview(args) {
 }
 
 async function cmdIssue(args) {
-  const token = getToken();
+  const token = await getValidToken();
   const wip = getWip();
   const repo = args[0] && String(args[0]).includes('/') ? args[0] : wip.repo;
   if (!repo) throw new Error('No repo. Run /gtw on <workdir> first, or pass owner/repo');
@@ -387,7 +405,7 @@ async function cmdIssue(args) {
 }
 
 async function cmdShow(args) {
-  const token = getToken();
+  const token = await getValidToken();
   const wip = getWip();
   const id = parseInt(args[0], 10);
   if (isNaN(id)) throw new Error('Usage: /gtw show #<id>');
@@ -398,7 +416,7 @@ async function cmdShow(args) {
 }
 
 async function cmdPoll(args) {
-  const token = getToken();
+  const token = await getValidToken();
   const wip = getWip();
   const repo = wip.repo;
   if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
@@ -459,7 +477,7 @@ async function main() {
   let result;
   try {
     switch (cmd) {
-      case 'auth': result = await deviceFlow(); break;
+      case 'auth': result = await cmdAuth(args); break;
       case 'on': result = await cmdStart(args); break;
       case 'new': result = await cmdNew(args); break;
       case 'update': result = await cmdUpdate(args); break;
