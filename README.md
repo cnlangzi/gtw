@@ -8,7 +8,7 @@
 - **LLM-assisted issue creation** — `/gtw new` reads the conversation and generates a structured issue.
 - **Git operations** — `fix`, `push`, and `pr` commands wrap standard git workflows.
 - **Emoji review protocol** — eyes claim → checklist → approved/changes verdict.
-- **Zero external dependencies** — Plain Node.js, no npm packages.
+- **GitHub CLI integration** — Uses `gh` for auth; no manual token config needed.
 
 ## Installation
 
@@ -46,7 +46,7 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 ```
 /gtw fix [name]         Create fix branch (rebased on main)
 /gtw pr                 Push branch and draft PR
-/gtw push               Stage → auto-commit (conventional format) → push（直接执行，无需 confirm）
+/gtw push               Stage → auto-commit (conventional format) → push (executes directly, no confirm needed)
 ```
 
 ### Review
@@ -64,42 +64,47 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 
 ## Configuration
 
+### Authentication
+
+`gtw` uses the GitHub CLI (`gh`) for authentication. Make sure `gh auth login` has been run with `repo` scope:
+
+```bash
+gh auth login --hostname github.com
+gh auth status
+```
+
+Check auth status anytime:
+
+```
+/gtw auth
+```
+
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GITHUB_ACCESS_TOKEN` | Yes | GitHub Personal Access Token (`repo` scope) |
-| `GITHUB_CLIENT_ID` | No | For OAuth Device Flow |
-| `GITHUB_CLIENT_SECRET` | No | For OAuth Device Flow |
-
-Set in `openclaw.json` env or shell environment.
-
-### Getting a GitHub Token
-
-1. **Settings → Developer settings → Personal access tokens → Generate new token (classic)**
-2. Grant `repo` scope
-3. Set `GITHUB_ACCESS_TOKEN=ghp_xxx` in your environment or openclaw env config
+| `GITHUB_ACCESS_TOKEN` | No | Falls back to `gh auth token` if not set |
 
 ## Standard Workflow
 
 ```
 You: /gtw on ~/code/myproject
-→ ✅ 已切换工作目录 /home/user/code/myproject, repo: owner/repo
+→ ✅ Switched to workdir: /home/user/code/myproject, repo: owner/repo
 
 You: /gtw new
-→ 📝 Issue 草稿已保存
+→ 📝 Issue draft saved
 
 You: /gtw fix login-bug
-→ 🌿 已创建并切换到新分支 fix/login-bug
+→ 🌿 Created and checked out new branch fix/login-bug
 
 You: /gtw pr
-→ ⬆️ 分支已推送（草稿状态）
+→ ⬆️ Branch pushed to origin (draft state)
 
 You: /gtw push
-→ 📦 已提交并推送（直接执行，无需 confirm）
+→ 📦 Committed and pushed (executes directly, no confirm needed)
 
 You: /gtw confirm
-→ 🚀 已执行所有待处理操作并清空 wip.json
+→ 🚀 Executed all pending actions and cleared wip.json
 ```
 
 ## State File

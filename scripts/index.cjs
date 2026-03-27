@@ -135,7 +135,7 @@ async function cmdStart(args) {
     ok: true,
     workdir: absWorkdir,
     repo,
-    display: `✅ 已切换工作目录\n\n📁 ${absWorkdir}\n🔗 ${repo}`,
+    display: `✅ Switched to workdir\n\n📁 ${absWorkdir}\n🔗 ${repo}`,
     message: `workdir set to ${absWorkdir}, repo: ${repo}`,
   };
 }
@@ -176,7 +176,7 @@ async function cmdUpdate(args) {
   const rest = args.slice(1).join(' ');
   const updated = { ...wip, issue: { action: 'update', id, title: rest, body: '' }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, wip: updated, message: `Issue #${id} update draft saved`, display: `📝 Issue #${id} 更新草稿已保存` };
+  return { ok: true, wip: updated, message: `Issue #${id} update draft saved`, display: `📝 Issue #${id} update draft saved` };
 }
 
 async function cmdConfirm(args) {
@@ -213,7 +213,7 @@ async function cmdConfirm(args) {
   }
 
   clearWip();
-  return { ok: true, results, message: 'Pending actions executed and cleared', display: `🚀 已执行所有待处理操作并清空 wip.json\n\n${results.map(r => `• ${r.type} #${r.id || r.name}: ${r.action}`).join('\n')}` };
+  return { ok: true, results, message: 'Pending actions executed and cleared', display: `🚀 Executed all pending actions and cleared wip.json\n\n${results.map(r => `• ${r.type} #${r.id || r.name}: ${r.action}`).join('\n')}` };
 }
 
 async function cmdFix(args) {
@@ -228,7 +228,7 @@ async function cmdFix(args) {
   git(`git checkout -b ${branchName}`, workdir);
   const updated = { ...wip, branch: { name: branchName }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, branch: branchName, base: defaultBranch, workdir, message: `Switched to new branch '${branchName}' (rebased on ${defaultBranch})`, display: `🌿 已创建并切换到新分支\n\n分支名: ${branchName}\n基于: ${defaultBranch}\n\n执行 /gtw pr 推送分支，或直接写代码后 /gtw push` };
+  return { ok: true, branch: branchName, base: defaultBranch, workdir, message: `Switched to new branch '${branchName}' (rebased on ${defaultBranch})`, display: `🌿 Created and checked out new branch\n\nBranch: ${branchName}\nBase: ${defaultBranch}\n\nRun /gtw pr to push, or write code then /gtw push` };
 }
 
 async function cmdPr(args) {
@@ -248,7 +248,7 @@ async function cmdPr(args) {
   }
   const updated = { ...wip, pr: { title: wip.pr?.title || `Fix #${wip.issue?.id || ''}: ${branchName}`, body: prBody }, updatedAt: new Date().toISOString() };
   saveWip(updated);
-  return { ok: true, branch: branchName, message: `Branch pushed. Run /gtw confirm to create PR`, display: `⬆️ 分支已推送\n\n分支: ${branchName}\n\n运行 /gtw confirm 创建 PR` };
+  return { ok: true, branch: branchName, message: `Branch pushed. Run /gtw confirm to create PR`, display: `⬆️ Branch pushed to origin\n\nBranch: ${branchName}\n\nRun /gtw confirm to create PR` };
 }
 
 async function cmdPush(args) {
@@ -263,7 +263,7 @@ async function cmdPush(args) {
   // Check for changes
   const stats = git('git diff --cached --stat', workdir);
   if (!stats) {
-    return { ok: true, branch, message: 'No changes to commit', display: `✅ 没有变更需要提交\n\n分支: ${branch}` };
+    return { ok: true, branch, message: 'No changes to commit', display: `✅ No changes to commit\n\nBranch: ${branch}` };
   }
 
   // Parse changed files to build a meaningful commit message
@@ -291,7 +291,7 @@ async function cmdPush(args) {
   return {
     ok: true, branch, stats, commit: commitMsg, files,
     message: `Committed and pushed: ${commitMsg}`,
-    display: `📦 已提交并推送\n\n分支: ${branch}\n提交: ${commitMsg}\n文件: ${files.join(', ')}\n统计: +${totalAdd} -${totalDel}`,
+    display: `📦 Committed and pushed\n\nBranch: ${branch}\nCommit: ${commitMsg}\nFiles: ${files.join(', ')}\nStats: +${totalAdd} -${totalDel}`,
   };
 }
 
@@ -320,7 +320,7 @@ async function cmdReview(args) {
       if (verdictArg === null) {
         const comments = await apiRequest('GET', `/repos/${repo}/issues/${targetPrNum}/comments`, token);
         const hasClaim = comments.some(c => c.body?.includes('eyes'));
-        if (hasClaim) return { ok: true, claimed: false, message: `PR #${targetPrNum} already claimed. Call /gtw review #${targetPrNum} approved|changes after reviewing`, display: `⚠️ PR #${targetPrNum} 已被认领\n\n请先查看该 PR 的评审状态，再调用 /gtw review #${targetPrNum} approved|changes` };
+        if (hasClaim) return { ok: true, claimed: false, message: `PR #${targetPrNum} already claimed. Call /gtw review #${targetPrNum} approved|changes after reviewing`, display: `⚠️ PR #${targetPrNum} already claimed\n\nCheck the PR review status, then call /gtw review #${targetPrNum} approved|changes` };
       }
     } catch (e) { throw new Error(`PR #${targetPrNum} not found`); }
   } else {
@@ -333,7 +333,7 @@ async function cmdReview(args) {
     }
   }
 
-  if (!targetPr) return { ok: true, message: 'No unclaimed PRs found', repo, display: `🔍 暂无可认领的 PR\n\n当前没有未被人认领的开放 PR` };
+  if (!targetPr) return { ok: true, message: 'No unclaimed PRs found', repo, display: `🔍 No unclaimed PRs found\n\nNo open PRs are currently unclaimed` };
 
   const prNum = targetPr.number;
 
@@ -357,7 +357,7 @@ async function cmdReview(args) {
     for (const c of myPrevComments) { await apiRequest('DELETE', `/repos/${repo}/issues/comments/${c.id}`, token).catch(() => {}); }
     await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, { body: `${emoji} **Review complete** by @${myLogin} — ${verdictArg === 'approved' ? 'approves' : 'requests changes'}` });
     await apiRequest('POST', `/repos/${repo}/pulls/${prNum}/reviews`, token, { body: emoji, event: reviewState });
-    return { ok: true, verdict: verdictArg, pr: { number: prNum, title: targetPr.title, url: targetPr.html_url }, repo, message: `${emoji} Review complete for PR #${prNum} — claim released`, display: verdictArg === 'approved' ? `✅ PR #${prNum} 评审通过\n\n${targetPr.title}\n\n认领已释放，可进行合并` : `❌ PR #${prNum} 评审需修改\n\n${targetPr.title}\n\n认领已释放，开发者可提交修订` };
+    return { ok: true, verdict: verdictArg, pr: { number: prNum, title: targetPr.title, url: targetPr.html_url }, repo, message: `${emoji} Review complete for PR #${prNum} — claim released`, display: verdictArg === 'approved' ? `✅ PR #${prNum} approved\n\n${targetPr.title}\n\nClaim released, ready to merge` : `❌ PR #${prNum} changes requested\n\n${targetPr.title}\n\nClaim released, developer can submit revisions` };
   }
 
   // First call - claim
@@ -400,7 +400,7 @@ async function cmdIssue(args) {
   const params = new URLSearchParams({ state: 'open', per_page: '50' });
   const data = await apiRequest('GET', `/repos/${repo}/issues?${params}`, token);
   const issues = data.filter(i => !i.pull_request);
-  if (!issues.length) return { ok: true, repo, issues: [], message: `No open issues in ${repo}`, display: `📋 暂无可见的开放 Issue` };
+  if (!issues.length) return { ok: true, repo, issues: [], message: `No open issues in ${repo}`, display: `📋 No open issues visible` };
   return { ok: true, repo, issues: issues.map(i => ({ number: i.number, title: i.title, state: i.state, url: i.html_url })), display: issues.map(i => `[#${i.number}] ${i.title}`).join('\n') };
 }
 
