@@ -146,15 +146,19 @@ async function cmdNew(args) {
   const title = args[0] || '';
   const body = args.slice(1).join(' ') || '';
   if (!title) {
-    // No args: return current draft for review
+    // No args: LLM should extract from context and call /gtw new <title> <body>
     const current = wip.issue || {};
     return {
       ok: true,
+      llm_action: 'generate_draft',
       hasDraft: !!(current.title || current.body),
       draft: { title: current.title || '', body: current.body || '' },
+      message: current.title
+        ? `Current draft in wip.json — describe changes to regenerate, or /gtw confirm if satisfied`
+        : `No draft yet — LLM should extract context and call: /gtw new <title> <body>`,
       display: current.title
-        ? `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}`
-        : 'No issue draft yet. Run /gtw new <title> <body> to create one.',
+        ? `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}\n\nDescribe changes to regenerate, or run /gtw confirm if satisfied.`
+        : `📝 No draft yet.\n\nAs the LLM: read the conversation context, generate a title and body for this issue, then call:\n  /gtw new <title> <body>\nto save it to wip.json.`,
     };
   }
   const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
