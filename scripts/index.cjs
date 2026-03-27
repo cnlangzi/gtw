@@ -57,20 +57,157 @@ function getGhToken() {
 
 async function getValidToken() {
   if (ACCESS_TOKEN) return ACCESS_TOKEN;
-  // Try gh CLI first (always up-to-date, no expiry worries)
   try {
     const token = getGhToken();
-    // Save a snapshot for reference but gh owns the token lifecycle
     saveToken({ source: 'gh', access_token: token, cached_at: Date.now() });
     return token;
   } catch (e) {
-    // Fall back to cached token
     const t = readJSON(TOKEN_FILE);
     if (!t?.access_token) throw new Error('Not authenticated. Run: gh auth login');
     return t.access_token;
   }
 }
 function saveToken(t) { writeJSON(TOKEN_FILE, t); }
+
+// --- Session history (JSONL) ---
+function getCurrentSessionFile() {
+  const sessionsDir = path.join(os.homedir(), '.openclaw', 'agents', 'main', 'sessions');
+  if (!fs.existsSync(sessionsDir)) return null;
+  let latest = null, latestMtime = 0;
+  for (const f of fs.readdirSync(sessionsDir)) {
+    if (!f.endsWith('.jsonl') || f.includes('.reset.') || f.includes('.deleted.')) continue;
+    const stat = fs.statSync(path.join(sessionsDir, f));
+    if (stat.mtimeMs > latestMtime) { latestMtime = stat.mtimeMs; latest = f; }
+  }
+  return latest ? path.join(sessionsDir, latest) : null;
+}
+
+function getRecentMessages(sessionFile, limit = 40) {
+  if (!sessionFile || !fs.existsSync(sessionFile)) return [];
+  const lines = fs.readFileSync(sessionFile, 'utf8').split('\n').filter(l => l.trim());
+  const messages = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== 'message') continue;
+      const msg = entry.message || {};
+      const role = msg.role;
+      if (!role || role === 'system') continue;
+      let content = msg.content || '';
+      if (Array.isArray(content)) {
+        content = content.map(c => {
+          if (c && c.type === 'text') return c.text || '';
+          if (c && c.type === 'thinking') return `[thinking]: ${c.thinking || ''}`;
+          return '';
+        }).filter(Boolean).join('\n');
+      }
+      if (!content || typeof content !== 'string') continue;
+      messages.push({ role, content: content.trim() });
+    } catch (e) { /* skip malformed lines */ }
+  }
+  return messages.slice(-limit);
+}
+
+// --- LLM: generate issue draft from conversation context ---
+// --- LLM: resolve model from OpenClaw config and call ---
+function getOpenClawConfig() {
+  return readJSON(path.join(os.homedir(), '.openclaw', 'openclaw.json'));
+}
+
+function getCurrentSessionModel() {
+  const sessionsPath = path.join(os.homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
+  const sessions = readJSON(sessionsPath);
+  if (!sessions) return null;
+  // Find the feishu direct session (current user session)
+  const currentKey = Object.keys(sessions).find(k => k.includes('feishu') && k.includes('direct')) ||
+                     Object.keys(sessions).find(k => k.startsWith('agent:main:feishu:')) || null;
+  if (!currentKey) return null;
+  const session = sessions[currentKey];
+  return session?.model ? { modelId: session.model, provider: session.modelProvider } : null;
+}
+
+function resolveModelApiConfig(cfg, modelId) {
+  const providers = cfg?.models?.providers || {};
+  for (const [providerName, providerCfg] of Object.entries(providers)) {
+    const models = providerCfg?.models || [];
+    const model = models.find(m => m.id === modelId || m.id === `minimax-portal/${modelId}`);
+    if (model) {
+      let apiKey = providerCfg.apiKey;
+      if (apiKey === 'minimax-oauth') apiKey = process.env.MINIMAX_API_KEY;
+      return { provider: providerName, model: model.id, baseUrl: providerCfg.baseUrl, apiKey, api: providerCfg.api };
+    }
+  }
+  return null;
+}
+
+function buildLLMCall(apiCfg, messages) {
+  const conversationText = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
+  const systemPrompt = `You are analyzing a conversation to extract a GitHub issue.
+Based on the conversation below, generate a GitHub issue with:
+- title: a short, descriptive title (conventional commit style, e.g. "fix: handle null pointer in auth" or "feat: add device flow auth")
+- body: markdown body with Background, Changes, and Acceptance Criteria
+
+Return ONLY valid JSON like:
+{"title": "...", "body": "..."}`;
+
+  const fullMessages = [{ role: 'user', content: systemPrompt + '\n\nCONVERSATION:\n' + conversationText }];
+
+  if (apiCfg.api === 'anthropic-messages') {
+    const body = JSON.stringify({ model: apiCfg.model, messages: fullMessages, max_tokens: 1024 });
+    const u = new URL(`${apiCfg.baseUrl}/v1/messages`);
+    return {
+      opts: { hostname: u.hostname, port: 443, path: u.pathname, method: 'POST', headers: { 'x-api-key': apiCfg.apiKey, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'Content-Length': Buffer.byteLength(body) } },
+      body,
+      parse: (data) => {
+        const p = JSON.parse(data);
+        let text = Array.isArray(p.content) ? p.content.map(c => c.type === 'text' ? c.text : '').filter(Boolean).join('') : (typeof p.content === 'string' ? p.content : '');
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) return JSON.parse(m[0]);
+        throw new Error(`Invalid response: ${text.substring(0, 100)}`);
+      }
+    };
+  } else {
+    // OpenAI-compatible (GitHub Copilot, OpenAI, etc.)
+    const body = JSON.stringify({ model: apiCfg.model, messages: fullMessages, max_tokens: 1024 });
+    const u = new URL(`${apiCfg.baseUrl}/v1/chat/completions`);
+    return {
+      opts: { hostname: u.hostname, port: 443, path: u.pathname, method: 'POST', headers: { 'Authorization': `Bearer ${apiCfg.apiKey}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      body,
+      parse: (data) => {
+        const p = JSON.parse(data);
+        const text = p.choices?.[0]?.message?.content || '';
+        const m = text.match(/\{[\s\S]*\}/);
+        if (m) return JSON.parse(m[0]);
+        throw new Error(`Invalid response: ${text.substring(0, 100)}`);
+      }
+    };
+  }
+}
+
+function callLLM(messages) {
+  return new Promise((resolve, reject) => {
+    const cfg = getOpenClawConfig();
+    const sessionModel = getCurrentSessionModel();
+    let apiCfg = sessionModel?.modelId ? resolveModelApiConfig(cfg, sessionModel.modelId) : null;
+    if (!apiCfg) {
+      // Default to MiniMax
+      apiCfg = { provider: 'minimax-portal', model: 'MiniMax-M2.7', baseUrl: 'https://api.minimaxi.com/anthropic', apiKey: process.env.MINIMAX_API_KEY, api: 'anthropic-messages' };
+    }
+    if (!apiCfg.apiKey) { reject(new Error(`No API key for ${apiCfg.model} (${apiCfg.provider}). Set MINIMAX_API_KEY or configure in openclaw.json.`)); return; }
+    const { opts, body, parse } = buildLLMCall(apiCfg, messages);
+    const req = https.request(opts, (res) => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        if (res.statusCode === 401 || res.statusCode === 403) { reject(new Error(`API auth failed for ${apiCfg.model}: check API key`)); return; }
+        try { resolve(parse(d)); }
+        catch (e) { reject(new Error(`LLM error: ${e.message} | data: ${d.substring(0, 200)}`)); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 async function cmdAuth(args) {
   try {
@@ -145,22 +282,42 @@ async function cmdNew(args) {
   if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
   const title = args[0] || '';
   const body = args.slice(1).join(' ') || '';
+
+  // No args: auto-generate title + body from conversation context
   if (!title) {
-    // No args: LLM should extract from context and call /gtw new <title> <body>
     const current = wip.issue || {};
-    return {
-      ok: true,
-      llm_action: 'generate_draft',
-      hasDraft: !!(current.title || current.body),
-      draft: { title: current.title || '', body: current.body || '' },
-      message: current.title
-        ? `Current draft in wip.json — describe changes to regenerate, or /gtw confirm if satisfied`
-        : `No draft yet — LLM should extract context and call: /gtw new <title> <body>`,
-      display: current.title
-        ? `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}\n\nDescribe changes to regenerate, or run /gtw confirm if satisfied.`
-        : `📝 No draft yet.\n\nAs the LLM: read the conversation context, generate a title and body for this issue, then call:\n  /gtw new <title> <body>\nto save it to wip.json.`,
-    };
+    // If already has draft, show it (no auto-regenerate without user feedback)
+    if (current.title) {
+      return {
+        ok: true,
+        hasDraft: true,
+        draft: { title: current.title, body: current.body || '' },
+        display: `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}\n\nDescribe changes to regenerate, or run /gtw confirm if satisfied.`,
+      };
+    }
+
+    // Generate new draft from conversation context
+    try {
+      const sessionFile = getCurrentSessionFile();
+      const messages = getRecentMessages(sessionFile, 40);
+      if (messages.length === 0) throw new Error('No conversation history found');
+      process.stderr.write(JSON.stringify({ action: 'generating_draft', messages_count: messages.length, model: getCurrentSessionModel()?.modelId || 'MiniMax-M2.7' }) + '\n');
+      const draft = await callLLM(messages);
+      if (!draft.title) throw new Error('LLM returned no title');
+      const updated = { ...wip, issue: { action: 'create', id: null, title: draft.title, body: draft.body || '' }, updatedAt: new Date().toISOString() };
+      saveWip(updated);
+      return {
+        ok: true,
+        llm_generated: true,
+        wip: updated,
+        display: `📝 Issue draft generated from context\n\nTitle: ${draft.title}\n\nBody:\n${draft.body || '(none)'}\n\nRun /gtw confirm if satisfied, or describe changes to regenerate.`,
+      };
+    } catch (e) {
+      throw new Error(`Failed to generate draft: ${e.message}`);
+    }
   }
+
+  // With args: save as-is
   const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
   saveWip(updated);
   return {

@@ -4,6 +4,12 @@
   "description": "GitHub team collaboration workflow. Session-based: drafts go to wip.json, confirm before executing. Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config",
   "configSchema": {
     "type": "object",
+    "properties": {
+      "model": {
+        "type": "string",
+        "description": "Model ID to use for generating issue drafts (e.g. MiniMax-M2.7, gpt-4o). Defaults to the current session's model if not set. Must be a model configured in openclaw.json."
+      }
+    },
     "additionalProperties": false
   }
 }
