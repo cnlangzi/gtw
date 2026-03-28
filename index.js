@@ -1,7 +1,8 @@
 import { definePluginEntry } from '/home/devin/.npm-global/lib/node_modules/openclaw/dist/plugin-sdk/plugin-entry.js';
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
-import { join, homedir } from 'path';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { CommanderFactory } from './commands/CommanderFactory.js';
+import { getParentSessionFile, injectMessageToParentSession } from './utils/session.js';
 
 const DEBUG_FILE = '/tmp/gtw-plugin.log';
 
@@ -16,15 +17,8 @@ function dbg(...args) {
  */
 function extractHumanMessagesFromParentSession() {
   try {
-    const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-    if (!existsSync(sessionsPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-
-    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    const mainSession = sessionsData['agent:main:main'];
-    if (!mainSession?.sessionFile) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-
-    const jsonlPath = mainSession.sessionFile;
-    if (!existsSync(jsonlPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+    const jsonlPath = getParentSessionFile();
+    if (!jsonlPath) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
 
     const content = readFileSync(jsonlPath, 'utf8');
     const lines = content.split('\n').filter(Boolean);
@@ -119,6 +113,7 @@ const gtw = definePluginEntry({
             api,
             config: api.config,
             extractHumanMessages: extractHumanMessagesFromParentSession,
+            injectMessage: injectMessageToParentSession,
           });
 
           if (!factory.canHandle(cmd)) {

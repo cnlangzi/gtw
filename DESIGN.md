@@ -16,8 +16,8 @@ gtw/
   commands/
     Commander.js             ← Base interface (execute(args))
     CommanderFactory.js      ← Factory: cmd string → Commander instance
-    OnCommand.js            ← Set workdir + repo
-    NewCommand.js           ← Create/update issue draft (LLM generation)
+    OnCommand.js            ← Set workdir + repo + inject phase directive
+    NewCommand.js           ← Auto-generate issue draft from session (LLM)
     FixCommand.js           ← Create fix branch
     PrCommand.js            ← Push branch + prepare PR body
     PushCommand.js          ← git add → commit → push
@@ -35,6 +35,7 @@ gtw/
     wip.js                  ← WIP state read/write (wip.json)
     git.js                  ← Git operations (git(), getRemoteRepo(), etc.)
     config.js               ← Config read/write (config.json)
+    session.js              ← Parent session JSONL read/write
   scripts/
     index.cjs               ← (Legacy CLI entry, keep for compatibility)
   tests/
@@ -70,10 +71,13 @@ OpenClaw gateway → plugin handler (index.js)
 CommanderFactory.create("on") → new OnCommand(context)
   │
   ▼
-OnCommand.execute(args) → { ok, workdir, repo, display }
+OnCommand.execute(args)
   │
   ▼
 saveWip({ workdir, repo, createdAt })
+  │
+  ▼
+injectMessageToParentSession(phaseText)  ← appends to JSONL
   │
   ▼
 return { text: display }
@@ -81,13 +85,13 @@ return { text: display }
 
 ### LLM Integration
 
-Only `NewCommand` (when called with no args) uses the LLM:
+Only `NewCommand` uses the LLM:
 
 1. `extractHumanMessagesFromParentSession()` reads the parent session JSONL
 2. Finds cutoff: last `/gtw confirm` message (or from start if not found)
-3. Extracts all `role === 'user'` messages from cutoff onwards
-4. Builds a prompt with those messages
-5. Calls `api.runtime.agent.runEmbeddedPiAgent()` with `disableTools: true`
+3. Extracts all `role === 'user'` and `role === 'assistant'` messages from cutoff onwards
+4. Builds a prompt with those messages (no "no code" constraint needed — parent session already has it via OnCommand injection)
+5. Calls `api.runtime.agent.runEmbeddedPiAgent()` with `disableTools: true` in a clean, isolated subagent session
 6. Parses LLM's JSON response → extracts `title` + `body`
 7. Saves draft to `wip.json`
 
@@ -112,8 +116,8 @@ That's it — index.js does not change.
 ## Workflow
 
 ```
-/gtw on <workdir>     → set workdir + repo
-/gtw new [title body] → create issue draft (or let LLM generate)
+/gtw on <workdir>     → set workdir + repo + inject phase directive
+/gtw new              → auto-generate issue draft from session (LLM, no args)
 /gtw confirm          → execute: create issue, branch, PR
 ```
 
@@ -123,3 +127,16 @@ That's it — index.js does not change.
 - Commands are isolated: modify only the specific `XxxCommand.js` file
 - Do not add business logic to `index.js` — route it through the factory
 - The legacy `scripts/index.cjs` is kept for CLI compatibility but is not used by the plugin
+
+## Phase Directive
+
+OnCommand calls `injectMessageToParentSession()` after saving wip state. This appends a user message to the parent session JSONL:
+
+```
+Workdir: <absWorkdir>
+Repo: <repo>
+
+Let's discuss the requirements first — no code yet.
+```
+
+The parent agent reads this on its next poll and enters discussion mode (no code). The subagent session used by NewCommand is isolated and unaffected.

@@ -5,7 +5,7 @@
 ## Features
 
 - **Session-based workflow** — Draft in `wip.json`, confirm when ready. No accidental API calls.
-- **LLM-assisted issue creation** — `/gtw new` reads the conversation and generates a structured issue.
+- **LLM-assisted issue creation** — `/gtw new` reads the parent session history and auto-generates a structured issue draft (title + body) with no manual input required.
 - **Git operations** — `fix`, `push`, and `pr` commands wrap standard git workflows.
 - **Emoji review protocol** — eyes claim → checklist → approved/changes verdict.
 - **GitHub CLI integration** — Uses `gh` for auth; no manual token config needed.
@@ -33,7 +33,7 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 ### Issue Management
 
 ```
-/gtw new                Draft a new issue from conversation
+/gtw new                Read conversation history, auto-generate issue draft (title + body) via LLM, save to wip.json
 /gtw update #<id>       Update issue draft
 /gtw confirm            Execute all pending operations (create issue/branch/PR)
 /gtw issue              List open issues
@@ -89,10 +89,18 @@ Check auth status anytime:
 
 ```
 You: /gtw on ~/code/myproject
-→ ✅ Switched to workdir: /home/user/code/myproject, repo: owner/repo
+→ ✅ Switched to owner/repo
+   📁 Workdir: /home/user/code/myproject
+   [Injects phase directive into parent session — agent knows to discuss, not code]
 
 You: /gtw new
-→ 📝 Issue draft saved
+→ Draft saved:
+   Title: fix: handle null pointer in auth
+   Body:
+   ## Background
+   ...
+   ## Acceptance Criteria
+   ...
 
 You: /gtw fix login-bug
 → 🌿 Created and checked out new branch fix/login-bug
@@ -107,6 +115,8 @@ You: /gtw confirm
 → 🚀 Executed all pending actions and cleared wip.json
 ```
 
+**Phase directive:** `/gtw on` injects a "no code yet" message into the parent session so the agent stays in discussion mode until `/gtw confirm`.
+
 ## State File
 
 ```
@@ -117,10 +127,13 @@ You: /gtw confirm
 ## Architecture
 
 ```
-gtw/                         # Plugin directory
+gtw/
 ├── index.js                 # Plugin entry (ESM, registerCommand)
 ├── openclaw.plugin.json     # Plugin manifest
 ├── package.json             # ESM package
-└── scripts/
-    └── index.cjs            # CLI implementation (CJS, no dependencies)
+├── commands/                # OOP Commander pattern (one class per command)
+│   └── *.js
+└── utils/
+    ├── session.js           # Parent session read/write (JSONL injection)
+    └── *.js
 ```

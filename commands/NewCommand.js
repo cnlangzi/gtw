@@ -16,39 +16,6 @@ export class NewCommand extends Commander {
 
   async execute(args) {
     const wip = getWip();
-    if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
-
-    const title = args[0] || '';
-    const body = args.slice(1).join(' ') || '';
-
-    // With title/body args: save directly
-    if (title) {
-      const updated = {
-        ...wip,
-        issue: { action: 'create', id: null, title, body },
-        updatedAt: new Date().toISOString(),
-      };
-      saveWip(updated);
-      return {
-        ok: true,
-        wip: updated,
-        message: `Issue draft saved: "${title}"`,
-        display: `📝 Issue draft saved\n\nTitle: ${title}\n\nBody:\n${body || '(none)'}\n\nRun /gtw confirm if satisfied, or describe changes to regenerate.`,
-      };
-    }
-
-    // No args: show current draft or generate via LLM
-    const current = wip.issue || {};
-    if (current.title) {
-      return {
-        ok: true,
-        hasDraft: true,
-        draft: { title: current.title, body: current.body || '' },
-        display: `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}\n\nDescribe changes to regenerate, or run /gtw confirm if satisfied.`,
-      };
-    }
-
-    // LLM generation
     return this._generateDraft(wip);
   }
 
@@ -58,7 +25,7 @@ export class NewCommand extends Commander {
     if (!allMessages.length) {
       return {
         ok: false,
-        error: 'No conversation found. Run /gtw on <workdir> first, then describe what you want to create.',
+        error: 'No conversation found. Try describing what you want to create in the chat first.',
       };
     }
 
@@ -115,7 +82,7 @@ Return ONLY valid JSON, nothing else:
     }
 
     if (!title) {
-      return { ok: false, error: 'LLM returned empty title. Try /gtw new <title> <body> manually.' };
+      return { ok: false, error: 'LLM returned empty title. Try describing what you want more clearly.' };
     }
 
     const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
