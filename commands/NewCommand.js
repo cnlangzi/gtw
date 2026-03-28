@@ -73,6 +73,7 @@ Output only the JSON object:`;
         workspaceDir: process.cwd(),
         config: this.config,
         prompt,
+        systemPrompt: 'You must respond with ONLY valid JSON. No markdown, no code fences, no explanation. Output exactly: {"title":"...","body":"..."}',
         timeoutMs: 30000,
         runId: `gtw-new-${Date.now()}`,
         disableTools: true,
@@ -84,12 +85,12 @@ Output only the JSON object:`;
         .map((p) => {
           if (p.type === 'text') return p.text || '';
           if (p.type === 'content_block' && p.content?.text) return p.content.text;
+          if (typeof p.text === 'string') return p.text;
+          if (typeof p.content === 'string') return p.content;
           return '';
         })
-        .join('');
-
-      // DEBUG: log raw response to gateway stderr
-      console.error('[gtw DEBUG] rawText:', JSON.stringify(rawText.slice(0, 500)));
+        .join('')
+        || String(result.text || result.content || result.message || '');
 
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
