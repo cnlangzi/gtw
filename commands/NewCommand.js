@@ -52,16 +52,14 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `Based on the following discussion, generate a GitHub issue:
+    const prompt = `Based on the following discussion, generate a GitHub issue.
+
+IMPORTANT: You must respond with ONLY valid JSON. No markdown, no explanation, no code blocks. Just the JSON object.
 
 ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
-Generate a GitHub issue with:
-- title: short, descriptive, in conventional commit style (e.g. "fix: handle null pointer in auth" or "feat: add device flow auth")
-- body: markdown with ## Background, ## Changes, ## Acceptance Criteria sections
-
-Return ONLY valid JSON, nothing else:
-{"title":"...","body":"..."}`;
+Respond with this exact JSON format (no trailing text):
+{"title":"short conventional commit title","body":"## Background\n\n## Changes\n\n## Acceptance Criteria\n"}`;
 
     let rawText;
     try {
@@ -89,32 +87,52 @@ Return ONLY valid JSON, nothing else:
         })
         .join('');
 
-      // DEBUG: log raw response
-      console.error('[gtw] rawText length:', rawText.length, 'first 300:', rawText.slice(0, 300));
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
-    // Try to extract JSON — handle plain JSON or markdown code blocks
-    let match = rawText.match(/\{[\s\S]*?\}/);
+    // Extract JSON with multiple fallback strategies
+    let title = '', body = '';
+
+    // Strategy 1: JSON in markdown code blocks
+    let match = rawText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
+
+    // Strategy 2: Any JSON object in text
     if (!match) {
-      match = rawText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
-    }
-    if (!match) {
-      return { ok: false, message: `⚠️ AI didn't return valid JSON (returned ${rawText.length} chars). Could you try again?` };
+      match = rawText.match(/\{[\s\S]*?\}/);
     }
 
-    let title = '', body = '';
-    try {
-      const parsed = JSON.parse(match[0]);
-      title = parsed.title || '';
-      body = parsed.body || '';
-    } catch {
-      return { ok: false, message: `⚠️ Failed to parse AI response. Could you try again?` };
+    // Strategy 3: Extract title/body from text patterns as last resort
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        title = parsed.title || '';
+        body = parsed.body || '';
+      } catch {
+        match = null; // JSON-like text but not valid JSON
+      }
+    }
+
+    if (!match) {
+      // Strategy 3: Try regex to extract title and body separately
+      const titleMatch = rawText.match(/(?:title\s*[:=]\s*["'`]?\s*([^"'`\n]{10,100})/i)
+        || rawText.match(/^#?\s*(.+)$/m);
+      const bodyMatch = rawText.match(/(?:body\s*[:=]\s*["'`]\s*)([\s\S]{50,})["'`]$/m)
+        || rawText.match(/(?:##\s*(?:Changes?|Body|内容)[\s\S]{0,50})([\s\S]{50,})/m);
+
+      if (titleMatch) {
+        title = titleMatch[1].trim();
+      }
+      if (bodyMatch) {
+        body = bodyMatch[1].trim();
+      }
     }
 
     if (!title) {
-      return { ok: false, message: "⚠️ Sorry, I couldn't extract a topic from our conversation. Could you describe what you'd like to create?" };
+      return {
+        ok: false,
+        message: `⚠️ AI didn't return valid JSON and couldn't extract issue data. Try again: make sure your response is ONLY valid JSON like {"title":"...","body":"..."}`,
+      };
     }
 
     const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
