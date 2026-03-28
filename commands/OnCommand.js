@@ -29,7 +29,12 @@ export class OnCommand extends Commander {
       ok: true,
       workdir: absWorkdir,
       repo,
-      display: `✅ Switched to workdir\n\n📁 ${absWorkdir}\n🔗 ${repo}`,
+      display: [
+        `✅ Switched to ${repo}`,
+        `📁 Workdir: ${absWorkdir}`,
+        '',
+        `Let's discuss the requirements first — no code yet.`,
+      ].join('\n'),
       message: `workdir set to ${absWorkdir}, repo: ${repo}`,
     };
   }
