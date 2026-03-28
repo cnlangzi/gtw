@@ -83,7 +83,7 @@ Return ONLY valid JSON, nothing else:
     }
 
     if (!title) {
-      return { ok: false, error: 'LLM returned empty title. Try describing what you want more clearly.' };
+      return { ok: false, error: "Sorry, I couldn't extract a topic from our conversation. Could you describe what you'd like to create?" };
     }
 
     const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
