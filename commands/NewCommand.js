@@ -6,41 +6,100 @@ import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages } from '../utils/session.js';
 
 /**
- * Make a direct API call to MiniMax using OAuth token from auth-profiles.json.
- * @param {string} token - OAuth access token
- * @param {string} model - Model name (e.g. MiniMax-M2.7)
+ * Find the provider config for a given model from OpenClaw's models.json.
+ * Searches all providers to find which one hosts the model.
+ * @param {string} model - Model id (e.g. MiniMax-M2.7)
+ * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
+ */
+function findModelProviderConfig(model) {
+  const modelsPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json');
+  if (!existsSync(modelsPath)) return null;
+  try {
+    const data = JSON.parse(readFileSync(modelsPath, 'utf8'));
+    for (const [provider, conf] of Object.entries(data.providers || {})) {
+      const hasModel = conf.models?.some((m) => m.id === model);
+      if (hasModel) {
+        return {
+          provider,
+          baseUrl: conf.baseUrl || '',
+          authHeader: conf.authHeader !== false,
+          api: conf.api || 'anthropic-messages',
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Make an AI API call using OpenClaw's model + auth configuration.
+ * Supports both Anthropic and OpenAI message formats.
+ * @param {string} model - Model id
  * @param {string} systemPrompt
  * @param {string} userPrompt
  * @returns {Promise<string>} - Response text
  */
-async function callMiniMaxApi(token, model, systemPrompt, userPrompt) {
-  const res = await fetch('https://api.minimaxi.com/anthropic/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
+async function callAI(model, systemPrompt, userPrompt) {
+  // 1. Find provider config from models.json
+  const providerConfig = findModelProviderConfig(model);
+  if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
+
+  const { provider, baseUrl, authHeader } = providerConfig;
+  const authKey = `${provider}:default`;
+
+  // 2. Get token from auth-profiles.json
+  const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+  const authData = JSON.parse(readFileSync(authPath, 'utf8'));
+  const token = authData.profiles?.[authKey]?.access;
+  if (!token) throw new Error(`No token for ${authKey} in auth-profiles.json`);
+
+  // 3. Build headers
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  if (authHeader) {
+    headers['Authorization'] = `Bearer ${token}`;
+  } else {
+    headers['x-api-key'] = token;
+  }
+
+  // 4. Determine format from baseUrl or API type
+  const isAnthropic = baseUrl.includes('anthropic') || provider.includes('anthropic') || provider.includes('minimax');
+  const isOpenAI = baseUrl.includes('openai') || !isAnthropic;
+
+  let body;
+  if (isAnthropic) {
+    // Anthropic messages API
+    headers['anthropic-version'] = '2023-06-01';
+    const endpoint = baseUrl.replace(/\/$/, '') + '/messages';
+    const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
+    const maxTokens = (
+      (modelConf.providers?.[provider]?.models || [])
+        .find((m) => m.id === model)
+    )?.maxTokens || 1024;
+
+    body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
+    if (systemPrompt) body.system = systemPrompt;
+
+    const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    return (data.content || []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+  } else {
+    // OpenAI chat completions API
+    const endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
+    body = {
       model,
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-  });
+      messages: [],
+    };
+    if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
+    body.messages.push({ role: 'user', content: userPrompt });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`MiniMax API ${res.status}: ${text}`);
+    const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    return (data.choices || []).map((c) => c.message?.content || '').join('');
   }
-
-  const data = await res.json();
-  // Extract text from Anthropic message format
-  const content = data.content || [];
-  if (Array.isArray(content)) {
-    return content.map((block) => (block.type === 'text' ? block.text : '')).join('');
-  }
-  return String(data.content || data.text || '');
 }
 
 export class NewCommand extends Commander {
@@ -117,17 +176,7 @@ Output only the JSON object:`;
 
     let rawText;
     try {
-      // Read OAuth token — use modelProvider from sessions.json + ':default' to look up in auth-profiles.json
-      const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
-      const authData = JSON.parse(readFileSync(authPath, 'utf8'));
-      const authKey = `${modelProvider}:default`;
-      const token = authData.profiles?.[authKey]?.access;
-      if (!token) throw new Error(`No OAuth token found for ${authKey} in auth-profiles.json`);
-
-      rawText = await callMiniMaxApi(token, model, systemPrompt, prompt);
-
-      // Save session for audit
-      const sessionFile = join(tmpDir, `gtw-new-${Date.now()}.json`);
+      rawText = await callAI(model, systemPrompt, prompt);
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
