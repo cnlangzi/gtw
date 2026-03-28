@@ -1,10 +1,71 @@
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { definePluginEntry } from '/home/devin/.npm-global/lib/node_modules/openclaw/dist/plugin-sdk/plugin-entry.js';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
+import { join, homedir } from 'path';
+import { CommanderFactory } from './commands/CommanderFactory.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const GTW_SCRIPT = join(__dirname, 'scripts', 'index.cjs');
+const DEBUG_FILE = '/tmp/gtw-plugin.log';
+
+function dbg(...args) {
+  const msg = '[' + new Date().toISOString() + '] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ') + '\n';
+  try { writeFileSync(DEBUG_FILE, msg); } catch { /* ignore */ }
+}
+
+/**
+ * Read the parent session JSONL and extract human+assistant messages after the last
+ * /gtw confirm (or from start if not found).
+ */
+function extractHumanMessagesFromParentSession() {
+  try {
+    const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
+    if (!existsSync(sessionsPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+
+    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    const mainSession = sessionsData['agent:main:main'];
+    if (!mainSession?.sessionFile) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+
+    const jsonlPath = mainSession.sessionFile;
+    if (!existsSync(jsonlPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+
+    const content = readFileSync(jsonlPath, 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+
+    // 从后往前找 /gtw confirm
+    let cutoffIndex = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const text = Array.isArray(entry.content)
+          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join(' ')
+          : String(entry.content || '');
+        if (entry.role === 'user' && /\/gtw\s+confirm\b/i.test(text)) {
+          cutoffIndex = i + 1;
+          break;
+        }
+      } catch {}
+    }
+
+    const humanMessages = [];
+    const allMessages = [];
+    for (let i = cutoffIndex; i < lines.length; i++) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const text = Array.isArray(entry.content)
+          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join('\n')
+          : String(entry.content || '');
+        if (!text.trim()) continue;
+        if (entry.role === 'user' || entry.role === 'assistant') {
+          allMessages.push({ role: entry.role, text: text.trim() });
+        }
+        if (entry.role === 'user') humanMessages.push(text.trim());
+      } catch {}
+    }
+
+    return { humanMessages, allMessages, cutoffIndex };
+  } catch (e) {
+    dbg('[gtw] extractHumanMessages error:', e.message);
+    return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+  }
+}
 
 const USAGE = `gtw - GitHub Team Workflow
 
@@ -12,7 +73,7 @@ Usage: /gtw <command> [args]
 
 Commands:
   on <workdir>        Set workdir and repo
-  new <title> <body>  Create issue draft (title + body, no prefix needed)
+  new [title] [body] Create issue draft (LLM auto-generates if no args)
   update #<id>        Update existing issue
   confirm            Execute pending actions (create issue/PR, push branch)
   fix [name]         Create fix branch
@@ -22,77 +83,63 @@ Commands:
   issue [repo]       List open issues
   show #<id> [repo]  Show issue details
   poll [issue|pr]    Poll open issues/PRs
-  auth               Authenticate via GitHub device flow
+  model [model-id]  Set LLM model for draft generation
+  auth               Show auth status (uses gh CLI)
   config             Show current config
 
 Workflow: /gtw on -> /gtw new -> /gtw confirm`;
 
-function execGtw(rawArgs) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', [GTW_SCRIPT, rawArgs], {
-      cwd: __dirname,
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (d) => stdout += d);
-    child.stderr.on('data', (d) => stderr += d);
-    child.on('close', (code) => {
-      if (code === 0) {
-        try { resolve(JSON.parse(stdout)); }
-        catch { resolve({ ok: true, output: stdout }); }
-      } else {
-        try { const e = JSON.parse(stderr); reject(new Error(e.error || stderr.trim())); }
-        catch { reject(new Error(stderr.trim() || `exit code ${code}`)); }
-      }
-    });
-    child.on('error', reject);
-  });
-}
-
-function formatResult(result) {
-  // Handle auth_required (device flow in progress)
-  if (result.action === 'auth_required') {
-    return { text: `🔐 Device auth required\n\n1. Open: https://github.com/login/device\n2. Enter code: \`${result.user_code}\`\n\nWaiting for authorization... (expires in ${Math.floor(result.expires_in / 60)} minutes)\n\nThe auth will complete automatically once you authorize on GitHub.` };
-  }
-  if (result.action === 'auth_success') {
-    return { text: `✅ ${result.message}` };
-  }
-  if (result.display) {
-    return { text: result.display };
-  }
-  return { text: JSON.stringify(result, null, 2) };
-}
-
-export default {
+const gtw = definePluginEntry({
   id: 'gtw',
+  name: 'GitHub Team Workflow',
+  description: 'GitHub team workflow. Workflow: /gtw on <workdir> -> /gtw new -> /gtw confirm',
+  acceptsArgs: true,
   register(api) {
     api.registerCommand({
       name: 'gtw',
       description: 'GitHub team workflow. Workflow: /gtw on <workdir> -> /gtw new -> /gtw confirm',
       acceptsArgs: true,
       handler: async (ctx) => {
-        const rawArgs = (ctx.args || '').trim();
-        const parts = rawArgs.split(/\s+/).filter(Boolean);
-        const cmd = parts[0] || '';
-        const args = parts.slice(1);
-
-        // /gtw new with no args: prompt for title + body
-        if (cmd === 'new' && args.length === 0) {
-          return { text: '📝 Creating new issue draft.\n\nPlease provide:\n- **Title**: brief description\n- **Body** (optional): details, acceptance criteria, etc.\n\nExample: /gtw new Fix login bug on Safari Add more details here...' };
-        }
-
-        if (!rawArgs) {
-          return { text: USAGE };
-        }
-
         try {
-          const result = await execGtw(rawArgs);
-          return formatResult(result);
+          dbg('[gtw] handler entered, args=', ctx.args);
+
+          const rawArgs = (ctx.args || '').trim();
+          if (!rawArgs) {
+            return { text: USAGE };
+          }
+
+          const parts = rawArgs.split(/\s+/).filter(Boolean);
+          const cmd = parts[0].toLowerCase();
+          const args = parts.slice(1);
+
+          dbg('[gtw] cmd=', cmd, 'args=', args);
+
+          // Build factory with API context
+          const factory = new CommanderFactory({
+            api,
+            config: api.config,
+            extractHumanMessages: extractHumanMessagesFromParentSession,
+          });
+
+          if (!factory.canHandle(cmd)) {
+            return { text: `❌ Unknown command: ${cmd}\n\n${USAGE}` };
+          }
+
+          const commander = factory.create(cmd);
+          const result = await commander.execute(args);
+
+          if (!result.ok) {
+            return { text: `❌ ${result.error || result.message}` };
+          }
+
+          return { text: result.display || result.message || 'OK' };
         } catch (err) {
+          dbg('[gtw] handler exception:', err.message, err.stack);
           return { text: `❌ ${err.message}` };
         }
-      }
+      },
     });
-  }
-};
+  },
+});
+
+export default gtw;
