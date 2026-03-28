@@ -27,8 +27,9 @@ export class NewCommand extends Commander {
     } catch {}
 
     const dmScope = cfg.session?.dmScope || 'main';
-    const realSessionKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
-    const { allMessages } = (this.extractMessages || extractMessages)(realSessionKey);
+    // Read from agent:main:main (canonical main session for the main agent)
+    const MAIN_AGENT_SESSION = 'agent:main:main';
+    const { allMessages } = (this.extractMessages || extractMessages)(MAIN_AGENT_SESSION);
 
     if (!allMessages.length) {
       return {
