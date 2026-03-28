@@ -26,7 +26,7 @@ export class NewCommand extends Commander {
     if (!allMessages.length) {
       return {
         ok: false,
-        error: 'No conversation found. Try describing what you want to create in the chat first.',
+        message: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
       };
     }
 
@@ -65,12 +65,12 @@ Return ONLY valid JSON, nothing else:
         })
         .join('');
     } catch (e) {
-      return { ok: false, error: `LLM call failed: ${e.message}` };
+      return { ok: false, message: `⚠️ LLM call failed: ${e.message}` };
     }
 
     const match = rawText.match(/\{[\s\S]*?\}/);
     if (!match) {
-      return { ok: false, error: `LLM did not return valid JSON. Response:\n${rawText.substring(0, 500)}` };
+      return { ok: false, message: `⚠️ LLM didn't return valid JSON. Could you try again?` };
     }
 
     let title = '', body = '';
@@ -79,11 +79,11 @@ Return ONLY valid JSON, nothing else:
       title = parsed.title || '';
       body = parsed.body || '';
     } catch {
-      return { ok: false, error: `Failed to parse LLM JSON response: ${match[0].substring(0, 200)}` };
+      return { ok: false, message: `⚠️ Failed to parse LLM response. Could you try again?` };
     }
 
     if (!title) {
-      return { ok: false, error: "Sorry, I couldn't extract a topic from our conversation. Could you describe what you'd like to create?" };
+      return { ok: false, message: "⚠️ Sorry, I couldn't extract a topic from our conversation. Could you describe what you'd like to create?" };
     }
 
     const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };

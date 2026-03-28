@@ -74,7 +74,7 @@ const gtw = definePluginEntry({
           const result = await commander.execute(args);
 
           if (!result.ok) {
-            return { text: `❌ ${result.error || result.message}` };
+            return { text: result.message || 'Failed' };
           }
 
           return { text: result.display || result.message || 'OK' };
