@@ -17,7 +17,7 @@ gtw/
     Commander.js             ← Base interface (execute(args))
     CommanderFactory.js      ← Factory: cmd string → Commander instance
     OnCommand.js            ← Set workdir + repo + inject phase directive
-    NewCommand.js           ← Auto-generate issue draft from session (LLM)
+    NewCommand.js           ← Auto-generate issue draft from session (AI)
     FixCommand.js           ← Create fix branch
     PrCommand.js            ← Push branch + prepare PR body
     PushCommand.js          ← git add → commit → push
@@ -27,7 +27,7 @@ gtw/
     ShowCommand.js          ← Show issue detail
     PollCommand.js          ← Poll issues/PRs
     ConfigCommand.js        ← Show current config + WIP state
-    ModelCommand.js         ← Set/unset LLM model for draft generation
+    ModelCommand.js         ← Set/unset AI model for draft generation
     AuthCommand.js          ← Check gh CLI auth status
     UpdateCommand.js        ← Save issue update draft
   utils/
@@ -83,19 +83,19 @@ injectMessageToParentSession(phaseText)  ← appends to JSONL
 return { text: display }
 ```
 
-### LLM Integration
+### AI Integration
 
-Only `NewCommand` uses the LLM:
+Only `NewCommand` uses the AI:
 
 1. `extractMessages(sessionKey)` reads the parent session JSONL for the current session
 2. Finds cutoff: last `/gtw confirm` message (or from start if not found)
 3. Extracts all `role === 'user'` and `role === 'assistant'` messages from cutoff onwards
 4. Builds a prompt with those messages (no "no code" constraint needed — parent session already has it via OnCommand injection)
 5. Calls `api.runtime.agent.runEmbeddedPiAgent()` with `disableTools: true` in a clean, isolated subagent session
-6. Parses LLM's JSON response → extracts `title` + `body`
+6. Parses AI's JSON response → extracts `title` + `body`
 7. Saves draft to `wip.json`
 
-No other command uses the LLM.
+No other command uses the AI.
 
 **Session key resolution:** `sessionKey` comes from `ctx.sessionKey` (set by OpenClaw at plugin invocation). The agent ID is parsed as `sessionKey.split(':')[1]` to locate the correct `sessions/sessions.json` file — no hardcoding.
 
@@ -112,18 +112,18 @@ That's it — index.js does not change.
 | File | Purpose |
 |------|---------|
 | `~/.openclaw/gtw/wip.json` | Current workdir, repo, pending issue/branch/pr |
-| `~/.openclaw/gtw/config.json` | Custom LLM model setting |
+| `~/.openclaw/gtw/config.json` | Custom AI model setting |
 | `~/.openclaw/gtw/token.json` | Cached gh CLI token |
 
 ## Workflow
 
 ```
 /gtw on <workdir>     → set workdir + repo + inject phase directive
-/gtw new              → auto-generate issue draft from session (LLM, no args)
+/gtw new              → auto-generate issue draft from chat via AI (no args)
 /gtw confirm          → execute: create issue, branch, PR
 ```
 
-## Notes for LLM Agents
+## Notes for AI Agents
 
 - **Read this file first** when working on gtw
 - Commands are isolated: modify only the specific `XxxCommand.js` file

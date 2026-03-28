@@ -16,7 +16,7 @@ Usage: /gtw <command> [args]
 
 Commands:
   on <workdir>        Set workdir and repo
-  new                 Auto-generate issue draft from conversation (LLM)
+  new                 Auto-generate issue draft from chat via AI
   update #<id>        Update existing issue
   confirm            Execute pending actions (create issue/PR, push branch)
   fix [name]         Create fix branch
