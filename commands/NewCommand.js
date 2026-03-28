@@ -55,17 +55,6 @@ export class NewCommand extends Commander {
   async _generateDraft(wip) {
     const { humanMessages, allMessages } = (this.extractFn || (() => ({ humanMessages: [], allMessages: [] })))();
 
-    // Prepend repo/workdir + requirements-phase directive as the first user message
-    const { workdir, repo } = wip;
-    const phaseText = [
-      repo ? `Repo: ${repo}` : null,
-      workdir ? `Workdir: ${workdir}` : null,
-      '',
-      "Let's discuss the requirements first — no code yet.",
-    ].filter(Boolean).join('\n');
-
-    const discussionMessages = [{ role: 'user', text: phaseText }, ...allMessages];
-
     if (!allMessages.length) {
       return {
         ok: false,
@@ -75,7 +64,7 @@ export class NewCommand extends Commander {
 
     const prompt = `Based on the following discussion, generate a GitHub issue:
 
-${discussionMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
+${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
 Generate a GitHub issue with:
 - title: short, descriptive, in conventional commit style (e.g. "fix: handle null pointer in auth" or "feat: add device flow auth")
