@@ -52,14 +52,15 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `Based on the following discussion, generate a GitHub issue.
+    const prompt = `You generate a GitHub issue from a discussion. Output ONLY valid JSON — no markdown, no code fences, no explanation, no extra text.
 
-IMPORTANT: You must respond with ONLY valid JSON. No markdown, no explanation, no code blocks. Just the JSON object.
+Example:
+Input: a discussion about fixing a bug
+Output: {"title":"fix: handle null pointer in auth","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}
 
 ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
-Respond with this exact JSON format (no trailing text):
-{"title":"short conventional commit title","body":"## Background\n\n## Changes\n\n## Acceptance Criteria\n"}`;
+Output only the JSON object:`;
 
     let rawText;
     try {
