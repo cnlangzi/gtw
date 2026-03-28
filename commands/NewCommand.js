@@ -161,24 +161,24 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `Read this discussion and write a GitHub issue:
+    // Clean messages: strip role prefixes and any JSON-like metadata from discussion
+    const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
+    const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
 
-Output only JSON, nothing else:`;
+Discussion:
+${cleanMessages}
+
+JSON:`;
 
     // Ensure tmp dir exists for session file
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const systemPrompt = `You are an expert GitHub issue writer. Your job is to read a development discussion and produce a clear, well-structured GitHub issue.
+    const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
 
-Style rules:
-- title: lowercase, conventional commit style (fix:, feat:, docs:, refactor:, etc.)
-- body: markdown with ## Background, ## Changes, ## Acceptance Criteria
-- Keep title under 72 characters
-- Be precise and technical
-- Respond with ONLY valid JSON`;
+JSON format:
+{"title":"fix: short description","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
 
     let rawText;
     try {
