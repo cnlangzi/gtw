@@ -1,7 +1,9 @@
 import { Commander } from './Commander.js';
 import { join } from 'path';
 import { homedir } from 'os';
+import { readFileSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
+import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 
 export class NewCommand extends Commander {
   /**
@@ -17,11 +19,16 @@ export class NewCommand extends Commander {
 
   async execute(args) {
     const wip = getWip();
-    return this._generateDraft(wip);
-  }
 
-  async _generateDraft(wip) {
-    const { humanMessages, allMessages } = (this.extractMessages || (() => ({ humanMessages: [], allMessages: [] })))(this.sessionKey);
+    // Read full openclaw.json config for session.dmScope, session.identityLinks, session.mainKey
+    let cfg = {};
+    try {
+      cfg = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+    } catch {}
+
+    const dmScope = cfg.session?.dmScope || 'main';
+    const realSessionKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
+    const { allMessages } = (this.extractMessages || extractMessages)(realSessionKey);
 
     if (!allMessages.length) {
       return {

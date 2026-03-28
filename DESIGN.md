@@ -77,7 +77,7 @@ OnCommand.execute(args)
 saveWip({ workdir, repo, createdAt })
   │
   ▼
-injectMessageToParentSession(phaseText)  ← appends to JSONL
+injectMessage(sessionKey, phaseText)  ← appends requirements directive to session JSONL
   │
   ▼
 return { text: display }
@@ -90,7 +90,7 @@ Only `NewCommand` uses the AI:
 1. `extractMessages(sessionKey)` reads the parent session JSONL for the current session
 2. Finds cutoff: last `/gtw confirm` message (or from start if not found)
 3. Extracts all `role === 'user'` and `role === 'assistant'` messages from cutoff onwards
-4. Builds a prompt with those messages (no "no code" constraint needed — parent session already has it via OnCommand injection)
+4. Builds a prompt with those messages. The current session already has the requirements phase directive injected via OnCommand, so the agent knows not to code yet. The subagent session spawned by NewCommand is isolated and unaffected.
 5. Calls `api.runtime.agent.runEmbeddedPiAgent()` with `disableTools: true` in a clean, isolated subagent session
 6. Parses AI's JSON response → extracts `title` + `body`
 7. Saves draft to `wip.json`
@@ -118,9 +118,9 @@ That's it — index.js does not change.
 ## Workflow
 
 ```
-/gtw on <workdir>     → set workdir + repo + inject phase directive
+/gtw on <workdir>     → set workdir + repo + inject requirements phase directive
 /gtw new              → auto-generate issue draft from chat via AI (no args)
-/gtw confirm          → execute: create issue, branch, PR
+/gtw confirm          → create issue from wip.issue.title/body + wip.repo
 ```
 
 ## Notes for AI Agents
@@ -132,13 +132,33 @@ That's it — index.js does not change.
 
 ## Phase Directive
 
-OnCommand calls `injectMessage(sessionKey, text)` after saving wip state. This appends a user message to the parent session JSONL:
+OnCommand calls `injectMessage(sessionKey, phaseText)` after saving wip state. This appends a user message to the current session JSONL. The agent reads it on its next response and enters **requirements clarification phase**.
 
 ```
 Workdir: <absWorkdir>
 Repo: <repo>
 
-Let's discuss the requirements first — no code yet.
+You are in REQUIREMENTS CLARIFICATION phase.
+
+Your ONLY task right now:
+- Read and understand the existing code
+- Identify what the current code does and how it works
+- Confirm your understanding by describing it back to User
+- Ask any clarifying questions
+
+You MUST NOT:
+- Write any code
+- Modify any files
+- Refactor anything
+- Suggest fixes (unless asked)
+
+When User confirms your understanding is correct and explicitly says "可以开始了" (or "you can start"), THEN you may begin implementation.
+
+Reply format:
+## 当前理解
+[用自己的话描述代码逻辑]
+## 疑问
+[有任何不确定的地方列出来]
 ```
 
-The parent agent reads this on its next poll and enters discussion mode (no code). The subagent session used by NewCommand is isolated and unaffected.
+The subagent session used by NewCommand is isolated and unaffected — it does not read this directive.

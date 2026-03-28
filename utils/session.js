@@ -3,6 +3,92 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 /**
+ * Resolve the real session key for the main agent session from a channel-specific key.
+ *
+ * session.dmScope controls how DMs are grouped:
+ * - main: all DMs share agent:{agentId}:{mainKey} (default: agent:{agentId}:main)
+ * - per-peer: all channels share agent:{agentId}:{peerId}
+ * - per-channel-peer: each channel has agent:{agentId}:{channel}:{peerId}
+ * - per-account-channel-peer: agent:{agentId}:{accountId}:{channel}:{peerId}
+ *
+ * Strategy: look up sessions.json and find the entry that corresponds to the main
+ * session for the current peer. Falls back to ctx.sessionKey itself.
+ *
+ * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
+ * @param {string} dmScope - from openclaw.json session.dmScope
+ * @param {object} cfg - full openclaw.json config (optional, for identityLinks/mainKey)
+ * @returns {string|null}
+ */
+export function resolveRealSessionKey(sessionKey, dmScope, cfg = {}) {
+  if (!sessionKey) return null;
+  const parts = sessionKey.split(':');
+  if (parts.length < 2) return null;
+  const agentId = parts[1];
+
+  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+  if (!existsSync(sessionsPath)) return sessionKey;
+
+  let sessionsData;
+  try {
+    sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+  } catch {
+    return sessionKey;
+  }
+
+  // identityLinks: map provider-specific peerId to canonical identity
+  let peerId = parts[parts.length - 1];
+  const identityLinks = cfg.session?.identityLinks;
+  if (identityLinks && identityLinks[peerId]) {
+    peerId = identityLinks[peerId];
+  }
+
+  const mainKey = cfg.session?.mainKey || 'main';
+
+  let candidates = [];
+
+  if (dmScope === 'main') {
+    // All DMs share one main session
+    candidates.push(`${agentId}:${mainKey}`);
+  } else if (dmScope === 'per-peer') {
+    // Same peer across channels share one session
+    candidates.push(`${agentId}:${peerId}`);
+  } else if (dmScope === 'per-channel-peer') {
+    // Channel + peer combination
+    const channel = parts[2] || 'feishu';
+    candidates.push(`${agentId}:${channel}:${peerId}`);
+  } else if (dmScope === 'per-account-channel-peer') {
+    // Account + channel + peer
+    const accountId = parts[2] || 'default';
+    const channel = parts[3] || 'feishu';
+    candidates.push(`${agentId}:${accountId}:${channel}:${peerId}`);
+  }
+
+  // Find first candidate that exists in sessions.json
+  for (const candidate of candidates) {
+    const fullKey = `agent:${candidate}`;
+    if (sessionsData[fullKey]?.sessionFile) {
+      return fullKey;
+    }
+  }
+
+  // Fallback: construct the expected canonical session key from current context
+  // (used when dmScope != main and the peer hasn't been seen yet)
+  if (dmScope === 'per-peer') {
+    return `agent:${agentId}:${peerId}`;
+  } else if (dmScope === 'per-channel-peer') {
+    const channel = parts[2] || 'feishu';
+    return `agent:${agentId}:${channel}:${peerId}`;
+  } else if (dmScope === 'per-account-channel-peer') {
+    const accountId = parts[2] || 'default';
+    const channel = parts[3] || 'feishu';
+    return `agent:${agentId}:${accountId}:${channel}:${peerId}`;
+  }
+
+  // Final fallback: the current session itself
+  return sessionKey;
+}
+
+/**
  * Get the session JSONL file path for a given session key.
  * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
  * @returns {string|null}
@@ -42,10 +128,12 @@ export function extractMessages(sessionKey) {
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
-        const text = Array.isArray(entry.content)
-          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join(' ')
-          : String(entry.content || '');
-        if (entry.role === 'user' && /\/gtw\s+confirm\b/i.test(text)) {
+        const msg = entry.message;
+        if (!msg) continue; // skip non-message entries (e.g. session metadata)
+        const text = Array.isArray(msg.content)
+          ? msg.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join(' ')
+          : String(msg.content || '');
+        if (msg.role === 'user' && /\/gtw\s+confirm\b/i.test(text)) {
           cutoffIndex = i + 1;
           break;
         }
@@ -57,14 +145,16 @@ export function extractMessages(sessionKey) {
     for (let i = cutoffIndex; i < lines.length; i++) {
       try {
         const entry = JSON.parse(lines[i]);
-        const text = Array.isArray(entry.content)
-          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join('\n')
-          : String(entry.content || '');
+        const msg = entry.message;
+        if (!msg) continue;
+        const text = Array.isArray(msg.content)
+          ? msg.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join('\n')
+          : String(msg.content || '');
         if (!text.trim()) continue;
-        if (entry.role === 'user' || entry.role === 'assistant') {
-          allMessages.push({ role: entry.role, text: text.trim() });
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          allMessages.push({ role: msg.role, text: text.trim() });
         }
-        if (entry.role === 'user') humanMessages.push(text.trim());
+        if (msg.role === 'user') humanMessages.push(text.trim());
       } catch {}
     }
 
@@ -85,12 +175,16 @@ export function injectMessage(sessionKey, text) {
   if (!sessionFile) return false;
 
   try {
-    const message = JSON.stringify({
-      role: 'user',
-      content: [{ type: 'text', text }],
-      timestamp: Date.now(),
+    const entry = JSON.stringify({
+      type: 'message',
+      id: `inj-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text }],
+      },
     });
-    appendFileSync(sessionFile, message + '\n');
+    appendFileSync(sessionFile, entry + '\n');
     return true;
   } catch {
     return false;
