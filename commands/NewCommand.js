@@ -88,13 +88,20 @@ Return ONLY valid JSON, nothing else:
           return '';
         })
         .join('');
+
+      // DEBUG: log raw response
+      console.error('[gtw] rawText length:', rawText.length, 'first 300:', rawText.slice(0, 300));
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
-    const match = rawText.match(/\{[\s\S]*?\}/);
+    // Try to extract JSON — handle plain JSON or markdown code blocks
+    let match = rawText.match(/\{[\s\S]*?\}/);
     if (!match) {
-      return { ok: false, message: `⚠️ AI didn't return valid JSON. Could you try again?` };
+      match = rawText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
+    }
+    if (!match) {
+      return { ok: false, message: `⚠️ AI didn't return valid JSON (returned ${rawText.length} chars). Could you try again?` };
     }
 
     let title = '', body = '';
