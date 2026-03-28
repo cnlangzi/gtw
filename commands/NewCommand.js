@@ -179,6 +179,7 @@ Respond with this JSON format (fill in actual content based on the discussion ab
     let rawText;
     try {
       rawText = await callAI(model, systemPrompt, prompt);
+      console.error('[gtw DEBUG] rawText length:', rawText.length, 'first 300:', JSON.stringify(rawText.slice(0, 300)));
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
@@ -186,12 +187,15 @@ Respond with this JSON format (fill in actual content based on the discussion ab
     // Extract JSON with multiple fallback strategies
     let title = '', body = '';
 
-    // Strategy 1: JSON in markdown code blocks
-    let match = rawText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
+    // Preprocess: strip markdown code fences first
+    let cleanText = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
-    // Strategy 2: Any JSON object in text
+    // Strategy 1: JSON in markdown code blocks
+    let match = cleanText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
+
+    // Strategy 2: Any JSON object in clean text
     if (!match) {
-      match = rawText.match(/\{[\s\S]*?\}/);
+      match = cleanText.match(/\{[\s\S]*?\}/);
     }
 
     if (match) {
@@ -214,9 +218,10 @@ Respond with this JSON format (fill in actual content based on the discussion ab
       }
     }
     if (!title) {
+      const preview = rawText.slice(0, 200).replace(/\n/g, ' ');
       return {
         ok: false,
-        message: `⚠️ AI didn't return valid JSON and couldn't extract issue data. Try again: make sure your response is ONLY valid JSON like {"title":"...","body":"..."}`,
+        message: `⚠️ AI didn't return valid JSON. Raw response (${rawText.length} chars): ${preview}`,
       };
     }
 
