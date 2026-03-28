@@ -161,21 +161,18 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `You generate a GitHub issue from a discussion. Output ONLY valid JSON — no markdown, no code fences, no explanation, no extra text.
-
-Example:
-Input: a discussion about fixing a bug
-Output: {"title":"fix: handle null pointer in auth","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}
+    const prompt = `You are a JSON generator. Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
 
 ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
-Output only the JSON object:`;
+Respond with EXACTLY this JSON format, nothing else before or after:
+{"title":"short title","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
 
     // Ensure tmp dir exists for session file
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const systemPrompt = 'You must respond with ONLY valid JSON. No markdown, no code fences, no explanation. Output exactly: {"title":"...","body":"..."}';
+    const systemPrompt = null; // inline format instruction in user prompt instead
 
     let rawText;
     try {
