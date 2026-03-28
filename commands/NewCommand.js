@@ -11,7 +11,8 @@ export class NewCommand extends Commander {
     super(context);
     this.api = context.api;
     this.config = context.config;
-    this.extractFn = context.extractHumanMessages;
+    this.sessionKey = context.sessionKey;
+    this.extractMessages = context.extractMessages;
   }
 
   async execute(args) {
@@ -20,7 +21,7 @@ export class NewCommand extends Commander {
   }
 
   async _generateDraft(wip) {
-    const { humanMessages, allMessages } = (this.extractFn || (() => ({ humanMessages: [], allMessages: [] })))();
+    const { humanMessages, allMessages } = (this.extractMessages || (() => ({ humanMessages: [], allMessages: [] })))(this.sessionKey);
 
     if (!allMessages.length) {
       return {

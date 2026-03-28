@@ -8,6 +8,7 @@ import { saveWip } from '../utils/wip.js';
 export class OnCommand extends Commander {
   constructor(context) {
     super(context);
+    this.sessionKey = context.sessionKey;
     this.injectMessage = context.injectMessage;
   }
 
@@ -32,7 +33,7 @@ export class OnCommand extends Commander {
 
     // Inject phase directive into parent session so the agent knows we're in discussion mode
     const phaseText = `Workdir: ${absWorkdir}\nRepo: ${repo}\n\nLet's discuss the requirements first — no code yet.`;
-    this.injectMessage?.(phaseText);
+    this.injectMessage?.(this.sessionKey, phaseText);
 
     return {
       ok: true,
@@ -42,7 +43,7 @@ export class OnCommand extends Commander {
         `✅ Switched to ${repo}`,
         `📁 Workdir: ${absWorkdir}`,
         '',
-        `Injected phase directive into session.`,
+        `Let's discuss the requirements first — no code yet.`,
       ].join('\n'),
       message: `workdir set to ${absWorkdir}, repo: ${repo}`,
     };

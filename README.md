@@ -91,7 +91,7 @@ Check auth status anytime:
 You: /gtw on ~/code/myproject
 → ✅ Switched to owner/repo
    📁 Workdir: /home/user/code/myproject
-   [Injects phase directive into parent session — agent knows to discuss, not code]
+   Let's discuss the requirements first — no code yet.
 
 You: /gtw new
 → Draft saved:
