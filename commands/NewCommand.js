@@ -63,15 +63,14 @@ async function callAI(model, systemPrompt, userPrompt) {
     headers['x-api-key'] = token;
   }
 
-  // 4. Determine format from baseUrl or API type
-  const isAnthropic = baseUrl.includes('anthropic') || provider.includes('anthropic') || provider.includes('minimax');
-  const isOpenAI = baseUrl.includes('openai') || !isAnthropic;
-
+  // 4. Determine API format from models.json api field
+  const api = providerConfig.api || 'openai-chat';
+  let endpoint;
   let body;
-  if (isAnthropic) {
-    // Anthropic messages API
+
+  if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
-    const endpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
+    const fullEndpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
     const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
@@ -81,21 +80,21 @@ async function callAI(model, systemPrompt, userPrompt) {
     body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
 
-    console.error('[gtw DEBUG] POST', endpoint);
-    console.error('[gtw DEBUG] headers:', JSON.stringify(headers));
-    console.error('[gtw DEBUG] body:', JSON.stringify(body).slice(0, 300));
+    console.error('[gtw DEBUG] POST', fullEndpoint);
+    console.error('[gtw DEBUG] token prefix:', token.slice(0, 8));
+    console.error('[gtw DEBUG] body keys:', Object.keys(body));
 
-    const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
+    const res = await fetch(fullEndpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+    const text = await res.text();
+    console.error('[gtw DEBUG] status:', res.status, 'body prefix:', text.slice(0, 200));
+    if (!res.ok) throw new Error(`API ${res.status}: ${text}`);
+    const data = JSON.parse(text);
     return (data.content || []).map((b) => (b.type === 'text' ? b.text : '')).join('');
+
   } else {
-    // OpenAI chat completions API
-    const endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
-    body = {
-      model,
-      messages: [],
-    };
+    // Default: OpenAI chat completions
+    endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
+    body = { model, messages: [] };
     if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
     body.messages.push({ role: 'user', content: userPrompt });
 
