@@ -1,9 +1,47 @@
 import { Commander } from './Commander.js';
 import { join } from 'path';
 import { homedir } from 'os';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages } from '../utils/session.js';
+
+/**
+ * Make a direct API call to MiniMax using OAuth token from auth-profiles.json.
+ * @param {string} token - OAuth access token
+ * @param {string} model - Model name (e.g. MiniMax-M2.7)
+ * @param {string} systemPrompt
+ * @param {string} userPrompt
+ * @returns {Promise<string>} - Response text
+ */
+async function callMiniMaxApi(token, model, systemPrompt, userPrompt) {
+  const res = await fetch('https://api.minimaxi.com/anthropic/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MiniMax API ${res.status}: ${text}`);
+  }
+
+  const data = await res.json();
+  // Extract text from Anthropic message format
+  const content = data.content || [];
+  if (Array.isArray(content)) {
+    return content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+  }
+  return String(data.content || data.text || '');
+}
 
 export class NewCommand extends Commander {
   /**
@@ -62,36 +100,24 @@ ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 
 
 Output only the JSON object:`;
 
+    // Ensure tmp dir exists for session file
+    const tmpDir = join(homedir(), '.openclaw', 'gtw');
+    mkdirSync(tmpDir, { recursive: true });
+
+    const systemPrompt = 'You must respond with ONLY valid JSON. No markdown, no code fences, no explanation. Output exactly: {"title":"...","body":"..."}';
+
     let rawText;
     try {
-      const tmpDir = join(homedir(), '.openclaw', 'gtw');
+      // Read OAuth token from auth-profiles.json
+      const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+      const authData = JSON.parse(readFileSync(authPath, 'utf8'));
+      const token = authData.profiles?.['minimax-portal:default']?.access;
+      if (!token) throw new Error('No OAuth token found in auth-profiles.json');
+
+      rawText = await callMiniMaxApi(token, model, systemPrompt, prompt);
+
+      // Save session for audit
       const sessionFile = join(tmpDir, `gtw-new-${Date.now()}.json`);
-
-      const result = await this.api.runtime.agent.runEmbeddedPiAgent({
-        sessionId: `gtw-new-${Date.now()}`,
-        sessionFile,
-        workspaceDir: process.cwd(),
-        config: this.config,
-        prompt,
-        systemPrompt: 'You must respond with ONLY valid JSON. No markdown, no code fences, no explanation. Output exactly: {"title":"...","body":"..."}',
-        timeoutMs: 30000,
-        runId: `gtw-new-${Date.now()}`,
-        disableTools: true,
-        provider: modelProvider,
-        model,
-      });
-
-      rawText = (result.payloads || [])
-        .map((p) => {
-          if (p.type === 'text') return p.text || '';
-          if (p.type === 'content_block' && p.content?.text) return p.content.text;
-          if (typeof p.text === 'string') return p.text;
-          if (typeof p.content === 'string') return p.content;
-          return '';
-        })
-        .join('')
-        || String(result.text || result.content || result.message || '');
-
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
