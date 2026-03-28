@@ -81,6 +81,10 @@ async function callAI(model, systemPrompt, userPrompt) {
     body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
 
+    console.error('[gtw DEBUG] POST', endpoint);
+    console.error('[gtw DEBUG] headers:', JSON.stringify(headers));
+    console.error('[gtw DEBUG] body:', JSON.stringify(body).slice(0, 300));
+
     const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
     const data = await res.json();
