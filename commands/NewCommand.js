@@ -161,12 +161,14 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `You are a JSON generator. Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
+    const prompt = `Based on the discussion below, generate a GitHub issue.
+
+Return ONLY valid JSON. No markdown. No explanation. Only the JSON object.
 
 ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
-Respond with EXACTLY this JSON format, nothing else before or after:
-{"title":"short title","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
+Respond with this JSON format (fill in actual content based on the discussion above):
+{"title":"<short title summarizing the issue>","body":"<markdown body with ## Background, ## Changes, ## Acceptance Criteria>"}`;
 
     // Ensure tmp dir exists for session file
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
