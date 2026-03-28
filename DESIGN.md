@@ -87,7 +87,7 @@ return { text: display }
 
 Only `NewCommand` uses the LLM:
 
-1. `extractHumanMessagesFromParentSession()` reads the parent session JSONL
+1. `extractMessages(sessionKey)` reads the parent session JSONL for the current session
 2. Finds cutoff: last `/gtw confirm` message (or from start if not found)
 3. Extracts all `role === 'user'` and `role === 'assistant'` messages from cutoff onwards
 4. Builds a prompt with those messages (no "no code" constraint needed — parent session already has it via OnCommand injection)
@@ -96,6 +96,8 @@ Only `NewCommand` uses the LLM:
 7. Saves draft to `wip.json`
 
 No other command uses the LLM.
+
+**Session key resolution:** `sessionKey` comes from `ctx.sessionKey` (set by OpenClaw at plugin invocation). The agent ID is parsed as `sessionKey.split(':')[1]` to locate the correct `sessions/sessions.json` file — no hardcoding.
 
 ## Adding a New Command
 
@@ -130,7 +132,7 @@ That's it — index.js does not change.
 
 ## Phase Directive
 
-OnCommand calls `injectMessageToParentSession()` after saving wip state. This appends a user message to the parent session JSONL:
+OnCommand calls `injectMessage(sessionKey, text)` after saving wip state. This appends a user message to the parent session JSONL:
 
 ```
 Workdir: <absWorkdir>

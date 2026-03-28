@@ -5,7 +5,7 @@
 ## Features
 
 - **Session-based workflow** — Draft in `wip.json`, confirm when ready. No accidental API calls.
-- **LLM-assisted issue creation** — `/gtw new` reads the parent session history and auto-generates a structured issue draft (title + body) with no manual input required.
+- **AI-assisted issue creation** — `/gtw new` reads the parent session history and auto-generates a structured issue draft (title + body) with no manual input required.
 - **Git operations** — `fix`, `push`, and `pr` commands wrap standard git workflows.
 - **Emoji review protocol** — eyes claim → checklist → approved/changes verdict.
 - **GitHub CLI integration** — Uses `gh` for auth; no manual token config needed.
@@ -33,7 +33,7 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 ### Issue Management
 
 ```
-/gtw new                Read conversation history, auto-generate issue draft (title + body) via LLM, save to wip.json
+/gtw new                Read conversation history, auto-generate issue draft (title + body) via AI, save to wip.json
 /gtw update #<id>       Update issue draft
 /gtw confirm            Execute all pending operations (create issue/branch/PR)
 /gtw issue              List open issues
