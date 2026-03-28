@@ -8,7 +8,9 @@ import { homedir } from 'os';
  * @returns {string|null}
  */
 export function getSessionFile(sessionKey) {
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
+  const agentId = sessionKey?.split(':')[1]; // "main" from "agent:main:feishu:direct:ou_xxx"
+  if (!agentId) return null;
+  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
   if (!existsSync(sessionsPath)) return null;
 
   try {
