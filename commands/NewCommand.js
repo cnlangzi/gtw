@@ -88,6 +88,9 @@ Output only the JSON object:`;
         })
         .join('');
 
+      // DEBUG: log raw response to gateway stderr
+      console.error('[gtw DEBUG] rawText:', JSON.stringify(rawText.slice(0, 500)));
+
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
