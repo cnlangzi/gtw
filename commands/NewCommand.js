@@ -75,7 +75,7 @@ export class NewCommand extends Commander {
       };
     }
 
-    // Resolve the current session's model from sessions.json to pass to subagent
+    // Resolve the current session's model from sessions.json
     let modelProvider = 'minimax-portal';
     let model = 'MiniMax-M2.7';
     try {
@@ -87,6 +87,15 @@ export class NewCommand extends Commander {
           modelProvider = mainSession.modelProvider || modelProvider;
           model = mainSession.model || model;
         }
+      }
+    } catch {}
+
+    // gtw model override (set via /gtw model)
+    try {
+      const gtwConfigPath = join(homedir(), '.openclaw', 'gtw', 'config.json');
+      if (existsSync(gtwConfigPath)) {
+        const gtwConfig = JSON.parse(readFileSync(gtwConfigPath, 'utf8'));
+        if (gtwConfig.model) model = gtwConfig.model;
       }
     } catch {}
 
@@ -108,11 +117,12 @@ Output only the JSON object:`;
 
     let rawText;
     try {
-      // Read OAuth token from auth-profiles.json
+      // Read OAuth token — use modelProvider from sessions.json + ':default' to look up in auth-profiles.json
       const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
       const authData = JSON.parse(readFileSync(authPath, 'utf8'));
-      const token = authData.profiles?.['minimax-portal:default']?.access;
-      if (!token) throw new Error('No OAuth token found in auth-profiles.json');
+      const authKey = `${modelProvider}:default`;
+      const token = authData.profiles?.[authKey]?.access;
+      if (!token) throw new Error(`No OAuth token found for ${authKey} in auth-profiles.json`);
 
       rawText = await callMiniMaxApi(token, model, systemPrompt, prompt);
 
