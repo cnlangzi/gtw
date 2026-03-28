@@ -102,32 +102,25 @@ Respond with this exact JSON format (no trailing text):
       match = rawText.match(/\{[\s\S]*?\}/);
     }
 
-    // Strategy 3: Extract title/body from text patterns as last resort
     if (match) {
       try {
         const parsed = JSON.parse(match[0]);
         title = parsed.title || '';
         body = parsed.body || '';
       } catch {
-        match = null; // JSON-like text but not valid JSON
+        match = null;
       }
     }
 
-    if (!match) {
-      // Strategy 3: Try regex to extract title and body separately
-      const titleMatch = rawText.match(/(?:title\s*[:=]\s*["'`]?\s*([^"'`\n]{10,100})/i)
-        || rawText.match(/^#?\s*(.+)$/m);
-      const bodyMatch = rawText.match(/(?:body\s*[:=]\s*["'`]\s*)([\s\S]{50,})["'`]$/m)
-        || rawText.match(/(?:##\s*(?:Changes?|Body|内容)[\s\S]{0,50})([\s\S]{50,})/m);
-
-      if (titleMatch) {
-        title = titleMatch[1].trim();
-      }
-      if (bodyMatch) {
-        body = bodyMatch[1].trim();
+    // Strategy 3: Plain text fallback — split by newlines, take first meaningful line as title
+    if (!title) {
+      const text = rawText.replace(/\r/g, '');
+      const parts = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      if (parts.length > 0) {
+        title = parts[0].replace(/^#+ /, '');
+        if (title.length < 5 || title.length > 100) title = '';
       }
     }
-
     if (!title) {
       return {
         ok: false,
