@@ -161,20 +161,24 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    const prompt = `Based on the discussion below, generate a GitHub issue.
-
-Return ONLY valid JSON. No markdown. No explanation. Only the JSON object.
+    const prompt = `Read this discussion and write a GitHub issue:
 
 ${allMessages.map((m, i) => `[${m.role === 'user' ? 'User' : 'Assistant'} ${i + 1}]\n${m.text}`).join('\n\n')}
 
-Respond with this JSON format (fill in actual content based on the discussion above):
-{"title":"<short title summarizing the issue>","body":"<markdown body with ## Background, ## Changes, ## Acceptance Criteria>"}`;
+Output only JSON, nothing else:`;
 
     // Ensure tmp dir exists for session file
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const systemPrompt = null; // inline format instruction in user prompt instead
+    const systemPrompt = `You are an expert GitHub issue writer. Your job is to read a development discussion and produce a clear, well-structured GitHub issue.
+
+Style rules:
+- title: lowercase, conventional commit style (fix:, feat:, docs:, refactor:, etc.)
+- body: markdown with ## Background, ## Changes, ## Acceptance Criteria
+- Keep title under 72 characters
+- Be precise and technical
+- Respond with ONLY valid JSON`;
 
     let rawText;
     try {
