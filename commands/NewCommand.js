@@ -71,7 +71,7 @@ async function callAI(model, systemPrompt, userPrompt) {
   if (isAnthropic) {
     // Anthropic messages API
     headers['anthropic-version'] = '2023-06-01';
-    const endpoint = baseUrl.replace(/\/$/, '') + '/messages';
+    const endpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
     const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
