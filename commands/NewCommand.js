@@ -1,9 +1,9 @@
 import { Commander } from './Commander.js';
 import { join } from 'path';
 import { homedir } from 'os';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
-import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
+import { extractMessages } from '../utils/session.js';
 
 export class NewCommand extends Commander {
   /**
@@ -27,7 +27,6 @@ export class NewCommand extends Commander {
     } catch {}
 
     const dmScope = cfg.session?.dmScope || 'main';
-    // Read from agent:main:main (canonical main session for the main agent)
     const MAIN_AGENT_SESSION = 'agent:main:main';
     const { allMessages } = (this.extractMessages || extractMessages)(MAIN_AGENT_SESSION);
 
@@ -37,6 +36,21 @@ export class NewCommand extends Commander {
         message: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
       };
     }
+
+    // Resolve the current session's model from sessions.json to pass to subagent
+    let modelProvider = 'minimax-portal';
+    let model = 'MiniMax-M2.7';
+    try {
+      const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
+      if (existsSync(sessionsPath)) {
+        const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+        const mainSession = sessionsData[MAIN_AGENT_SESSION];
+        if (mainSession) {
+          modelProvider = mainSession.modelProvider || modelProvider;
+          model = mainSession.model || model;
+        }
+      }
+    } catch {}
 
     const prompt = `Based on the following discussion, generate a GitHub issue:
 
@@ -63,6 +77,8 @@ Return ONLY valid JSON, nothing else:
         timeoutMs: 30000,
         runId: `gtw-new-${Date.now()}`,
         disableTools: true,
+        provider: modelProvider,
+        model,
       });
 
       rawText = (result.payloads || [])
