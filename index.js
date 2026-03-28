@@ -1,7 +1,7 @@
 import { definePluginEntry } from '/home/devin/.npm-global/lib/node_modules/openclaw/dist/plugin-sdk/plugin-entry.js';
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
-import { join, homedir } from 'path';
+import { writeFileSync } from 'fs';
 import { CommanderFactory } from './commands/CommanderFactory.js';
+import { extractMessages, injectMessage } from './utils/session.js';
 
 const DEBUG_FILE = '/tmp/gtw-plugin.log';
 
@@ -10,70 +10,13 @@ function dbg(...args) {
   try { writeFileSync(DEBUG_FILE, msg); } catch { /* ignore */ }
 }
 
-/**
- * Read the parent session JSONL and extract human+assistant messages after the last
- * /gtw confirm (or from start if not found).
- */
-function extractHumanMessagesFromParentSession() {
-  try {
-    const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-    if (!existsSync(sessionsPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-
-    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    const mainSession = sessionsData['agent:main:main'];
-    if (!mainSession?.sessionFile) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-
-    const jsonlPath = mainSession.sessionFile;
-    if (!existsSync(jsonlPath)) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-
-    const content = readFileSync(jsonlPath, 'utf8');
-    const lines = content.split('\n').filter(Boolean);
-
-    // 从后往前找 /gtw confirm
-    let cutoffIndex = 0;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        const text = Array.isArray(entry.content)
-          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join(' ')
-          : String(entry.content || '');
-        if (entry.role === 'user' && /\/gtw\s+confirm\b/i.test(text)) {
-          cutoffIndex = i + 1;
-          break;
-        }
-      } catch {}
-    }
-
-    const humanMessages = [];
-    const allMessages = [];
-    for (let i = cutoffIndex; i < lines.length; i++) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        const text = Array.isArray(entry.content)
-          ? entry.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join('\n')
-          : String(entry.content || '');
-        if (!text.trim()) continue;
-        if (entry.role === 'user' || entry.role === 'assistant') {
-          allMessages.push({ role: entry.role, text: text.trim() });
-        }
-        if (entry.role === 'user') humanMessages.push(text.trim());
-      } catch {}
-    }
-
-    return { humanMessages, allMessages, cutoffIndex };
-  } catch (e) {
-    dbg('[gtw] extractHumanMessages error:', e.message);
-    return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-  }
-}
-
 const USAGE = `gtw - GitHub Team Workflow
 
 Usage: /gtw <command> [args]
 
 Commands:
   on <workdir>        Set workdir and repo
-  new [title] [body] Create issue draft (LLM auto-generates if no args)
+  new                 Auto-generate issue draft from chat via AI
   update #<id>        Update existing issue
   confirm            Execute pending actions (create issue/PR, push branch)
   fix [name]         Create fix branch
@@ -114,11 +57,13 @@ const gtw = definePluginEntry({
 
           dbg('[gtw] cmd=', cmd, 'args=', args);
 
-          // Build factory with API context
+          // Build factory with API context + session helpers
           const factory = new CommanderFactory({
             api,
             config: api.config,
-            extractHumanMessages: extractHumanMessagesFromParentSession,
+            sessionKey: ctx.sessionKey,
+            extractMessages,
+            injectMessage,
           });
 
           if (!factory.canHandle(cmd)) {
@@ -129,7 +74,7 @@ const gtw = definePluginEntry({
           const result = await commander.execute(args);
 
           if (!result.ok) {
-            return { text: `❌ ${result.error || result.message}` };
+            return { text: result.message || 'Failed' };
           }
 
           return { text: result.display || result.message || 'OK' };

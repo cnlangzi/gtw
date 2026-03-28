@@ -6,6 +6,12 @@ import { getRemoteRepo } from '../utils/git.js';
 import { saveWip } from '../utils/wip.js';
 
 export class OnCommand extends Commander {
+  constructor(context) {
+    super(context);
+    this.sessionKey = context.sessionKey;
+    this.injectMessage = context.injectMessage;
+  }
+
   async execute(args) {
     const workdir = args[0];
     if (!workdir) throw new Error('Usage: /gtw on <workdir>');
@@ -24,6 +30,10 @@ export class OnCommand extends Commander {
 
     const repo = getRemoteRepo(absWorkdir);
     saveWip({ workdir: absWorkdir, repo, createdAt: new Date().toISOString() });
+
+    // Inject phase directive into parent session so the agent knows we're in discussion mode
+    const phaseText = `Workdir: ${absWorkdir}\nRepo: ${repo}\n\nLet's discuss the requirements first — no code yet.`;
+    this.injectMessage?.(this.sessionKey, phaseText);
 
     return {
       ok: true,

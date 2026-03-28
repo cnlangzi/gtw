@@ -20,7 +20,7 @@ import { PrCommand } from './PrCommand.js';
  */
 export class CommanderFactory {
   /**
-   * @param {{ api: object, config: object, extractHumanMessages: function }} context
+   * @param {{ api: object, config: object, sessionKey: string, extractMessages: function, injectMessage: function }} context
    */
   constructor(context) {
     this.context = context;

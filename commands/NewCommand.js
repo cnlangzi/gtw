@@ -11,54 +11,22 @@ export class NewCommand extends Commander {
     super(context);
     this.api = context.api;
     this.config = context.config;
-    this.extractFn = context.extractHumanMessages;
+    this.sessionKey = context.sessionKey;
+    this.extractMessages = context.extractMessages;
   }
 
   async execute(args) {
     const wip = getWip();
-    if (!wip.repo) throw new Error('No repo set. Run /gtw on <workdir> first');
-
-    const title = args[0] || '';
-    const body = args.slice(1).join(' ') || '';
-
-    // With title/body args: save directly
-    if (title) {
-      const updated = {
-        ...wip,
-        issue: { action: 'create', id: null, title, body },
-        updatedAt: new Date().toISOString(),
-      };
-      saveWip(updated);
-      return {
-        ok: true,
-        wip: updated,
-        message: `Issue draft saved: "${title}"`,
-        display: `📝 Issue draft saved\n\nTitle: ${title}\n\nBody:\n${body || '(none)'}\n\nRun /gtw confirm if satisfied, or describe changes to regenerate.`,
-      };
-    }
-
-    // No args: show current draft or generate via LLM
-    const current = wip.issue || {};
-    if (current.title) {
-      return {
-        ok: true,
-        hasDraft: true,
-        draft: { title: current.title, body: current.body || '' },
-        display: `Current draft:\n\nTitle: ${current.title}\n\nBody:\n${current.body || '(none)'}\n\nDescribe changes to regenerate, or run /gtw confirm if satisfied.`,
-      };
-    }
-
-    // LLM generation
     return this._generateDraft(wip);
   }
 
   async _generateDraft(wip) {
-    const { humanMessages, allMessages } = (this.extractFn || (() => ({ humanMessages: [], allMessages: [] })))();
+    const { humanMessages, allMessages } = (this.extractMessages || (() => ({ humanMessages: [], allMessages: [] })))(this.sessionKey);
 
     if (!allMessages.length) {
       return {
         ok: false,
-        error: 'No conversation found. Run /gtw on <workdir> first, then describe what you want to create.',
+        message: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
       };
     }
 
@@ -97,12 +65,12 @@ Return ONLY valid JSON, nothing else:
         })
         .join('');
     } catch (e) {
-      return { ok: false, error: `LLM call failed: ${e.message}` };
+      return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
     const match = rawText.match(/\{[\s\S]*?\}/);
     if (!match) {
-      return { ok: false, error: `LLM did not return valid JSON. Response:\n${rawText.substring(0, 500)}` };
+      return { ok: false, message: `⚠️ AI didn't return valid JSON. Could you try again?` };
     }
 
     let title = '', body = '';
@@ -111,11 +79,11 @@ Return ONLY valid JSON, nothing else:
       title = parsed.title || '';
       body = parsed.body || '';
     } catch {
-      return { ok: false, error: `Failed to parse LLM JSON response: ${match[0].substring(0, 200)}` };
+      return { ok: false, message: `⚠️ Failed to parse AI response. Could you try again?` };
     }
 
     if (!title) {
-      return { ok: false, error: 'LLM returned empty title. Try /gtw new <title> <body> manually.' };
+      return { ok: false, message: "⚠️ Sorry, I couldn't extract a topic from our conversation. Could you describe what you'd like to create?" };
     }
 
     const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
