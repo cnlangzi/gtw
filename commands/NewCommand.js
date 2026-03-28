@@ -65,12 +65,12 @@ Return ONLY valid JSON, nothing else:
         })
         .join('');
     } catch (e) {
-      return { ok: false, message: `⚠️ LLM call failed: ${e.message}` };
+      return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
     const match = rawText.match(/\{[\s\S]*?\}/);
     if (!match) {
-      return { ok: false, message: `⚠️ LLM didn't return valid JSON. Could you try again?` };
+      return { ok: false, message: `⚠️ AI didn't return valid JSON. Could you try again?` };
     }
 
     let title = '', body = '';
@@ -79,7 +79,7 @@ Return ONLY valid JSON, nothing else:
       title = parsed.title || '';
       body = parsed.body || '';
     } catch {
-      return { ok: false, message: `⚠️ Failed to parse LLM response. Could you try again?` };
+      return { ok: false, message: `⚠️ Failed to parse AI response. Could you try again?` };
     }
 
     if (!title) {
