@@ -1,5 +1,5 @@
 import { Commander } from './Commander.js';
-import { getWip, saveWip } from '../utils/wip.js';
+import { getWip } from '../utils/wip.js';
 import { git, getCurrentBranch } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 
@@ -95,19 +95,8 @@ Output ONLY valid JSON.`;
   return parseCommitResponse(rawText, branch, workdir);
 }
 
-function parseArgs(args) {
-  const flags = { dryRun: true };
-  for (const arg of args) {
-    if (arg === '--confirm' || arg === '--yes' || arg === '-y' || arg === 'confirm') flags.dryRun = false;
-    if (arg === '--dry-run' || arg === 'dry-run') flags.dryRun = true;
-    if (arg === '--no-dry-run') flags.dryRun = false;
-  }
-  return flags;
-}
-
 export class PushCommand extends Commander {
   async execute(args) {
-    const { dryRun } = parseArgs(args);
     const wip = getWip();
     if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
 
@@ -145,40 +134,11 @@ export class PushCommand extends Commander {
       usedFallback = true;
     }
 
-    if (dryRun) {
-      const pending = { ...wip, pendingCommit: { title: commitTitle, body: commitBody, branch, usedFallback }, updatedAt: new Date().toISOString() };
-      saveWip(pending);
-
-      const diffPreview = diff.length > 2000 ? diff.slice(0, 2000) + '\n\n... (truncated)' : diff;
-      return {
-        ok: true, branch, dryRun: true, usedFallback,
-        commit: { title: commitTitle, body: commitBody }, stats,
-        message: `🔍 Dry-run — run /gtw push confirm to commit and push`,
-        display: [
-          `🔍 Dry-run preview — NOT pushed yet`,
-          usedFallback ? '⚠️ LLM failed — using fallback format' : '🤖 LLM-generated message',
-          ``,
-          `📝 Commit title:\n${commitTitle}`,
-          ``,
-          `📄 Commit body:\n${commitBody}`,
-          ``,
-          `📊 Changes:\n${stats}`,
-          ``,
-          `📁 Files (${files.length}):\n${files.slice(0, 20).join('\n')}${files.length > 20 ? '\n... and more' : ''}`,
-          ``,
-          `Diff preview:\n\`\`\`\n${diffPreview}\n\`\`\``,
-          ``,
-          `Run /gtw push confirm to commit and push.`,
-        ].join('\n'),
-      };
-    }
-
-    // Commit and push
     git(`git commit -m "${commitTitle.replace(/"/g, '\\"')}" -m "${commitBody.replace(/"/g, '\\"')}"`, workdir);
     git(`git push origin ${branch}`, workdir);
 
     return {
-      ok: true, branch, dryRun: false, usedFallback,
+      ok: true, branch, usedFallback,
       commit: { title: commitTitle, body: commitBody }, stats,
       message: `✅ Pushed${usedFallback ? ' (fallback)' : ''}: ${commitTitle}`,
       display: [
