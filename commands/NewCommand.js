@@ -7,8 +7,8 @@ import { extractMessages } from '../utils/session.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
- * Searches all providers to find which one hosts the model.
- * @param {string} model - Model id (e.g. MiniMax-M2.7)
+ * Supports "model-id" (searches all providers) or "provider/model-id" (direct lookup).
+ * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
  * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
  */
 function findModelProviderConfig(model) {
@@ -16,6 +16,23 @@ function findModelProviderConfig(model) {
   if (!existsSync(modelsPath)) return null;
   try {
     const data = JSON.parse(readFileSync(modelsPath, 'utf8'));
+
+    // Direct lookup: "provider/model-id"
+    if (model.includes('/')) {
+      const [provider, modelId] = model.split('/');
+      const conf = data.providers?.[provider];
+      if (conf?.models?.some((m) => m.id === modelId)) {
+        return {
+          provider,
+          baseUrl: conf.baseUrl || '',
+          authHeader: conf.authHeader !== false,
+          api: conf.api || 'anthropic-messages',
+        };
+      }
+      return null;
+    }
+
+    // Fallback: search all providers for model id
     for (const [provider, conf] of Object.entries(data.providers || {})) {
       const hasModel = conf.models?.some((m) => m.id === model);
       if (hasModel) {
@@ -45,23 +62,24 @@ async function callAI(model, systemPrompt, userPrompt) {
   if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
 
   const { provider, baseUrl, authHeader } = providerConfig;
+  // Strip provider prefix for the actual API call (provider/model → model)
+  const modelId = model.includes('/') ? model.split('/')[1] : model;
   const authKey = `${provider}:default`;
 
-  // 2. Get token from auth-profiles.json
-  const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
-  const authData = JSON.parse(readFileSync(authPath, 'utf8'));
-  const token = authData.profiles?.[authKey]?.access;
-  if (!token) throw new Error(`No token for ${authKey} in auth-profiles.json`);
-
-  // 3. Build headers
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-  if (authHeader) {
-    headers['Authorization'] = `Bearer ${token}`;
-  } else {
-    headers['x-api-key'] = token;
-  }
+  // 2. Get token from auth-profiles.json (optional — some local providers need no token)
+  const headers = { 'Content-Type': 'application/json' };
+  try {
+    const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+    const authData = JSON.parse(readFileSync(authPath, 'utf8'));
+    const token = authData.profiles?.[authKey]?.access;
+    if (token) {
+      if (authHeader) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else {
+        headers['x-api-key'] = token;
+      }
+    }
+  } catch { /* no auth needed */ }
 
   // 4. Determine API format from models.json api field
   const api = providerConfig.api || 'openai-chat';
@@ -74,10 +92,10 @@ async function callAI(model, systemPrompt, userPrompt) {
     const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
-        .find((m) => m.id === model)
+        .find((m) => m.id === modelId)
     )?.maxTokens || 1024;
 
-    body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
+    body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
 
     console.error('[gtw DEBUG] POST', fullEndpoint);
@@ -94,7 +112,7 @@ async function callAI(model, systemPrompt, userPrompt) {
   } else {
     // Default: OpenAI chat completions
     endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
-    body = { model, messages: [] };
+    body = { model: modelId, messages: [] };
     if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
     body.messages.push({ role: 'user', content: userPrompt });
 
@@ -191,24 +209,55 @@ JSON format:
     // Extract JSON with multiple fallback strategies
     let title = '', body = '';
 
-    // Preprocess: strip markdown code fences first
-    let cleanText = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-
-    // Strategy 1: JSON in markdown code blocks
-    let match = cleanText.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\n?```/);
-
-    // Strategy 2: Any JSON object in clean text
-    if (!match) {
-      match = cleanText.match(/\{[\s\S]*?\}/);
-    }
-
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
+    // Strategy 0: rawText is a bare JSON object {"title":...,"body":...}
+    try {
+      const parsed = JSON.parse(rawText);
+      console.error('[gtw DEBUG] Strategy 0 parse OK, parsed type:', typeof parsed, 'keys:', Object.keys(parsed).join(','));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed.title || parsed.body)) {
         title = parsed.title || '';
         body = parsed.body || '';
-      } catch {
-        match = null;
+        console.error('[gtw DEBUG] Strategy 0 matched, title:', title.slice(0, 80));
+      } else {
+        console.error('[gtw DEBUG] Strategy 0 condition failed: parsed type:', typeof parsed, 'isArray:', Array.isArray(parsed), 'hasTitle:', !!(parsed && parsed.title), 'hasBody:', !!(parsed && parsed.body));
+      }
+    } catch (e) {
+      console.error('[gtw DEBUG] Strategy 0 failed:', e.message);
+    }
+
+    // Strategy 1: rawText is a JSON string "{\"title\":...}" (starts with outer quotes)
+    if (!title) {
+      try {
+        const inner = JSON.parse(rawText);
+        // inner is the parsed JSON — if it's a string (JSON string in JSON), parse again
+        const obj = typeof inner === 'string' ? JSON.parse(inner) : inner;
+        console.error('[gtw DEBUG] Strategy 1 parse OK, keys:', Object.keys(obj).join(','));
+        if (obj && (obj.title || obj.body)) {
+          title = obj.title || '';
+          body = obj.body || '';
+          console.error('[gtw DEBUG] Strategy 1 matched, title:', title.slice(0, 80));
+        }
+      } catch (e) {
+        console.error('[gtw DEBUG] Strategy 1 failed:', e.message);
+      }
+    }
+
+    // Strategy 2: Strip markdown code fences, then find JSON object
+    if (!title) {
+      let cleanText = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+      console.error('[gtw DEBUG] Strategy 2 cleanText starts with:', cleanText.slice(0, 50).replace(/\n/g, '\\n'));
+      const match = cleanText.match(/\{[\s\S]*?\}/);
+      if (match) {
+        try {
+          const parsed = JSON.parse(match[0]);
+          console.error('[gtw DEBUG] Strategy 2 parse OK, keys:', Object.keys(parsed).join(','));
+          if (parsed && (parsed.title || parsed.body)) {
+            title = parsed.title || '';
+            body = parsed.body || '';
+            console.error('[gtw DEBUG] Strategy 2 matched, title:', title.slice(0, 80));
+          }
+        } catch (e) {
+          console.error('[gtw DEBUG] Strategy 2 JSON parse failed:', e.message);
+        }
       }
     }
 
