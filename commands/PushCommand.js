@@ -1,5 +1,5 @@
 import { Commander } from './Commander.js';
-import { getWip } from '../utils/wip.js';
+import { getWip, saveWip } from '../utils/wip.js';
 import { git, getCurrentBranch } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 
@@ -26,24 +26,7 @@ function getBranchType(branch) {
   return 'chore';
 }
 
-function buildFallbackMessage(branch, workdir) {
-  const files = git('git diff --cached --name-only', workdir).split('\n').filter(Boolean);
-  const shortStats = git('git diff --cached --numstat', workdir);
-  let totalAdd = 0, totalDel = 0;
-  for (const l of shortStats.split('\n').filter(Boolean)) {
-    const parts = l.split('\t');
-    totalAdd += parseInt(parts[0], 10) || 0;
-    totalDel += parseInt(parts[1], 10) || 0;
-  }
-  const bt = getBranchType(branch);
-  const topic = branch.replace(/^(fix|feat|chore|docs|refactor|test|perf|ci|build|deps)[/\\-]/, '').replace(/[\\/-]/g, '-') || 'update';
-  return {
-    title: `${bt}(${topic}): ${files.length} file(s) changed (+${totalAdd} -${totalDel})`,
-    body: '(LLM generation failed — used simple fallback format)',
-  };
-}
-
-function parseCommitResponse(rawText, branch, workdir) {
+function parseCommitResponse(rawText) {
   const strategies = [
     () => JSON.parse(rawText),
     () => { const inner = JSON.parse(rawText); return typeof inner === 'string' ? JSON.parse(inner) : inner; },
@@ -62,11 +45,10 @@ function parseCommitResponse(rawText, branch, workdir) {
       }
     } catch {}
   }
-
-  return buildFallbackMessage(branch, workdir);
+  return null;
 }
 
-async function generateCommitMessage(diff, branch, workdir) {
+async function generateCommitMessage(diff, branch) {
   const { model } = await resolveModel();
   const branchType = getBranchType(branch);
 
@@ -74,7 +56,7 @@ async function generateCommitMessage(diff, branch, workdir) {
 You output ONLY valid JSON. No markdown. No explanation. No text outside the JSON object.
 
 Output format:
-{"title":"fix(scope): brief description","body":"## Summary\\n\\n[one paragraph what changed and why]\\n\\n## Notes\\n\\n[any migration, compatibility, or important notes]"}`;
+{"title":"fix(scope): brief description","body":"Extended description. Bullet points are preferred. Be concise, use imperative mood, cover what changed and why."}`;
 
   const truncated = diff.length > MAX_DIFF_LEN
     ? diff.slice(0, MAX_DIFF_LEN) + `\n\n... (diff truncated, ${diff.length - MAX_DIFF_LEN} chars omitted)`
@@ -92,7 +74,8 @@ ${truncated}
 Output ONLY valid JSON.`;
 
   const rawText = await callAI(model, systemPrompt, userPrompt);
-  return parseCommitResponse(rawText, branch, workdir);
+  const parsed = parseCommitResponse(rawText);
+  return { title: parsed?.title, body: parsed?.body, rawText };
 }
 
 export class PushCommand extends Commander {
@@ -120,35 +103,64 @@ export class PushCommand extends Commander {
       totalDel += parseInt(parts[1], 10) || 0;
     }
 
-    let commitTitle, commitBody, usedFallback = false;
-
+    let msg;
     try {
-      const msg = await generateCommitMessage(diff, branch, workdir);
-      commitTitle = msg.title;
-      commitBody = msg.body;
-      if (msg.body && msg.body.includes('LLM generation failed')) usedFallback = true;
+      msg = await generateCommitMessage(diff, branch);
     } catch (e) {
-      const fb = buildFallbackMessage(branch, workdir);
-      commitTitle = fb.title;
-      commitBody = `LLM error — fallback format used.\n\nError: ${e.message}`;
-      usedFallback = true;
+      return {
+        ok: false,
+        branch,
+        message: `⚠️ LLM call failed: ${e.message}`,
+        display: [
+          `❌ LLM generation failed`,
+          ``,
+          `Error: ${e.message}`,
+          ``,
+          `Please fix the issue and run /gtw push again.`,
+        ].join('\n'),
+      };
     }
 
-    git(`git commit -m "${commitTitle.replace(/"/g, '\\"')}" -m "${commitBody.replace(/"/g, '\\"')}"`, workdir);
-    git(`git push origin ${branch}`, workdir);
+    if (!msg.title) {
+      const preview = msg.rawText?.slice(0, 300).replace(/\n/g, ' ') || '(empty)';
+      return {
+        ok: false,
+        branch,
+        message: `⚠️ LLM returned invalid response`,
+        display: [
+          `❌ LLM returned invalid JSON. Could not extract title.`,
+          ``,
+          `Raw response (first 300 chars): ${preview}`,
+          ``,
+          `Please fix the issue and run /gtw push again.`,
+        ].join('\n'),
+      };
+    }
+
+    // Save pending commit to wip
+    const pending = {
+      ...wip,
+      pendingCommit: { title: msg.title, body: msg.body, branch, workdir, stats, files, totalAdd, totalDel },
+      updatedAt: new Date().toISOString(),
+    };
+    saveWip(pending);
 
     return {
-      ok: true, branch, usedFallback,
-      commit: { title: commitTitle, body: commitBody }, stats,
-      message: `✅ Pushed${usedFallback ? ' (fallback)' : ''}: ${commitTitle}`,
+      ok: true,
+      branch,
+      pendingCommit: pending.pendingCommit,
+      message: `🔍 Commit draft ready — run /gtw confirm to push`,
       display: [
-        `📦 Committed and pushed${usedFallback ? ' (fallback format)' : ''}`,
-        `Branch: ${branch}`,
-        `Commit: ${commitTitle}`,
-        usedFallback ? `⚠️ ${commitBody.split('\n')[0]}` : '',
-        `Files: ${files.join(', ')}`,
-        `Stats: +${totalAdd} -${totalDel}`,
-      ].filter(Boolean).join('\n'),
+        `🔍 Commit draft — run /gtw confirm to push`,
+        ``,
+        `📝 Commit Message:\n${msg.title}`,
+        ``,
+        `📄 Extended Description:\n${msg.body}`,
+        ``,
+        `📊 Changes:\n${stats}`,
+        ``,
+        `Run /gtw confirm to commit and push.`,
+      ].join('\n'),
     };
   }
 }

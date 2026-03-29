@@ -1,4 +1,5 @@
-import { join, homedir } from 'path';
+import { join } from 'path';
+import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
 
 /**
