@@ -1,7 +1,7 @@
 {
   "id": "gtw",
   "name": "GitHub Team Workflow",
-  "description": "GitHub team collaboration workflow. Session-based: drafts go to wip.json, confirm before executing. Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config",
+  "description": "GitHub team collaboration workflow. Session-based: drafts go to wip.json, confirm before executing. Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config. /gtw push generates LLM-driven conventional commit messages from git diffs (dry-run preview by default).",
   "configSchema": {
     "type": "object",
     "properties": {
