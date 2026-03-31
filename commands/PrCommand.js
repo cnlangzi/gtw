@@ -106,34 +106,21 @@ function getCommitLogDiff(workdir, headBranch, baseBranch) {
 }
 
 // ---------------------------------------------------------------------------
-// Check if branch is already pushed to remote
+// Try to checkout a remote tracking branch (no local creation).
+// If the remote branch doesn't exist, stay on the current branch silently.
 // ---------------------------------------------------------------------------
 
-function isBranchPushed(workdir, branch) {
+function tryCheckoutRemoteBranch(workdir, branchName) {
+  const current = getCurrentBranch(workdir);
   try {
-    const revlist = git(`git rev-list origin/${branch}..${branch}`, workdir);
-    const ahead = git(`git rev-list origin/${branch}..HEAD`, workdir);
-    // If both return empty, branch is in sync with remote
-    return !revlist && !ahead;
+    // Fetch all remote refs first
+    git('git fetch origin', workdir);
+    // Try to create a tracking branch from remote
+    git(`git checkout -b ${branchName} origin/${branchName}`, workdir);
+    return { switched: true, branch: branchName };
   } catch {
-    return false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Checkout or create+checkout branch, pull --rebase if exists
-// ---------------------------------------------------------------------------
-
-function checkoutOrCreateBranch(workdir, branch, defaultBranch) {
-  try {
-    git(`git checkout ${branch}`, workdir);
-    // Branch exists, pull --rebase to get latest remote commits
-    git(`git pull --rebase origin ${branch}`, workdir);
-    return { action: 'checked-out-existing' };
-  } catch {
-    // Branch doesn't exist, create from default branch
-    git(`git checkout -b ${branch}`, workdir);
-    return { action: 'created-new' };
+    // Remote branch doesn't exist — stay on current branch, no error
+    return { switched: false, branch: current };
   }
 }
 
@@ -187,29 +174,17 @@ export class PrCommand extends Commander {
         throw new Error('Could not derive branch name from issue title.');
       }
 
-      // Ensure branch name is unique
       headBranch = `fix/${baseBranchName}`;
-      let suffix = 0;
-      while (true) {
-        try {
-          git(`git rev-parse --verify ${headBranch}`, workdir);
-          suffix++;
-          headBranch = `fix/${baseBranchName}-${suffix}`;
-        } catch {
-          break;
-        }
-      }
 
-      // Checkout or create branch
-      const defaultBranch = getDefaultBranch(workdir);
-      git('git fetch origin', workdir);
-      git(`git checkout ${defaultBranch}`, workdir);
-      git(`git pull --rebase origin ${defaultBranch}`, workdir);
-      try {
-        git(`git checkout ${headBranch}`, workdir);
-        git(`git pull --rebase origin ${headBranch}`, workdir);
-      } catch {
-        git(`git checkout -b ${headBranch}`, workdir);
+      // Try to checkout remote tracking branch (never creates locally)
+      const checkout = tryCheckoutRemoteBranch(workdir, headBranch);
+      headBranch = checkout.branch;
+
+      if (!checkout.switched) {
+        // Remote branch didn't exist — we stayed on current branch
+        // Use current branch for PR
+        const current = getCurrentBranch(workdir);
+        if (current) headBranch = current;
       }
     }
     // -------------------------------------------------------------------
@@ -315,6 +290,7 @@ export class PrCommand extends Commander {
     const issueSection = issueId
       ? `\nIssue: #${issueId} — ${issueTitle}`
       : '';
+
     const bodySection = prData.body ? `\n\n📄 PR Body:\n${prData.body}` : '';
 
     return {
