@@ -12,7 +12,7 @@ export function getRemoteRepo(workdir) {
   const remotes = git('git remote -v', workdir).split('\n');
   const match = remotes.find((l) => l.includes('origin'));
   if (!match) throw new Error('No origin remote found');
-  const m = match.match(/git@github\.com:([^/]+\/[^.]+)\.git/) || match.match(/https:\/\/github\.com\/([^/]+\/[^/]+)/);
+  const m = match.match(/git@github\.com:([^/]+\/[^.]+)(\.git)?/) || match.match(/https:\/\/github\.com\/([^/]+\/[^/]+)(\.git)?/);
   if (!m) throw new Error(`Cannot parse remote: ${match}`);
   return m[1];
 }
