@@ -193,7 +193,8 @@ export class PrCommand extends Commander {
     // Mode: /gtw pr (no args)
     // -------------------------------------------------------------------
     else {
-      headBranch = getCurrentBranch(workdir);
+      // Prefer the branch created by /gtw fix (stored in wip.branch)
+      headBranch = wip.branch?.name || getCurrentBranch(workdir);
       if (!headBranch) {
         throw new Error('Not on any branch. Use /gtw fix <issue_id> to create a branch first.');
       }
