@@ -185,13 +185,8 @@ export class PrCommand extends Commander {
         // Remote branch didn't exist — stay on current branch, notify user
         const current = getCurrentBranch(workdir);
         if (current) headBranch = current;
-        // Will surface in display below
       }
     }
-
-    // Inform user if we couldn't switch to the issue-derived branch
-    const couldNotSwitch = issueIdArg && headBranch !== `fix/${formatBranchName(issueTitle)}`;
-    const switchedAwayFrom = issueIdArg ? `fix/${formatBranchName(issueTitle)}` : null;
     // -------------------------------------------------------------------
     // Mode: /gtw pr (no args)
     // -------------------------------------------------------------------
@@ -203,6 +198,10 @@ export class PrCommand extends Commander {
     }
 
     const baseBranch = getDefaultBranch(workdir);
+
+    // Inform user if we couldn't switch to the issue-derived branch
+    const couldNotSwitch = issueIdArg && headBranch !== `fix/${formatBranchName(issueTitle)}`;
+    const switchedAwayFrom = issueIdArg ? `fix/${formatBranchName(issueTitle)}` : null;
 
     // Compute commit log diff
     const diff = getCommitLogDiff(workdir, headBranch, baseBranch);
