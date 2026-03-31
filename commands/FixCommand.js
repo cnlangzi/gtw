@@ -47,6 +47,43 @@ async function fetchIssue(issueId, token, repo) {
   return data;
 }
 
+// Claim an issue by adding the "gtw/wip" label.
+// Returns { ok: true } on success.
+// Returns { ok: false, reason: 'already_claimed' } if the label is already present.
+async function claimIssue(issueId, token, repo) {
+  // First check if gtw/wip label already exists on this issue
+  const labelsData = await apiRequest('GET', `/repos/${repo}/issues/${issueId}/labels`, token);
+  const hasWip = labelsData.some(l => l.name === 'gtw/wip');
+  if (hasWip) {
+    return { ok: false, reason: 'already_claimed' };
+  }
+  // Try to add the label
+  try {
+    await apiRequest('POST', `/repos/${repo}/issues/${issueId}/labels`, token, {
+      labels: ['gtw/wip'],
+    });
+    return { ok: true };
+  } catch (e) {
+    // 422 = label already exists (race condition), treat as already claimed
+    if (e.message.includes('422')) {
+      return { ok: false, reason: 'already_claimed' };
+    }
+    throw e;
+  }
+}
+
+// Remove the "gtw/wip" label from an issue (for cleanup after fix done/failed).
+async function unclaimIssue(issueId, token, repo) {
+  try {
+    await apiRequest('DELETE', `/repos/${repo}/issues/${issueId}/labels/gtw/wip`, token);
+  } catch (e) {
+    // 404 = label wasn't there, ignore
+    if (!e.message.includes('404')) {
+      console.error(`[FixCommand] Warning: failed to unclaim issue #${issueId}: ${e.message}`);
+    }
+  }
+}
+
 // Get the main agent session file path
 function getMainSessionFile() {
   const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
@@ -112,7 +149,11 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     `   - Set latestFixStatus to "success" if push succeeded, "no-changes" if nothing to commit, or "failure" if error`,
     `   - Add fields: latestFixBranch, latestFixCommitTitle, latestFixPushedAt`,
     ``,
-    `5. Reply to this message with a summary of what was done`,
+    `5. After step 4 (regardless of outcome), remove the "gtw/wip" label from issue #${issueId} on GitHub:`,
+    `   - Run: gh issue edit ${issueId} --remove-label gtw/wip`,
+    `   - This cleanup step must run even if push failed or no changes were made`,
+    ``,
+    `6. Reply to this message with a summary of what was done (include whether label was cleaned up)`,
     ``,
     `IMPORTANT: Do this work now, step by step. Do not skip any step.`,
   ].join('\n');
@@ -208,13 +249,30 @@ export class FixCommand extends Commander {
     const issueTitle = issue.title || '(no title)';
     const issueBody = issue.body || '';
 
-    // Step 4: Derive branch name
+    // Step 4: Claim the issue (add gtw/wip label) before any work
+    try {
+      const token = await getValidToken();
+      const claimResult = await claimIssue(issueId, token, repo);
+      if (!claimResult.ok) {
+        return {
+          ok: false,
+          message: `⚠️ Issue #${issueId} is already claimed by another process (gtw/wip label present). Aborting to avoid conflicts.`,
+        };
+      }
+    } catch (e) {
+      if (e.message.includes('401') || e.message.includes('403')) {
+        return { ok: false, message: '⚠️ GitHub API auth failed. Run: gh auth login' };
+      }
+      return { ok: false, message: `⚠️ Failed to claim issue #${issueId}: ${e.message}` };
+    }
+
+    // Step 5: Derive branch name
     const baseBranchName = formatBranchName(issueTitle);
     if (!baseBranchName) {
       return { ok: false, message: '⚠️ Could not derive branch name from issue title. Title may contain only special characters.' };
     }
 
-    // Step 5: Git setup — fetch, checkout default branch, pull, create branch
+    // Step 6: Git setup — fetch, checkout default branch, pull, create branch
     let branchName;
     try {
       git('git fetch origin', workdir);
@@ -235,6 +293,7 @@ export class FixCommand extends Commander {
       branch: { name: branchName, createdAt: now },
       workdir,
       repo,
+      claimed: true,
       latestFixStatus: 'fix-spawned',
       updatedAt: now,
     };
