@@ -177,16 +177,21 @@ export class PrCommand extends Commander {
       headBranch = `fix/${baseBranchName}`;
 
       // Try to checkout remote tracking branch (never creates locally)
+      const currentBeforeFetch = getCurrentBranch(workdir);
       const checkout = tryCheckoutRemoteBranch(workdir, headBranch);
       headBranch = checkout.branch;
 
       if (!checkout.switched) {
-        // Remote branch didn't exist — we stayed on current branch
-        // Use current branch for PR
+        // Remote branch didn't exist — stay on current branch, notify user
         const current = getCurrentBranch(workdir);
         if (current) headBranch = current;
+        // Will surface in display below
       }
     }
+
+    // Inform user if we couldn't switch to the issue-derived branch
+    const couldNotSwitch = issueIdArg && headBranch !== `fix/${formatBranchName(issueTitle)}`;
+    const switchedAwayFrom = issueIdArg ? `fix/${formatBranchName(issueTitle)}` : null;
     // -------------------------------------------------------------------
     // Mode: /gtw pr (no args)
     // -------------------------------------------------------------------
@@ -291,6 +296,10 @@ export class PrCommand extends Commander {
       ? `\nIssue: #${issueId} — ${issueTitle}`
       : '';
 
+    const branchNote = couldNotSwitch
+      ? `\n⚠️  Remote branch \`${switchedAwayFrom}\` not found — using current branch \`${headBranch}\``
+      : '';
+
     const bodySection = prData.body ? `\n\n📄 PR Body:\n${prData.body}` : '';
 
     return {
@@ -304,7 +313,7 @@ export class PrCommand extends Commander {
         `📝 Title:\n${prData.title}`,
         bodySection,
         ``,
-        `🌿 Branch: ${headBranch}`,
+        `🌿 Branch: ${headBranch}${branchNote}`,
         `📚 Base: ${baseBranch}${issueSection}`,
         ``,
         `Run /gtw confirm to create the PR on GitHub.`,
