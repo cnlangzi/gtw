@@ -13,6 +13,7 @@ import { ModelCommand } from './ModelCommand.js';
 import { AuthCommand } from './AuthCommand.js';
 import { UpdateCommand } from './UpdateCommand.js';
 import { PrCommand } from './PrCommand.js';
+import { RebaseCommand } from './RebaseCommand.js';
 
 /**
  * CommanderFactory — creates the appropriate Commander instance for a given cmd.
@@ -66,4 +67,5 @@ const MAP = {
   auth: AuthCommand,
   update: UpdateCommand,
   pr: PrCommand,
+  rebase: RebaseCommand,
 };
