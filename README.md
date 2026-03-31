@@ -44,9 +44,9 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 ### Git Operations
 
 ```
-/gtw fix [name]         Create fix branch (rebased on main)
-/gtw pr                 Push branch and draft PR
+/gtw fix <issue_id>     Fetch issue, derive branch name, checkout, ready for coding
 /gtw push               Stage → auto-commit (conventional format) → push (executes directly, no confirm needed)
+/gtw pr [issue_id]      Generate PR title/body via LLM from commit diff, save as pending PR draft
 ```
 
 ### Review
@@ -105,14 +105,31 @@ You: /gtw new
 You: /gtw fix login-bug
 → 🌿 Created and checked out new branch fix/login-bug
 
-You: /gtw pr
-→ ⬆️ Branch pushed to origin (draft state)
-
 You: /gtw push
 → 📦 Committed and pushed (executes directly, no confirm needed)
 
+You: /gtw pr
+→ 🔍 PR draft — run /gtw confirm to create PR
+   📝 Title: fix: handle null pointer in auth
+   🌿 Branch: fix/login-bug → main
+
 You: /gtw confirm
-→ 🚀 Executed all pending actions and cleared wip.json
+→ ✅ PR #42 created
+   URL: https://github.com/owner/repo/pull/42
+```
+
+### PR Workflow (with issue)
+
+```
+You: /gtw pr 13
+→ 🔍 PR draft for issue #13 — run /gtw confirm to create PR
+   📝 Title: fix: handle null pointer in auth
+   🌿 Branch: fix/handle-null-pointer → main
+   Issue: #13 — handle null pointer in auth
+
+You: /gtw confirm
+→ ✅ PR #42 created
+   URL: https://github.com/owner/repo/pull/42
 ```
 
 **Phase directive:** `/gtw on` injects a "no code yet" message into the parent session so the agent stays in discussion mode until `/gtw confirm`.
