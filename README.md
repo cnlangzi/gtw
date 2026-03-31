@@ -49,6 +49,8 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
                           pendingCommit, requires /gtw confirm to push, then unclaims (removes label)
 /gtw push               Stage → auto-commit (conventional format) → generate commit draft → save as pendingCommit
                           (two-step: run /gtw confirm to actually push)
+/gtw rebase [branch]    Sync current branch with remote — 有分支名：fetch → checkout → rebase 远程分支
+                          — 无分支名：git pull --rebase origin <当前分支>
 /gtw pr [issue_id]      Generate PR title/body via LLM from commit diff, save as pendingPr draft
                           — /gtw pr (no args): uses current branch; never reads wip.json
                           — /gtw pr <issue_id>: derives branch from issue title (same as /gtw fix)
