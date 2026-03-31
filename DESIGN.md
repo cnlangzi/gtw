@@ -18,9 +18,9 @@ gtw/
     CommanderFactory.js      ← Factory: cmd string → Commander instance
     OnCommand.js            ← Set workdir + repo + inject phase directive
     NewCommand.js           ← Auto-generate issue draft from session (AI)
-    FixCommand.js           ← Create fix branch
-    PrCommand.js            ← Push branch + prepare PR body
-    PushCommand.js          ← git add → commit → push
+    FixCommand.js           ← Claim issue, create branch, inject directive, subagent fix flow
+    PrCommand.js            ← Generate PR title/body draft (pendingPr)
+    PushCommand.js          ← Generate commit message draft (pendingCommit)
     ConfirmCommand.js       ← Execute pending actions (issue/PR creation)
     ReviewCommand.js        ← Claim + review + verdict PR
     IssueCommand.js         ← List open issues
@@ -122,6 +122,70 @@ That's it — index.js does not change.
 /gtw new              → auto-generate issue draft from chat via AI (no args)
 /gtw confirm          → create issue from wip.issue.title/body + wip.repo
 ```
+
+## `/gtw fix` — Subagent-Driven Fix Flow
+
+The `/gtw fix` command automates the entire fix lifecycle via a subagent, with explicit safety checkpoints.
+
+### State Transitions
+
+```
+unclaimed issue
+    │
+    │ /gtw fix <issue_id>
+    ▼
+claimed ──────────────── gtw/wip label applied to GitHub issue
+    │                        (conflict avoidance: one fix at a time per issue)
+    │
+    ▼
+wip branch created ──── git checkout -b fix/<normalized-title>
+    │
+    ▼
+fix-spawned ─────────── Directive injected into main session JSONL
+    │                        (triggers subagent in the main session)
+    │
+    ▼
+subagent running ────── Main session spawns coding subagent
+    │                        Subagent: explores code, makes changes, commits, pushes
+    │
+    ▼
+pendingCommit ───────── wip.json stores pendingCommit after subagent push
+    │
+    │ /gtw confirm (pendingCommit branch)
+    ▼
+pushed ───────────────── git push -u origin <branch>
+    │
+    ▼
+unclaimed ────────────── gtw/wip label removed from GitHub issue
+    │
+    ▼
+(optional) /gtw pr → pendingPr → /gtw confirm → PR created
+```
+
+### Step-by-Step Breakdown
+
+1. **Claim issue**: POST `gtw/wip` label to GitHub issue. Aborts if label already present (another fix in progress).
+2. **Git setup**: `git fetch origin`, checkout default branch, `git pull --rebase`, create uniquely-named branch `fix/<normalized-title>`.
+3. **Inject directive**: Append a structured directive message to the main session JSONL. This directive contains step-by-step instructions for the main session agent to: spawn a coding subagent, wait for it, run `git add/commit/push`, update `wip.json` with fix status, and remove the `gtw/wip` label.
+4. **Return to user**: The command returns immediately after injecting the directive. The actual fix work happens asynchronously in the main session.
+5. **Cleanup**: Regardless of fix outcome (success, no-changes, or failure), the `gtw/wip` label is removed from the GitHub issue.
+
+### Why the Two-Step Confirm Model?
+
+The two-step pattern (`pendingCommit` → `/gtw confirm`) and the two-step PR flow (`pendingPr` → `/gtw confirm`) exist for safety:
+
+- **No accidental API calls**: No branch is pushed and no PR is created without an explicit confirm step.
+- **Human reviewable**: The generated commit message and PR title/body are displayed before execution, allowing the user to catch LLM hallucinations.
+- **Retry on failure**: If the GitHub API call fails, the pending draft is preserved and the user can retry after fixing the issue.
+
+`pendingCommit` and `pendingPr` are stored in `wip.json` under the `~/.openclaw/gtw/` directory.
+
+### FixCommand Implementation Notes
+
+- `claimIssue()` / `unclaimIssue()` use the GitHub Issues API labels endpoint.
+- `injectFixDirective()` appends a JSONL entry to the main session file (found via `sessions.json` lookup).
+- `wasInjected()` checks if a directive for this issue is already in the session (prevents double-injection on re-runs).
+- wip.json stores `latestFixStatus` (`fix-spawned` | `success` | `no-changes` | `failure`), `latestFixBranch`, `latestFixCommitTitle`, `latestFixPushedAt`.
 
 ## Notes for AI Agents
 
