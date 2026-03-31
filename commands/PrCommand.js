@@ -67,6 +67,8 @@ Output format:
   if (issueId) {
     userPrompt = `Generate a PR title and body for this pull request.
 
+Fixes: #${issueId}
+
 Issue: #${issueId} — ${issueTitle}
 ${issueBody ? `Issue Description:\n${issueBody}\n` : ''}
 Head Branch: ${branch}
