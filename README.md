@@ -47,6 +47,11 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 /gtw fix <issue_id>     Fetch issue, derive branch name, checkout, ready for coding
 /gtw push               Stage → auto-commit (conventional format) → push (executes directly, no confirm needed)
 /gtw pr [issue_id]      Generate PR title/body via LLM from commit diff, save as pending PR draft
+                          — /gtw pr (no args): uses current branch; never reads wip.json
+                          — /gtw pr <issue_id>: derives branch from issue title (same as /gtw fix)
+                            If remote branch exists → checks out and hard-resets to it.
+                            If local branch exists but remote missing → checks out and prompts to run /gtw push.
+                            If neither exists → uses current branch.
 ```
 
 ### Review
@@ -124,8 +129,15 @@ You: /gtw confirm
 You: /gtw pr 13
 → 🔍 PR draft for issue #13 — run /gtw confirm to create PR
    📝 Title: fix: handle null pointer in auth
-   🌿 Branch: fix/handle-null-pointer → main
-   Issue: #13 — handle null pointer in auth
+   🌿 Branch: fix/handle-null-pointer
+   ⚠️  Remote branch missing — please run /gtw push to publish this branch   Issue: #13 — handle null pointer in auth
+You: /gtw push
+→ 📦 Committed and pushed
+
+You: /gtw pr 13
+→ 🔍 PR draft for issue #13 — run /gtw confirm to create PR
+   📝 Title: fix: handle null pointer in auth
+   🌿 Branch: fix/handle-null-pointer   Issue: #13 — handle null pointer in auth
 
 You: /gtw confirm
 → ✅ PR #42 created

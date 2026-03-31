@@ -1,6 +1,7 @@
+import { execSync } from 'child_process';
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
-import { git, getCurrentBranch, getDefaultBranch } from '../utils/git.js';
+import { getCurrentBranch, getDefaultBranch, tryCheckoutRemoteBranch } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
 
@@ -101,28 +102,13 @@ Output ONLY valid JSON.`;
 
 function getCommitLogDiff(workdir, headBranch, baseBranch) {
   try {
-    return git(`git log ${baseBranch}..${headBranch} --oneline --format="%h %s"`, workdir);
+    return execSync(`git log ${baseBranch}..${headBranch} --oneline --format="%h %s"`, {
+      cwd: workdir,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
   } catch {
     return '';
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Try to checkout a remote tracking branch (no local creation).
-// If the remote branch doesn't exist, stay on the current branch silently.
-// ---------------------------------------------------------------------------
-
-function tryCheckoutRemoteBranch(workdir, branchName) {
-  const current = getCurrentBranch(workdir);
-  try {
-    // Fetch all remote refs first
-    git('git fetch origin', workdir);
-    // Try to create a tracking branch from remote
-    git(`git checkout -b ${branchName} origin/${branchName}`, workdir);
-    return { switched: true, branch: branchName };
-  } catch {
-    // Remote branch doesn't exist — stay on current branch, no error
-    return { switched: false, branch: current };
   }
 }
 
@@ -143,7 +129,8 @@ export class PrCommand extends Commander {
     let issueId = null;
     let issueTitle = null;
     let issueBody = null;
-    let derivedFromIssue = false;
+    let checkoutStatus = null; // 'remote-synced' | 'local-only' | 'not-found'
+    let derivedBranchName = null; // the fix/<normalized-title> we aimed for
 
     // -------------------------------------------------------------------
     // Mode: /gtw pr <issue_id>
@@ -168,60 +155,57 @@ export class PrCommand extends Commander {
 
       issueTitle = issue.title || '(no title)';
       issueBody = issue.body || '';
-      derivedFromIssue = true;
 
-      // Derive branch name from issue title
+      // Derive branch name from issue title (same format as /gtw fix)
       const baseBranchName = formatBranchName(issueTitle);
       if (!baseBranchName) {
         throw new Error('Could not derive branch name from issue title.');
       }
 
-      headBranch = `fix/${baseBranchName}`;
+      derivedBranchName = `fix/${baseBranchName}`;
 
-      // Try to checkout remote tracking branch (never creates locally)
-      const currentBeforeFetch = getCurrentBranch(workdir);
-      const checkout = tryCheckoutRemoteBranch(workdir, headBranch);
-      headBranch = checkout.branch;
-
-      if (!checkout.switched) {
-        // Remote branch didn't exist — stay on current branch, notify user
-        const current = getCurrentBranch(workdir);
-        if (current) headBranch = current;
-      }
+      // Robust checkout: handle remote-exists, local-only, not-found cases
+      checkoutStatus = tryCheckoutRemoteBranch(workdir, derivedBranchName);
+      headBranch = checkoutStatus.branch;
     }
     // -------------------------------------------------------------------
-    // Mode: /gtw pr (no args)
+    // Mode: /gtw pr (no args) — always use current branch, never wip.json
     // -------------------------------------------------------------------
     else {
       headBranch = getCurrentBranch(workdir);
       if (!headBranch) {
         throw new Error('Not on any branch. Use /gtw fix <issue_id> to create a branch first.');
       }
+      checkoutStatus = { status: 'current-branch', branch: headBranch };
     }
 
     const baseBranch = getDefaultBranch(workdir);
-
-    // Inform user if we couldn't switch to the issue-derived branch
-    const couldNotSwitch = issueIdArg && headBranch !== `fix/${formatBranchName(issueTitle)}`;
-    const switchedAwayFrom = issueIdArg ? `fix/${formatBranchName(issueTitle)}` : null;
 
     // Compute commit log diff
     const diff = getCommitLogDiff(workdir, headBranch, baseBranch);
 
     if (!diff || !diff.trim()) {
+      let noDiffMessage;
+      if (checkoutStatus?.status === 'local-only') {
+        noDiffMessage = `⚠️  Remote branch missing — please run /gtw push to publish this branch before creating a PR.`;
+      } else {
+        noDiffMessage = `⚠️  No commits to create a PR from`;
+      }
       return {
         ok: true,
         branch: headBranch,
         noDiff: true,
         message: 'No commit differences found between branch and default branch. Nothing to PR.',
         display: [
-          `⚠️  No commits to create a PR from`,
+          noDiffMessage,
           ``,
           `Branch: ${headBranch}`,
           `Base: ${baseBranch}`,
           ``,
           `There are no commits on ${headBranch} that are not on ${baseBranch}.`,
-          `Make some commits first, then run /gtw pr again.`,
+          checkoutStatus?.status === 'local-only'
+            ? `Run /gtw push, then /gtw pr again.`
+            : `Make some commits first, then run /gtw pr again.`,
         ].join('\n'),
       };
     }
@@ -297,9 +281,13 @@ export class PrCommand extends Commander {
       ? `\nIssue: #${issueId} — ${issueTitle}`
       : '';
 
-    const branchNote = couldNotSwitch
-      ? `\n⚠️  Remote branch \`${switchedAwayFrom}\` not found — using current branch \`${headBranch}\``
-      : '';
+    // Build branch note based on checkout status
+    let branchNote = '';
+    if (checkoutStatus?.status === 'local-only') {
+      branchNote = `\n⚠️  Remote branch missing — please run /gtw push to publish this branch`;
+    } else if (checkoutStatus?.status === 'not-found' && derivedBranchName) {
+      branchNote = `\n⚠️  Branch \`${derivedBranchName}\` not found (remote or local) — using current branch \`${headBranch}\``;
+    }
 
     const bodySection = prData.body ? `\n\n📄 PR Body:\n${prData.body}` : '';
 
