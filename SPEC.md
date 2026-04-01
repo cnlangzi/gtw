@@ -30,7 +30,7 @@ Five mutually exclusive labels. When applying any label, all other gtw labels mu
 - Each `/gtw review` invocation targeting a PR increments the round by +1 and updates the same comment.
 - **Re-review logic:** compare PR diff to checklist. Remove checkboxes that are resolved (checked in previous comment). Keep unresolved ones.
 - When all checkboxes are removed (all resolved): delete checklist comment → post approved comment → apply `gtw/lgtm`.
-- When unresolved items remain: apply `gtw/revise` → add `gtw/ready` back → keep checklist (round preserved) → post changes-needed comment.
+- When unresolved items remain: apply `gtw/revise` → keep checklist (round preserved) → post changes-needed comment. PR stays with `gtw/revise` until developer addresses the issues.
 - When round reaches maximum (default 5): apply `gtw/stuck` → stop automated reviews.
 
 ---
@@ -94,8 +94,6 @@ gtw/ready ──(claim)──> gtw/wip
        (all resolved) (has unresolved) (round > max)
             │             │             │
        gtw/lgtm      gtw/revise       gtw/stuck
-                      │
-                gtw/ready  (released back to pool)
 ```
 
 ---

@@ -402,22 +402,15 @@ export class ReviewCommand extends Commander {
     }
 
     // Unresolved items remain → changes needed.
-    // Set gtw/revise (not gtw/wip) and release back to gtw/ready.
-    // Keep the checklist comment intact so round continues to increment
-    // when agent re-picks this PR after developer addresses issues.
-    // Transition: gtw/revise (needs changes) + gtw/ready (released back to pool)
-    // First set gtw/revise (replaces gtw/wip)
+    // Set gtw/revise (replaces gtw/wip). Keep checklist comment intact
+    // so round continues to increment when developer re-submits after fixes.
+    // PR stays with gtw/revise until developer addresses issues.
+
+    // Apply gtw/revise (replaces gtw/wip) — this is the final state
     try {
       await setGtwLabel(prNum, token, repo, 'gtw/revise', true);
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
-    }
-    // Then add gtw/ready back so another agent can pick it up
-    try {
-      await apiRequest('POST', `/repos/${repo}/pulls/${prNum}/labels`, token, { labels: ['gtw/ready'] });
-    } catch (e) {
-      // Non-fatal: gtw/revise is already set
-      console.error(`[ReviewCommand] Failed to set gtw/ready: ${e.message}`);
     }
 
     // Post a "changes needed" comment
@@ -426,7 +419,7 @@ export class ReviewCommand extends Commander {
       body: `⚠️ **Changes needed** (Round ${round}/${maxRounds})\n\n${unresolvedList}\n\n_Please address the above items and resubmit for review._`,
     });
 
-    // Clear wip review state for this PR (released back to pool)
+    // Clear wip review state — this review session is done
     const updatedWip = { ...currentWip };
     const newReviewState = { ...(updatedWip.reviewState || {}) };
     delete newReviewState[thisPrKey];
@@ -454,7 +447,7 @@ export class ReviewCommand extends Commander {
       checklist: checklistItems,
       round,
       maxRounds,
-      message: `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})\n\n${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nUnresolved items (${checklistItems.length}):\n${checklistItems.map((i) => '  - ' + i.text).join('\n')}\n\ngtw/revise set, PR released to gtw/ready. Agent will re-review after developer addresses issues.`,
+      message: `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})\n\n${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nUnresolved items (${checklistItems.length}):\n${checklistItems.map((i) => '  - ' + i.text).join('\n')}\n\ngtw/revise set. Review round preserved for next invocation.`,
       display: [
         `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})`,
         ``,
@@ -468,7 +461,7 @@ export class ReviewCommand extends Commander {
         `Unresolved (${checklistItems.length}):`,
         ...checklistItems.map((i) => `  - [ ] ${i.text}`),
         ``,
-        `gtw/revise set. PR released to gtw/ready.`,
+        `gtw/revise set. PR stays in gtw/revise until developer addresses issues.`,
       ].join('\n'),
     };
   }
