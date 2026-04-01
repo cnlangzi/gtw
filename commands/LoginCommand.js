@@ -33,12 +33,14 @@ function getMainSessionFile() {
 }
 
 function injectLoginDirective(sessionFile, deviceCode) {
+  // Use sessions_spawn + streamTo: "parent" for automatic result reporting
+  // This spawns a subagent that will poll GitHub OAuth and report back to parent session
   const directive = [
     `/queue steer`,  // ← OpenClaw directive: immediately inject into current run
     ``,
-    `🚨 [URGENT] [gtw login] GitHub OAuth - Execute NOW`,
+    `🚨 [URGENT] [gtw login] GitHub OAuth Poll - Spawn Subagent NOW`,
     ``,
-    `⚠️ ACTION REQUIRED: Poll GitHub OAuth token endpoint IMMEDIATELY`,
+    `⚠️ ACTION REQUIRED: Spawn a subagent to poll GitHub OAuth token endpoint`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
@@ -46,24 +48,25 @@ function injectLoginDirective(sessionFile, deviceCode) {
     `Expires in: ${deviceCode.expires_in} seconds`,
     `Interval: ${deviceCode.interval} seconds`,
     ``,
-    `Please perform the following:`,
+    `Use sessions_spawn with the following parameters:`,
     ``,
-    `1. Poll GitHub OAuth token endpoint until authorization is complete or expired:`,
-    `   - Endpoint: https://github.com/login/oauth/access_token`,
-    `   - Body: client_id=178c6fc778ccc68e1d6a&device_code=${deviceCode.device_code}&grant_type=urn:ietf:params:oauth:grant-type:device_code`,
-    `   - Poll every ${deviceCode.interval} seconds`,
-    `   - Stop when: access_token received, or "expired_token" error, or ${deviceCode.expires_in} seconds elapsed`,
+    `\`\`\`yaml`,
+    `sessions_spawn:`,
+    `  task: "Poll GitHub OAuth token endpoint for device code ${deviceCode.device_code} until authorization complete or expired. Poll every ${deviceCode.interval} seconds. If token received, save to ${TOKEN_FILE} with format {\"source\":\"oauth\",\"access_token\":\"<token>\",\"cached_at\":<timestamp>}, get user info from GitHub API, and report success. If expired, report failure."`,
+    `  streamTo: "parent"  # ← Critical: enables automatic result reporting to parent session`,
+    `  mode: "run"         # one-shot, auto-ends when complete`,
+    `  runTimeoutSeconds: ${deviceCode.expires_in}  # timeout matches OAuth expiry`,
+    `\`\`\``,
     ``,
-    `2. If token received:`,
-    `   - Save to ${TOKEN_FILE}:`,
-    `     { "source": "oauth", "access_token": "<token>", "cached_at": <timestamp> }`,
-    `   - Get user info from GitHub API (GET /user with the token)`,
-    `   - Reply to user: "✅ Login successful! User: @<login>"`,
+    `The subagent will:`,
+    `1. Poll https://github.com/login/oauth/access_token every ${deviceCode.interval}s`,
+    `2. Stop when: access_token received, "expired_token" error, or ${deviceCode.expires_in}s elapsed`,
+    `3. On success: Save token + get user info + report "✅ Login successful! User: @<login>"`,
+    `4. On failure: Report "❌ Authorization expired/denied"`,
     ``,
-    `3. If expired or denied:`,
-    `   - Reply to user: "❌ Authorization expired/denied. Please run /gtw login again."`,
+    `streamTo: "parent" ensures the result is automatically reported back to this session.`,
     ``,
-    `Do this now. Poll until complete, then report the result.`,
+    `Spawn the subagent now.`,
   ].join('\n');
 
   try {
