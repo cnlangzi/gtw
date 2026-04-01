@@ -401,43 +401,37 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Build checklist body — if no unresolved items, the comment is suppressed
-    // (all-resolved case is handled in the block above)
-    const checkboxes = checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
-    const commentBody = `## Review [Round ${round}]\n\n${checkboxes}\n\n---\n_Agent: review the diff and linked issue requirements. Check items as resolved or leave unchecked to flag issues._\n\n_To advance: run /gtw review ${prNum} again after resolving items._`;
-
-    let commentIdWritten;
+    // Unresolved items remain → changes needed.
+    // Set gtw/revise (not gtw/wip) and release back to gtw/ready.
+    // Keep the checklist comment intact so round continues to increment
+    // when agent re-picks this PR after developer addresses issues.
+    // Transition: gtw/revise (needs changes) + gtw/ready (released back to pool)
+    // First set gtw/revise (replaces gtw/wip)
     try {
-      if (commentId) {
-        // Update existing checklist comment
-        await apiRequest('PATCH', `/repos/${repo}/issues/comments/${commentId}`, token, { body: commentBody });
-        commentIdWritten = commentId;
-      } else {
-        // Create new checklist comment
-        const created = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, { body: commentBody });
-        commentIdWritten = created.id;
-      }
+      await setGtwLabel(prNum, token, repo, 'gtw/revise', true);
     } catch (e) {
-      // Rollback: remove gtw/wip so PR returns to gtw/ready
-      try { await setGtwLabel(prNum, token, repo, 'gtw/ready', true); } catch (_) { /* ignore */ }
-      return { ok: false, message: `⚠️ Failed to post checklist comment: ${e.message}. Claim rolled back.` };
+      return { ok: false, message: `⚠️ ${e.message}` };
+    }
+    // Then add gtw/ready back so another agent can pick it up
+    try {
+      await apiRequest('POST', `/repos/${repo}/pulls/${prNum}/labels`, token, { labels: ['gtw/ready'] });
+    } catch (e) {
+      // Non-fatal: gtw/revise is already set
+      console.error(`[ReviewCommand] Failed to set gtw/ready: ${e.message}`);
     }
 
-    // Update wip.json with review state for this PR
-    const updatedWip = {
-      ...currentWip,
-      reviewState: {
-        ...(currentWip.reviewState || {}),
-        [thisPrKey]: {
-          repo,
-          prNumber: prNum,
-          round,
-          checklistCommentId: commentIdWritten,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-      updatedAt: new Date().toISOString(),
-    };
+    // Post a "changes needed" comment
+    const unresolvedList = checklistItems.map((i) => `  - [ ] ${i.text}`).join('\n');
+    await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
+      body: `⚠️ **Changes needed** (Round ${round}/${maxRounds})\n\n${unresolvedList}\n\n_Please address the above items and resubmit for review._`,
+    });
+
+    // Clear wip review state for this PR (released back to pool)
+    const updatedWip = { ...currentWip };
+    const newReviewState = { ...(updatedWip.reviewState || {}) };
+    delete newReviewState[thisPrKey];
+    updatedWip.reviewState = newReviewState;
+    updatedWip.updatedAt = new Date().toISOString();
     saveWip(updatedWip);
 
     // Build diff summary
@@ -460,20 +454,21 @@ export class ReviewCommand extends Commander {
       checklist: checklistItems,
       round,
       maxRounds,
-      message: `eyes Claimed PR #${prNum}: ${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nRound ${round}/${maxRounds} checklist active.\nReview the diff, then run /gtw review ${prNum} again after resolving items.`,
+      message: `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})\n\n${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nUnresolved items (${checklistItems.length}):\n${checklistItems.map((i) => '  - ' + i.text).join('\n')}\n\ngtw/revise set, PR released to gtw/ready. Agent will re-review after developer addresses issues.`,
       display: [
-        `eyes Claimed PR #${prNum}: ${prData.pr.title}`,
+        `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})`,
+        ``,
+        `${prData.pr.title}`,
         ``,
         linkedIssueLine,
         ``,
         `Files changed (${prData.files.length}):`,
         filesSummary || '(none)',
         ``,
-        `Review [Round ${round}/${maxRounds}]`,
-        ...checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`),
+        `Unresolved (${checklistItems.length}):`,
+        ...checklistItems.map((i) => `  - [ ] ${i.text}`),
         ``,
-        `Review the diff against the issue requirements.`,
-        `Run /gtw review ${prNum} again after resolving items.`,
+        `gtw/revise set. PR released to gtw/ready.`,
       ].join('\n'),
     };
   }

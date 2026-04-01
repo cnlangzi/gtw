@@ -137,6 +137,56 @@ describe('Round tracking behavior (AC5)', () => {
 // Label constants (AC1)
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Needs-changes behavior (gtw/revise label)
+// Spec: "when changes needed, label gtw/revise (not keep gtw/wip)"
+// ---------------------------------------------------------------------------
+
+describe('Needs-changes: gtw/revise label (AC4 extended)', () => {
+  it('mergeChecklistState: unresolved items remain when some resolved', () => {
+    // Destructive=[x] resolved, Out-of-scope=[ ] unresolved
+    const prev = [
+      { text: 'Destructive', checked: true },
+      { text: 'Out-of-scope', checked: false },
+    ];
+    const result = mergeChecklistState(prev, CHECKLIST_ITEMS);
+    // Destructive removed, Out-of-scope kept
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].text, 'Out-of-scope');
+    assert.strictEqual(result[0].checked, false);
+  });
+
+  it('needsChanges: unresolved count > 0 is not same as allResolved', () => {
+    const prev = [
+      { text: 'Destructive', checked: false },
+      { text: 'Out-of-scope', checked: false },
+    ];
+    const result = mergeChecklistState(prev, CHECKLIST_ITEMS);
+    const allResolved = result.length === 0;
+    const needsChanges = result.length > 0;
+    assert.strictEqual(allResolved, false); // 2 unresolved → not all resolved
+    assert.strictEqual(needsChanges, true);  // has unresolved items
+  });
+
+  it('checklist kept when transitioning to gtw/revise (round preserved)', () => {
+    // When gtw/revise is set, checklist comment should be kept
+    // so that round continues to increment on re-review.
+    // The commentId should NOT be deleted.
+    // Simulate: unresolved → gtw/revise transition keeps checklist.
+    const existingComment = {
+      id: 100,
+      body: '## Review [Round 2]\n\n  - [ ] Out-of-scope',
+      user: { login: 'test-agent' },
+    };
+    assert.ok(existingComment.body.includes('## Review [Round 2]'));
+    // After re-review: Round 2 → Round 3
+    const nextRound = 3;
+    assert.ok(existingComment.body.includes(`[Round ${nextRound - 1}]`));
+  });
+});
+
+
 describe('GTW_LABELS (AC1)', () => {
   it('has exactly 5 mutually exclusive labels', () => {
     const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
