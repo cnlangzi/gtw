@@ -84,17 +84,18 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 
 **Method 1: Personal Access Token (PAT) - Recommended for CI**
 
-**Option A: Interactive PAT login**
+**Option A: Direct PAT input**
 ```
-/gtw login --pat
+/gtw login --pat ghp_your_token_here
 ```
-Prompts you to enter a PAT securely, then validates and caches it.
+Validates the token via GitHub API and caches it to `~/.openclaw/gtw/token.json`.
 
 **Option B: Environment variable**
 ```bash
 export GITHUB_TOKEN=ghp_your_token_here
+/gtw login --pat
 ```
-Token is used directly without caching.
+Uses and validates `GITHUB_TOKEN`, then caches it.
 
 **Option C: Cached PAT from previous login**
 Automatically used if you previously ran `/gtw login --pat`.
