@@ -99,14 +99,15 @@ Use the device code flow for interactive login:
 ```
 
 This will:
-1. Display a verification URL and user code
-2. Wait for you to authorize in your browser
-3. Cache the OAuth token in `~/.openclaw/gtw/token.json`
-4. Automatically reuse the device code if called again within the expiration window (5 minutes)
+1. **If GITHUB_CLIENT_ID is set**: Use custom OAuth app with device code flow
+2. **If GITHUB_CLIENT_ID is NOT set** (default): Fall back to `gh auth login` using GitHub CLI's built-in OAuth app
+   - Opens browser for device code authentication
+   - Caches the token from gh CLI for gtw use
+   - No need to configure client ID/secret manually
 
 **Method 3: GitHub CLI Integration**
 
-`gtw` can use `gh` CLI for authentication. Make sure `gh auth login` has been run with `repo` scope:
+`gtw` automatically uses `gh` CLI token if available. Make sure `gh auth login` has been run with `repo` scope:
 
 ```bash
 gh auth login --hostname github.com --scopes repo,workflow
