@@ -156,22 +156,40 @@ export class LoginCommand extends Commander {
   }
 
   /**
-   * Login using gh CLI (calls `gh auth login`)
+   * Login using gh CLI (calls `gh auth login` if not logged in, otherwise uses existing token)
    */
   async loginWithGhCli() {
     console.log('🔐 使用 GitHub CLI 登录\n');
-    console.log('调用 gh auth login 进行设备码认证...');
-    console.log('如果没有自动打开浏览器，请手动访问显示的 URL 并完成验证。\n');
-
+    
     try {
-      // Run gh auth login interactively
-      // This will display the device code and wait for user to authorize
-      execSync('gh auth login --hostname github.com --git-protocol ssh --web', {
-        stdio: 'inherit',
-        encoding: 'utf8',
-      });
+      // First check if gh CLI is installed
+      try {
+        execSync('gh --version', { stdio: 'pipe' });
+      } catch (e) {
+        return {
+          ok: false,
+          message: '❌ GitHub CLI (gh) 未安装\n\n请安装：https://cli.github.com/ 或运行 `brew install gh`',
+        };
+      }
+      
+      // Check if already logged in
+      const authStatus = execSync('gh auth status 2>&1', { encoding: 'utf8' });
+      const isLoggedIn = authStatus.includes('Logged in to');
+      
+      if (isLoggedIn) {
+        console.log('✓ gh CLI 已登录，获取 Token...');
+      } else {
+        console.log('⚠️  gh CLI 未登录，开始设备码认证...');
+        console.log('如果没有自动打开浏览器，请手动访问显示的 URL 并完成验证。\n');
+        
+        // Run gh auth login interactively
+        execSync('gh auth login --hostname github.com --git-protocol ssh --web', {
+          stdio: 'inherit',
+          encoding: 'utf8',
+        });
+      }
 
-      // After successful login, get and cache the token
+      // Get and cache the token
       const token = execSync('gh auth token', {
         encoding: 'utf8',
       }).trim();
@@ -185,13 +203,32 @@ export class LoginCommand extends Commander {
 
       return {
         ok: true,
-        message: '✅ 登录成功！Token 已通过 gh CLI 获取并缓存',
+        message: isLoggedIn 
+          ? '✅ 登录成功！Token 已从 gh CLI 获取并缓存' 
+          : '✅ 登录成功！Token 已通过 gh CLI 获取并缓存',
         token: { source: 'gh-cli', cached_at: Date.now() },
       };
     } catch (e) {
+      // Handle specific error cases
+      const errorMsg = e.message || String(e);
+      
+      if (errorMsg.includes('Token is') || errorMsg.includes('no token')) {
+        return {
+          ok: false,
+          message: '❌ gh CLI 未登录或 Token 已过期\n\n请运行：gh auth login\n或使用：/gtw login --pat <your_token>',
+        };
+      }
+      
+      if (errorMsg.includes('SIGINT') || errorMsg.includes('aborted')) {
+        return {
+          ok: false,
+          message: '❌ 登录已取消',
+        };
+      }
+      
       return {
         ok: false,
-        message: `❌ gh auth login 失败：${e.message}\n\n请确保已安装 GitHub CLI (gh) 并可以访问 https://github.com`,
+        message: `❌ gh auth login 失败：${errorMsg}\n\n请确保已安装 GitHub CLI (gh) 并可以访问 https://github.com`,
       };
     }
   }
