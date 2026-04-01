@@ -1,7 +1,6 @@
 import https from 'https';
-import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import { homedir } from 'os';
 import { GitHubClient } from './github.js';
 
@@ -54,17 +53,6 @@ export function apiRequest(method, endpoint, token, body = null) {
   });
 }
 
-export function getGhToken() {
-  try {
-    return execSync('gh auth token', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (e) {
-    throw new Error('Not authenticated with gh CLI. Run: gh auth login');
-  }
-}
-
 export function readJSON(file) {
   try {
     return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
@@ -82,7 +70,6 @@ export function writeJSON(file, data) {
  * Get a valid GitHub token with the following priority:
  * 1. GITHUB_TOKEN environment variable (PAT)
  * 2. token.json cache (PAT or OAuth)
- * 3. gh CLI token (validated)
  * 
  * @param {string} envToken - Optional GITHUB_TOKEN from environment
  * @returns {Promise<string>} - Valid GitHub token
@@ -103,22 +90,10 @@ export async function getValidToken(envToken) {
       console.error(`[gtw] Using cached token from token.json (source: ${cached.source || 'unknown'})`);
       return cached.access_token;
     }
-    console.error('[gtw] Cached token invalid, attempting refresh');
+    console.error('[gtw] Cached token invalid');
   }
 
-  // Priority 3: gh CLI token
-  try {
-    const ghToken = getGhToken();
-    const isValid = await validateToken(ghToken);
-    if (isValid) {
-      writeJSON(TOKEN_FILE, { source: 'gh', access_token: ghToken, cached_at: Date.now() });
-      console.error('[gtw] Using gh CLI token (validated and cached)');
-      return ghToken;
-    }
-    throw new Error('gh CLI token is invalid or revoked');
-  } catch (e) {
-    throw new Error('Not authenticated. Run: gh auth login or set GITHUB_TOKEN environment variable');
-  }
+  throw new Error('Not authenticated. Run /gtw login or set GITHUB_TOKEN environment variable');
 }
 
 /**

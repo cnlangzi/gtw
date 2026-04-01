@@ -2,7 +2,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { Commander } from './Commander.js';
-import { GitHubClient, getGhTokenFromCli, isGhCliInstalled, isGhCliLoggedIn } from '../utils/github.js';
+import { GitHubClient, httpsRequest, GITHUB_CLIENT_ID, GITHUB_TOKEN_URL } from '../utils/github.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
@@ -128,34 +128,6 @@ export class LoginCommand extends Commander {
   async loginWithOAuth() {
     const client = new GitHubClient();
     
-    // Optional: Check if gh CLI is already logged in (convenience for local dev)
-    if (isGhCliInstalled() && isGhCliLoggedIn()) {
-      console.log('检测到 gh CLI 已登录，复用现有会话...\n');
-      try {
-        const ghToken = getGhTokenFromCli();
-        client.setToken(ghToken);
-        const user = await client.getCurrentUser();
-        
-        // Cache token for gtw
-        this.saveToken({
-          source: 'gh-cli',
-          access_token: ghToken,
-          cached_at: Date.now(),
-        });
-        
-        return {
-          ok: true,
-          message: '✅ 登录成功！Token 已从 gh CLI 获取并缓存',
-          user: { login: user.login, name: user.name, id: user.id },
-          token: { source: 'gh-cli', cached_at: Date.now() },
-          display: this.createLoginSuccessDisplay(user),
-        };
-      } catch (e) {
-        // Fall through to device flow if gh CLI token fails
-        console.log('gh CLI token 无效，使用 OAuth 设备码登录...\n');
-      }
-    }
-    
     // Use OAuth device flow (pure HTTPS)
     try {
       console.log('开始 GitHub OAuth 设备码认证...\n');
@@ -217,12 +189,6 @@ export class LoginCommand extends Commander {
    * Poll for token with progress indication
    */
   async pollWithProgress(deviceCode, interval, expiresAt) {
-    // Use the same constants from github.js
-    const GITHUB_CLIENT_ID = '178c6fc778ccc68e1d6a';
-    const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
-    
-    const { httpsRequest } = await import('../utils/github.js');
-    
     while (Date.now() < expiresAt) {
       await new Promise(resolve => setTimeout(resolve, interval * 1000));
       

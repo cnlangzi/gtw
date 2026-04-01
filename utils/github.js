@@ -1,22 +1,20 @@
 /**
  * GitHub API Client
  * Encapsulates GitHub API calls including OAuth device flow.
- * Uses GitHub CLI's official OAuth app credentials.
+ * Uses GitHub Copilot's official OAuth app credentials.
  * 
- * GitHub CLI OAuth App:
- * - Client ID: 178c6fc778ccc68e1d6a
- * - Client Secret: (not needed for device flow - public client)
+ * GitHub Copilot OAuth App:
+ * - Client ID: Iv1.b507a08c87ecfe98
+ * - Reference: github-copilot project
  * 
  * References:
- * - GitHub CLI source: https://github.com/cli/cli
  * - Device flow: https://docs.github.com/en/developers/apps/building-oauth-apps/authorizing-oauth-apps#device-flow
  */
 
 import https from 'https';
-import { execSync } from 'child_process';
 
-// GitHub CLI's official OAuth app (public client - no secret needed for device flow)
-export const GITHUB_CLIENT_ID = '178c6fc778ccc68e1d6a';
+// GitHub Copilot's official OAuth app
+export const GITHUB_CLIENT_ID = 'Iv1.b507a08c87ecfe98';
 export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const GITHUB_API_BASE = 'https://api.github.com';
@@ -69,7 +67,7 @@ export function httpsRequest(method, url, headers = {}, body = null) {
 }
 
 /**
- * GitHub API client class
+ * GitHub API Client class
  */
 export class GitHubClient {
   /**
@@ -272,46 +270,5 @@ export class GitHubClient {
         id: user.id,
       },
     };
-  }
-}
-
-/**
- * Get token from gh CLI
- * @returns {string} - gh CLI token
- */
-export function getGhTokenFromCli() {
-  try {
-    return execSync('gh auth token', {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (e) {
-    throw new Error('Not authenticated with gh CLI. Run: gh auth login');
-  }
-}
-
-/**
- * Check if gh CLI is installed
- * @returns {boolean}
- */
-export function isGhCliInstalled() {
-  try {
-    execSync('gh --version', { stdio: 'pipe' });
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-/**
- * Check if gh CLI is logged in
- * @returns {boolean}
- */
-export function isGhCliLoggedIn() {
-  try {
-    const status = execSync('gh auth status 2>&1', { encoding: 'utf8' });
-    return status.includes('Logged in to');
-  } catch (e) {
-    return false;
   }
 }
