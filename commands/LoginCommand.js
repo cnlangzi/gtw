@@ -358,4 +358,58 @@ ${deviceCode.verification_uri}
       console.error('[gtw] Failed to save token:', e.message);
     }
   }
+
+  /**
+   * Save device code state for background polling
+   */
+  saveDeviceCodeState(deviceCode) {
+    const stateFile = join(CONFIG_DIR, 'device_code.json');
+    try {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+      const state = {
+        device_code: deviceCode.device_code,
+        user_code: deviceCode.user_code,
+        verification_uri: deviceCode.verification_uri,
+        interval: deviceCode.interval,
+        expiresAt: Date.now() + (deviceCode.expires_in * 1000),
+        createdAt: new Date().toISOString(),
+      };
+      writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+    } catch (e) {
+      console.error('[gtw] Failed to save device code state:', e.message);
+    }
+  }
+
+  /**
+   * Load device code state
+   */
+  loadDeviceCodeState() {
+    const stateFile = join(CONFIG_DIR, 'device_code.json');
+    try {
+      if (existsSync(stateFile)) {
+        return JSON.parse(readFileSync(stateFile, 'utf8'));
+      }
+    } catch (e) {
+      console.error('[gtw] Failed to load device code state:', e.message);
+    }
+    return null;
+  }
+
+  /**
+   * Clear device code state
+   */
+  clearDeviceCodeState() {
+    const stateFile = join(CONFIG_DIR, 'device_code.json');
+    try {
+      if (existsSync(stateFile)) {
+        // Keep the file but clear the device_code to invalidate the session
+        const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+        state.device_code = null;
+        state.clearedAt = new Date().toISOString();
+        writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+      }
+    } catch (e) {
+      console.error('[gtw] Failed to clear device code state:', e.message);
+    }
+  }
 }
