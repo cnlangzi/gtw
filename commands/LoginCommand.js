@@ -1,19 +1,17 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
-import { execSync } from 'child_process';
 import { Commander } from './Commander.js';
-import { apiRequest, validateToken } from '../utils/api.js';
+import { GitHubClient, getGhTokenFromCli, isGhCliInstalled, isGhCliLoggedIn } from '../utils/github.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const DEVICE_CODE_FILE = join(CONFIG_DIR, 'device_code.json');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 /**
  * Login command - supports three modes:
  * 1. PAT (--pat flag or GITHUB_TOKEN env var)
- * 2. Custom OAuth app (GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET env vars)
- * 3. gh CLI fallback (calls `gh auth login` if custom app not configured)
+ * 2. GitHub OAuth device flow (uses gh CLI's official client_id)
+ * 3. gh CLI token reuse (if already logged in)
  */
 export class LoginCommand extends Commander {
   /**
@@ -33,26 +31,16 @@ export class LoginCommand extends Commander {
       return await this.loginWithPat(args);
     }
 
-    const clientId = process.env.GITHUB_CLIENT_ID;
-    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
-
-    if (clientId) {
-      // Mode 2: Custom OAuth app with device code flow
-      return await this.loginWithCustomApp(clientId, clientSecret);
-    } else {
-      // Mode 3: Fallback to gh CLI
-      return await this.loginWithGhCli();
-    }
+    // Default: OAuth device flow or gh CLI reuse
+    return await this.loginWithOAuth();
   }
 
   /**
    * Login using Personal Access Token (PAT)
    * Usage: /gtw login --pat [token]
-   * - With token arg: validates and caches the provided PAT
-   * - Without token arg: uses GITHUB_TOKEN env var or prompts for input
    */
   async loginWithPat(args) {
-    console.log('🔐 使用 Personal Access Token (PAT) 登录\n');
+    const client = new GitHubClient();
     
     // Extract PAT from args if provided
     const patIndex = args.findIndex(arg => arg === '--pat' || arg === '-p');
@@ -64,7 +52,8 @@ export class LoginCommand extends Commander {
     // Priority 1: Use provided token from command line
     if (providedToken) {
       console.log('验证提供的 Token 中...');
-      const isValid = await validateToken(providedToken);
+      client.setToken(providedToken);
+      const isValid = await client.validateToken();
       if (isValid) {
         this.saveToken({
           source: 'pat',
@@ -73,7 +62,8 @@ export class LoginCommand extends Commander {
         });
         return {
           ok: true,
-          message: '✅ 登录成功！PAT 已验证并缓存到 ~/.openclaw/gtw/token.json',
+          message: '✅ 登录成功！PAT 已验证并缓存',
+          user: { login: (await client.getCurrentUser()).login },
           token: { source: 'pat', cached_at: Date.now() },
         };
       } else {
@@ -89,7 +79,8 @@ export class LoginCommand extends Commander {
     
     if (envToken) {
       console.log('检测到 GITHUB_TOKEN 环境变量，验证中...');
-      const isValid = await validateToken(envToken);
+      client.setToken(envToken);
+      const isValid = await client.validateToken();
       if (isValid) {
         this.saveToken({
           source: 'pat',
@@ -99,12 +90,13 @@ export class LoginCommand extends Commander {
         return {
           ok: true,
           message: '✅ 登录成功！PAT (GITHUB_TOKEN) 已验证并缓存',
+          user: { login: (await client.getCurrentUser()).login },
           token: { source: 'pat', cached_at: Date.now() },
         };
       } else {
         return {
           ok: false,
-          message: '❌ GITHUB_TOKEN 无效，请检查是否正确以及具有 repo 和 workflow 权限',
+          message: '❌ GITHUB_TOKEN 无效',
         };
       }
     }
@@ -117,280 +109,88 @@ export class LoginCommand extends Commander {
 用法:
   /gtw login --pat <your_token>      # 直接提供 Token
   export GITHUB_TOKEN=xxx            # 或使用环境变量
-  /gtw login                         # 或使用 gh CLI 登录
+  /gtw login                         # 或使用 OAuth 设备码登录
 
 生成 Token: https://github.com/settings/tokens (需要 repo 和 workflow 权限)`,
     };
   }
 
   /**
-   * Login using custom OAuth app (device code flow)
+   * Login using OAuth device flow (or reuse gh CLI session)
    */
-  async loginWithCustomApp(clientId, clientSecret) {
-    // Check for cached device code that's still valid
-    let deviceCodeData = this.loadCachedDeviceCode();
+  async loginWithOAuth() {
+    const client = new GitHubClient();
     
-    if (!deviceCodeData || deviceCodeData.expires_at < Date.now()) {
-      // Request new device code
-      deviceCodeData = await this.requestDeviceCode(clientId);
-      this.saveDeviceCode(deviceCodeData);
-    } else {
-      console.error('[gtw] Reusing cached device code (expires in ' + Math.round((deviceCodeData.expires_at - Date.now()) / 1000) + 's)');
-    }
-
-    // Display instructions to user
-    const display = `🔐 GitHub 登录\n\n请访问：${deviceCodeData.verification_uri}\n输入验证码：${deviceCodeData.user_code}\n\n等待授权完成...`;
-    console.log(display);
-
-    // Poll for token
-    const token = await this.pollForToken(clientId, clientSecret, deviceCodeData);
-    
-    // Save token
-    this.saveToken(token);
-
-    return {
-      ok: true,
-      message: '✅ 登录成功！Token 已保存到 ~/.openclaw/gtw/token.json',
-      token: { source: 'oauth', saved_at: new Date().toISOString() },
-    };
-  }
-
-  /**
-   * Login using gh CLI (calls `gh auth login` if not logged in, otherwise uses existing token)
-   */
-  async loginWithGhCli() {
-    console.log('🔐 使用 GitHub CLI 登录\n');
-    
-    try {
-      // First check if gh CLI is installed
+    // Check if gh CLI is installed and logged in
+    if (isGhCliInstalled() && isGhCliLoggedIn()) {
+      console.log('检测到 gh CLI 已登录，复用现有会话...\n');
       try {
-        execSync('gh --version', { stdio: 'pipe' });
-      } catch (e) {
-        return {
-          ok: false,
-          message: '❌ GitHub CLI (gh) 未安装\n\n请安装：https://cli.github.com/ 或运行 `brew install gh`',
-        };
-      }
-      
-      // Check if already logged in
-      const authStatus = execSync('gh auth status 2>&1', { encoding: 'utf8' });
-      const isLoggedIn = authStatus.includes('Logged in to');
-      
-      if (isLoggedIn) {
-        console.log('✓ gh CLI 已登录，获取 Token...');
-      } else {
-        console.log('⚠️  gh CLI 未登录，开始设备码认证...');
-        console.log('如果没有自动打开浏览器，请手动访问显示的 URL 并完成验证。\n');
+        const ghToken = getGhTokenFromCli();
+        client.setToken(ghToken);
+        const user = await client.getCurrentUser();
         
-        // Run gh auth login interactively
-        execSync('gh auth login --hostname github.com --git-protocol ssh --web', {
-          stdio: 'inherit',
-          encoding: 'utf8',
+        // Cache token for gtw
+        this.saveToken({
+          source: 'gh-cli',
+          access_token: ghToken,
+          cached_at: Date.now(),
         });
+        
+        return {
+          ok: true,
+          message: '✅ 登录成功！Token 已从 gh CLI 获取并缓存',
+          user: { login: user.login, name: user.name },
+          token: { source: 'gh-cli', cached_at: Date.now() },
+        };
+      } catch (e) {
+        // Fall through to device flow if gh CLI token fails
+        console.log('gh CLI token 无效，使用 OAuth 设备码登录...\n');
       }
-
-      // Get and cache the token
-      const token = execSync('gh auth token', {
-        encoding: 'utf8',
-      }).trim();
-
-      // Cache the token for gtw use
+    }
+    
+    // Use OAuth device flow
+    try {
+      console.log('开始 GitHub OAuth 设备码认证...\n');
+      const result = await client.loginWithDeviceFlow();
+      
+      // Cache token
       this.saveToken({
-        source: 'gh-cli',
-        access_token: token,
+        source: 'oauth',
+        access_token: result.token,
         cached_at: Date.now(),
       });
-
+      
       return {
         ok: true,
-        message: isLoggedIn 
-          ? '✅ 登录成功！Token 已从 gh CLI 获取并缓存' 
-          : '✅ 登录成功！Token 已通过 gh CLI 获取并缓存',
-        token: { source: 'gh-cli', cached_at: Date.now() },
+        message: '✅ 登录成功！',
+        user: result.user,
+        token: { source: 'oauth', cached_at: Date.now() },
       };
     } catch (e) {
-      // Handle specific error cases
-      const errorMsg = e.message || String(e);
-      
-      if (errorMsg.includes('Token is') || errorMsg.includes('no token')) {
+      if (e.message.includes('expired')) {
         return {
           ok: false,
-          message: '❌ gh CLI 未登录或 Token 已过期\n\n请运行：gh auth login\n或使用：/gtw login --pat <your_token>',
+          message: '❌ 认证超时，请重试',
         };
       }
-      
-      if (errorMsg.includes('SIGINT') || errorMsg.includes('aborted')) {
+      if (e.message.includes('denied')) {
         return {
           ok: false,
-          message: '❌ 登录已取消',
+          message: '❌ 认证已被取消',
         };
       }
-      
-      return {
-        ok: false,
-        message: `❌ gh auth login 失败：${errorMsg}\n\n请确保已安装 GitHub CLI (gh) 并可以访问 https://github.com`,
-      };
+      throw e;
     }
   }
 
   /**
-   * Load cached device code if still valid.
-   * @returns {{ device_code: string, user_code: string, verification_uri: string, expires_at: number, interval: number } | null}
+   * Save token to token.json
+   * @param {object} tokenData
    */
-  loadCachedDeviceCode() {
-    try {
-      if (existsSync(DEVICE_CODE_FILE)) {
-        const data = JSON.parse(readFileSync(DEVICE_CODE_FILE, 'utf8'));
-        if (data.expires_at > Date.now()) {
-          return data;
-        }
-      }
-    } catch (e) {
-      console.error('[gtw] Failed to load cached device code:', e.message);
-    }
-    return null;
-  }
-
-  /**
-   * Save device code to cache.
-   * @param {{ device_code: string, user_code: string, verification_uri: string, expires_in: number, interval: number }} data
-   */
-  saveDeviceCode(data) {
+  saveToken(tokenData) {
     try {
       mkdirSync(CONFIG_DIR, { recursive: true });
-      const toSave = {
-        device_code: data.device_code,
-        user_code: data.user_code,
-        verification_uri: data.verification_uri,
-        expires_at: Date.now() + (data.expires_in || 900) * 1000,
-        interval: data.interval || 5,
-      };
-      writeFileSync(DEVICE_CODE_FILE, JSON.stringify(toSave, null, 2), 'utf8');
-    } catch (e) {
-      console.error('[gtw] Failed to save device code:', e.message);
-    }
-  }
-
-  /**
-   * Request a new device code from GitHub.
-   * @param {string} clientId
-   * @returns {Promise<{ device_code: string, user_code: string, verification_uri: string, expires_in: number, interval: number }>}
-   */
-  async requestDeviceCode(clientId) {
-    const url = 'https://github.com/login/device/code';
-    const body = new URLSearchParams({
-      client_id: clientId,
-      scope: 'repo workflow',
-    });
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'User-Agent': 'github-work-skill/1.0',
-      },
-      body: body.toString(),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to request device code: ${res.status} ${await res.text()}`);
-    }
-
-    const data = await res.json();
-    return {
-      device_code: data.device_code,
-      user_code: data.user_code,
-      verification_uri: data.verification_uri || data.verification_url,
-      expires_in: data.expires_in || 900,
-      interval: data.interval || 5,
-    };
-  }
-
-  /**
-   * Poll GitHub for token until user authorizes or timeout.
-   * @param {string} clientId
-   * @param {string} clientSecret
-   * @param {{ device_code: string, interval: number, expires_at: number }} deviceCodeData
-   * @returns {Promise<string>}
-   */
-  async pollForToken(clientId, clientSecret, deviceCodeData) {
-    const url = 'https://github.com/login/oauth/access_token';
-    const interval = (deviceCodeData.interval || 5) * 1000;
-    const maxAttempts = Math.max(1, Math.floor((deviceCodeData.expires_at - Date.now()) / interval));
-
-    console.error(`[gtw] Polling for token (max ${maxAttempts} attempts, ${interval/1000}s interval)`);
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, interval));
-
-      const body = new URLSearchParams({
-        client_id: clientId,
-        device_code: deviceCodeData.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      });
-
-      // Add client_secret if available (required for some OAuth apps)
-      if (clientSecret) {
-        body.append('client_secret', clientSecret);
-      }
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json',
-          'User-Agent': 'github-work-skill/1.0',
-        },
-        body: body.toString(),
-      });
-
-      const data = await res.json();
-
-      if (data.access_token) {
-        console.error('[gtw] Token received!');
-        return data.access_token;
-      }
-
-      if (data.error === 'authorization_pending') {
-        process.stdout.write('.');
-        continue;
-      }
-
-      if (data.error === 'slow_down') {
-        console.error('[gtw] Rate limited, waiting longer...');
-        await new Promise(resolve => setTimeout(resolve, interval));
-        continue;
-      }
-
-      if (data.error === 'expired_token') {
-        throw new Error('Device code expired. Please try again.');
-      }
-
-      if (data.error === 'access_denied') {
-        throw new Error('Authorization denied by user.');
-      }
-
-      throw new Error(`OAuth error: ${data.error}`);
-    }
-
-    throw new Error('Device code expired. Please run /gtw login again.');
-  }
-
-  /**
-   * Save token to token.json.
-   * @param {string} token
-   */
-  saveToken(token) {
-    try {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-      const toSave = {
-        source: 'oauth',
-        access_token: token,
-        created_at: new Date().toISOString(),
-      };
-      writeFileSync(TOKEN_FILE, JSON.stringify(toSave, null, 2), 'utf8');
-      console.error('[gtw] Token saved to', TOKEN_FILE);
+      writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2), 'utf8');
     } catch (e) {
       console.error('[gtw] Failed to save token:', e.message);
     }
