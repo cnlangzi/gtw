@@ -125,7 +125,7 @@ export async function getValidToken(envToken) {
  * @param {string} token - Token to validate
  * @returns {Promise<boolean>} - True if token is valid
  */
-async function validateToken(token) {
+export async function validateToken(token) {
   try {
     await apiRequest('GET', '/user', token);
     return true;
