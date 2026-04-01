@@ -162,13 +162,26 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
    * Start background polling for OAuth token
    * Fires and forgets - will inject message to session when complete
    */
-  async startBackgroundPolling(deviceCode) {
-    // Use setImmediate to avoid blocking the response
-    setImmediate(async () => {
+  startBackgroundPolling(deviceCode) {
+    // Capture context before async to avoid losing it
+    const sessionKey = this.sessionKey;
+    const injectMessage = this.injectMessage;
+    const saveToken = this.saveToken.bind(this);
+    const clearDeviceCodeState = this.clearDeviceCodeState.bind(this);
+    const createLoginSuccessDisplay = this.createLoginSuccessDisplay.bind(this);
+    
+    console.log('[gtw] Starting background polling...');
+    console.log('[gtw] Session key:', sessionKey ? 'present' : 'missing');
+    console.log('[gtw] Inject message:', injectMessage ? 'present' : 'missing');
+    
+    // Use setTimeout(0) instead of setImmediate for better compatibility
+    setTimeout(async () => {
       const expiresAt = Date.now() + (deviceCode.expires_in * 1000);
       const interval = deviceCode.interval * 1000;
       
-      console.log('[gtw] Background polling started...');
+      console.log('[gtw] Background polling loop started...');
+      console.log('[gtw] Interval:', interval / 1000, 'seconds');
+      console.log('[gtw] Expires at:', new Date(expiresAt).toISOString());
       
       while (Date.now() < expiresAt) {
         await new Promise(resolve => setTimeout(resolve, interval));
@@ -189,24 +202,33 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
           if (data.access_token) {
             // Success!
+            console.log('[gtw] Token received! Getting user info...');
             const client = new GitHubClient(data.access_token);
             const user = await client.getCurrentUser();
             
             // Cache token
-            this.saveToken({
+            saveToken({
               source: 'oauth',
               access_token: data.access_token,
               cached_at: Date.now(),
             });
             
             // Clear device code state
-            this.clearDeviceCodeState();
+            clearDeviceCodeState();
             
             // Notify user via session message
-            const successDisplay = this.createLoginSuccessDisplay(user);
-            this.injectMessage?.(this.sessionKey, successDisplay);
+            const successDisplay = createLoginSuccessDisplay(user);
+            console.log('[gtw] Sending success message to session:', sessionKey);
+            console.log('[gtw] injectMessage available:', !!injectMessage);
             
-            console.log('[gtw] Login successful, notified user');
+            if (injectMessage && sessionKey) {
+              injectMessage(sessionKey, successDisplay);
+              console.log('[gtw] Login successful, message sent to user');
+            } else {
+              console.error('[gtw] Cannot send message: injectMessage or sessionKey missing');
+              console.error('[gtw] injectMessage:', injectMessage);
+              console.error('[gtw] sessionKey:', sessionKey);
+            }
             return;
           }
 
@@ -221,24 +243,30 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           }
 
           if (data.error === 'expired_token') {
-            this.clearDeviceCodeState();
-            this.injectMessage?.(this.sessionKey, 
-              '❌ **Authorization Expired**\n\nThe device code is valid for 15 minutes and has expired.\n\nPlease run: /gtw login');
+            clearDeviceCodeState();
+            if (injectMessage && sessionKey) {
+              injectMessage(sessionKey, 
+                '❌ **Authorization Expired**\n\nThe device code is valid for 15 minutes and has expired.\n\nPlease run: /gtw login');
+            }
             console.log('[gtw] Device code expired');
             return;
           }
 
           if (data.error === 'access_denied') {
-            this.clearDeviceCodeState();
-            this.injectMessage?.(this.sessionKey,
-              '❌ **Authorization Denied**\n\nThe authorization was denied or cancelled.\n\nTo re-authorize, run: /gtw login');
+            clearDeviceCodeState();
+            if (injectMessage && sessionKey) {
+              injectMessage(sessionKey,
+                '❌ **Authorization Denied**\n\nThe authorization was denied or cancelled.\n\nTo re-authorize, run: /gtw login');
+            }
             console.log('[gtw] Authorization denied');
             return;
           }
 
           // Other errors
-          this.injectMessage?.(this.sessionKey,
-            `❌ **Authentication Failed**\n\nError: ${data.error}\n\nPlease retry: /gtw login`);
+          if (injectMessage && sessionKey) {
+            injectMessage(sessionKey,
+              `❌ **Authentication Failed**\n\nError: ${data.error}\n\nPlease retry: /gtw login`);
+          }
           console.log('[gtw] OAuth error:', data.error);
           return;
           
@@ -249,11 +277,13 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       }
       
       // Timeout
-      this.clearDeviceCodeState();
-      this.injectMessage?.(this.sessionKey,
-        '❌ **Authorization Timeout**\n\nThe device code is valid for 15 minutes.\n\nPlease run: /gtw login');
+      clearDeviceCodeState();
+      if (injectMessage && sessionKey) {
+        injectMessage(sessionKey,
+          '❌ **Authorization Timeout**\n\nThe device code is valid for 15 minutes.\n\nPlease run: /gtw login');
+      }
       console.log('[gtw] Polling timeout');
-    });
+    }, 0); // setTimeout with 0 delay instead of setImmediate
   }
 
   /**
