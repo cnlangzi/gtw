@@ -1,6 +1,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { execSync } from 'child_process';
 import { Commander } from './Commander.js';
 import { apiRequest } from '../utils/api.js';
 
@@ -9,8 +10,9 @@ const DEVICE_CODE_FILE = join(CONFIG_DIR, 'device_code.json');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 /**
- * Device code flow for GitHub OAuth.
- * Supports device_code reuse within expires_in window to avoid rate limiting.
+ * Login command - supports two modes:
+ * 1. Custom OAuth app (GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET env vars)
+ * 2. gh CLI fallback (calls `gh auth login` if custom app not configured)
  */
 export class LoginCommand extends Commander {
   /**
@@ -26,13 +28,19 @@ export class LoginCommand extends Commander {
     const clientId = process.env.GITHUB_CLIENT_ID;
     const clientSecret = process.env.GITHUB_CLIENT_SECRET;
 
-    if (!clientId) {
-      return {
-        ok: false,
-        message: '⚠️ GITHUB_CLIENT_ID not configured. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables.',
-      };
+    if (clientId) {
+      // Mode 1: Custom OAuth app with device code flow
+      return await this.loginWithCustomApp(clientId, clientSecret);
+    } else {
+      // Mode 2: Fallback to gh CLI
+      return await this.loginWithGhCli();
     }
+  }
 
+  /**
+   * Login using custom OAuth app (device code flow)
+   */
+  async loginWithCustomApp(clientId, clientSecret) {
     // Check for cached device code that's still valid
     let deviceCodeData = this.loadCachedDeviceCode();
     
@@ -59,6 +67,47 @@ export class LoginCommand extends Commander {
       message: '✅ 登录成功！Token 已保存到 ~/.openclaw/gtw/token.json',
       token: { source: 'oauth', saved_at: new Date().toISOString() },
     };
+  }
+
+  /**
+   * Login using gh CLI (calls `gh auth login`)
+   */
+  async loginWithGhCli() {
+    console.log('🔐 使用 GitHub CLI 登录\n');
+    console.log('调用 gh auth login 进行设备码认证...');
+    console.log('如果没有自动打开浏览器，请手动访问显示的 URL 并完成验证。\n');
+
+    try {
+      // Run gh auth login interactively
+      // This will display the device code and wait for user to authorize
+      execSync('gh auth login --hostname github.com --git-protocol ssh --web', {
+        stdio: 'inherit',
+        encoding: 'utf8',
+      });
+
+      // After successful login, get and cache the token
+      const token = execSync('gh auth token', {
+        encoding: 'utf8',
+      }).trim();
+
+      // Cache the token for gtw use
+      this.saveToken({
+        source: 'gh-cli',
+        access_token: token,
+        cached_at: Date.now(),
+      });
+
+      return {
+        ok: true,
+        message: '✅ 登录成功！Token 已通过 gh CLI 获取并缓存',
+        token: { source: 'gh-cli', cached_at: Date.now() },
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        message: `❌ gh auth login 失败：${e.message}\n\n请确保已安装 GitHub CLI (gh) 并可以访问 https://github.com`,
+      };
+    }
   }
 
   /**
