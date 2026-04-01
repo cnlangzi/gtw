@@ -16,7 +16,7 @@ const DEFAULT_MAX_ROUNDS = 5;
  * Returns { ok: true } on success.
  * Throws on failure (caller should abort).
  */
-async function setGtwLabel(issueNumber, token, repo, targetLabel, isPR = true) {
+export async function setGtwLabel(issueNumber, token, repo, targetLabel, isPR = true) {
   if (!GTW_LABELS.includes(targetLabel)) {
     throw new Error(`Invalid gtw label: ${targetLabel}. Must be one of: ${GTW_LABELS.join(', ')}`);
   }
@@ -61,7 +61,7 @@ async function setGtwLabel(issueNumber, token, repo, targetLabel, isPR = true) {
 /**
  * Fetch PR details including diff summary and linked issue.
  */
-async function fetchPrDetails(prNum, token, repo) {
+export async function fetchPrDetails(prNum, token, repo) {
   const [pr, files] = await Promise.all([
     apiRequest('GET', `/repos/${repo}/pulls/${prNum}`, token),
     apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token),
@@ -103,7 +103,7 @@ async function fetchPrDetails(prNum, token, repo) {
  * Find existing checklist comment by this agent on a PR.
  * Returns the comment object or null.
  */
-async function findChecklistComment(prNum, token, repo, myLogin) {
+export async function findChecklistComment(prNum, token, repo, myLogin) {
   const comments = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/comments`, token);
   return (
     comments.find(
@@ -117,7 +117,7 @@ async function findChecklistComment(prNum, token, repo, myLogin) {
  * Extract checked/unchecked state from existing checklist comment.
  * Returns array of { text, checked }.
  */
-function parseChecklistFromComment(body) {
+export function parseChecklistFromComment(body) {
   const result = [];
   for (const line of body.split('\n')) {
     const m = line.match(/^\s*-\s*\[([ x])\]\s*(.+)/);
@@ -129,18 +129,19 @@ function parseChecklistFromComment(body) {
 }
 
 /**
- * Merge previous checklist state with current canonical items.
- * Returns array of { text, checked } for the re-review.
- * Removes checkboxes that were resolved (checked in previous, not in current canonical).
- * Keeps checkboxes that are still unresolved (unchecked in previous, or not in canonical).
+ * Filter previous checklist items: keep only unresolved ones (unchecked).
+ * Resolved items (checked) are removed from the list per spec:
+ * "compare PR diff to checklist; remove checkboxes that are resolved; keep unresolved ones"
  */
-function mergeChecklistState(prevItems, canonicalItems) {
-  const canonicalSet = new Set(canonicalItems);
-  // Keep checked state for items still in canonical list
-  return canonicalItems.map((text) => {
-    const prev = prevItems.find((p) => p.text === text);
-    return { text, checked: prev ? prev.checked : false };
-  });
+export function mergeChecklistState(prevItems, canonicalItems) {
+  // Only include canonical items that are NOT resolved (not checked in prev).
+  // Resolved = checked in previous comment = removed from new comment.
+  return canonicalItems
+    .filter((text) => {
+      const prev = prevItems.find((p) => p.text === text);
+      return !prev || !prev.checked;
+    })
+    .map((text) => ({ text, checked: false }));
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +302,16 @@ export class ReviewCommand extends Commander {
       return { ok: false, message: `⚠️ ${e.message}` };
     }
 
+    // Concurrency check: re-fetch PR to verify claim succeeded.
+    // If gtw/ready is still present, another runner claimed it — abort.
+    const prAfterClaim = await fetchPrDetails(prNum, token, repo);
+    if (prAfterClaim.pr.labels.some((l) => l.name === 'gtw/ready')) {
+      return {
+        ok: false,
+        message: `⚠️ PR #${prNum} was claimed by another runner (gtw/ready still present). Aborting.`,
+      };
+    }
+
     // Find existing checklist comment
     const existingComment = await findChecklistComment(prNum, token, repo, myLogin);
 
@@ -349,8 +360,8 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // If all checklist items are checked (resolved), approve and finish
-    const allResolved = checklistItems.length > 0 && checklistItems.every((i) => i.checked);
+    // All resolved = checklist is empty (resolved items are removed per spec)
+    const allResolved = checklistItems.length === 0;
     if (allResolved && existingComment) {
       // Delete checklist comment
       try {
@@ -390,18 +401,26 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Build and post/update checklist comment
+    // Build checklist body — if no unresolved items, the comment is suppressed
+    // (all-resolved case is handled in the block above)
     const checkboxes = checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
     const commentBody = `## Review [Round ${round}]\n\n${checkboxes}\n\n---\n_Agent: review the diff and linked issue requirements. Check items as resolved or leave unchecked to flag issues._\n\n_To advance: run /gtw review #${prNum} again after resolving items._`;
 
-    let comment;
-    if (commentId) {
-      // Update existing checklist comment
-      comment = await apiRequest('PATCH', `/repos/${repo}/issues/comments/${commentId}`, token, { body: commentBody });
-    } else {
-      // Create new checklist comment
-      comment = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, { body: commentBody });
-      commentId = comment.id;
+    let commentIdWritten;
+    try {
+      if (commentId) {
+        // Update existing checklist comment
+        await apiRequest('PATCH', `/repos/${repo}/issues/comments/${commentId}`, token, { body: commentBody });
+        commentIdWritten = commentId;
+      } else {
+        // Create new checklist comment
+        const created = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, { body: commentBody });
+        commentIdWritten = created.id;
+      }
+    } catch (e) {
+      // Rollback: remove gtw/wip so PR returns to gtw/ready
+      try { await setGtwLabel(prNum, token, repo, 'gtw/ready', true); } catch (_) { /* ignore */ }
+      return { ok: false, message: `⚠️ Failed to post checklist comment: ${e.message}. Claim rolled back.` };
     }
 
     // Update wip.json with review state for this PR
@@ -413,7 +432,7 @@ export class ReviewCommand extends Commander {
           repo,
           prNumber: prNum,
           round,
-          checklistCommentId: commentId,
+          checklistCommentId: commentIdWritten,
           updatedAt: new Date().toISOString(),
         },
       },

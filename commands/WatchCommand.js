@@ -109,6 +109,7 @@ export class WatchCommand extends Commander {
     if (watchList.length === 0) {
       return {
         ok: true,
+        watchList: [],
         message: '🔍 Watch list is empty',
         display: '🔍 Watch list is empty\n\nAdd repos:\n  /gtw watch add <owner>/<repo>',
       };
