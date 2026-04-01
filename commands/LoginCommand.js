@@ -54,7 +54,7 @@ export class LoginCommand extends Commander {
     
     // Priority 1: Use provided token from command line
     if (providedToken) {
-      console.log('验证提供的 Token 中...');
+      console.log('Validating provided token...');
       client.setToken(providedToken);
       const isValid = await client.validateToken();
       if (isValid) {
@@ -66,7 +66,7 @@ export class LoginCommand extends Commander {
         const user = await client.getCurrentUser();
         return {
           ok: true,
-          message: '✅ 登录成功！PAT 已验证并缓存',
+          message: '✅ Login successful! PAT validated and cached',
           user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
           display: this.createLoginSuccessDisplay(user),
@@ -74,7 +74,7 @@ export class LoginCommand extends Commander {
       } else {
         return {
           ok: false,
-          message: '❌ Token 无效，请检查是否正确以及具有 repo 和 workflow 权限',
+          message: '❌ Invalid token. Please check it has repo and workflow scopes',
         };
       }
     }
@@ -83,7 +83,7 @@ export class LoginCommand extends Commander {
     const envToken = process.env.GITHUB_TOKEN;
     
     if (envToken) {
-      console.log('检测到 GITHUB_TOKEN 环境变量，验证中...');
+      console.log('GITHUB_TOKEN detected, validating...');
       client.setToken(envToken);
       const isValid = await client.validateToken();
       if (isValid) {
@@ -95,7 +95,7 @@ export class LoginCommand extends Commander {
         const user = await client.getCurrentUser();
         return {
           ok: true,
-          message: '✅ 登录成功！PAT (GITHUB_TOKEN) 已验证并缓存',
+          message: '✅ Login successful! PAT (GITHUB_TOKEN) validated and cached',
           user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
           display: this.createLoginSuccessDisplay(user),
@@ -103,7 +103,7 @@ export class LoginCommand extends Commander {
       } else {
         return {
           ok: false,
-          message: '❌ GITHUB_TOKEN 无效',
+          message: '❌ GITHUB_TOKEN is invalid',
         };
       }
     }
@@ -111,14 +111,14 @@ export class LoginCommand extends Commander {
     // Priority 3: No token provided - show usage
     return {
       ok: false,
-      message: `❌ 未提供 PAT
+      message: `❌ No PAT provided
 
-用法:
-  /gtw login --pat <your_token>      # 直接提供 Token
-  export GITHUB_TOKEN=xxx            # 或使用环境变量
-  /gtw login                         # 或使用 OAuth 设备码登录
+Usage:
+  /gtw login --pat <your_token>      # Provide token directly
+  export GITHUB_TOKEN=xxx            # Or use environment variable
+  /gtw login                         # Or use OAuth device flow
 
-生成 Token: https://github.com/settings/tokens (需要 repo 和 workflow 权限)`,
+Generate a token: https://github.com/settings/tokens (requires repo and workflow scopes)`,
     };
   }
 
