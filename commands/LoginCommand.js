@@ -33,14 +33,15 @@ function getMainSessionFile() {
 }
 
 function injectLoginDirective(sessionFile, deviceCode) {
-  // Use sessions_spawn + streamTo: "parent" for automatic result reporting
-  // This spawns a subagent that will poll GitHub OAuth and report back to parent session
+  // Use exec to run poll-oauth.js script directly (no subagent needed)
+  // This is more reliable than sessions_spawn which requires ACP configuration
+  const scriptPath = join(homedir(), 'code', 'gtw', 'scripts', 'poll-oauth.js');
   const directive = [
     `/queue steer`,  // ← OpenClaw directive: immediately inject into current run
     ``,
-    `🚨 [URGENT] [gtw login] GitHub OAuth Poll - Spawn Subagent NOW`,
+    `🚨 [URGENT] [gtw login] GitHub OAuth Poll - Execute Script NOW`,
     ``,
-    `⚠️ ACTION REQUIRED: Spawn a subagent to poll GitHub OAuth token endpoint`,
+    `⚠️ ACTION REQUIRED: Execute poll-oauth.js script to poll GitHub OAuth token endpoint`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
@@ -48,25 +49,19 @@ function injectLoginDirective(sessionFile, deviceCode) {
     `Expires in: ${deviceCode.expires_in} seconds`,
     `Interval: ${deviceCode.interval} seconds`,
     ``,
-    `Use sessions_spawn with the following parameters:`,
+    `Execute this command immediately:`,
     ``,
-    `\`\`\`yaml`,
-    `sessions_spawn:`,
-    `  task: "Poll GitHub OAuth token endpoint for device code ${deviceCode.device_code} until authorization complete or expired. Poll every ${deviceCode.interval} seconds. If token received, save to ${TOKEN_FILE} with format {\"source\":\"oauth\",\"access_token\":\"<token>\",\"cached_at\":<timestamp>}, get user info from GitHub API, and report success. If expired, report failure."`,
-    `  streamTo: "parent"  # ← Critical: enables automatic result reporting to parent session`,
-    `  mode: "run"         # one-shot, auto-ends when complete`,
-    `  runTimeoutSeconds: ${deviceCode.expires_in}  # timeout matches OAuth expiry`,
+    `\`\`\`bash`,
+    `node ${scriptPath} ${deviceCode.device_code} Iv1.ae7385bb1d9e8c02 ${deviceCode.interval} ${deviceCode.expires_in}`,
     `\`\`\``,
     ``,
-    `The subagent will:`,
+    `The script will:`,
     `1. Poll https://github.com/login/oauth/access_token every ${deviceCode.interval}s`,
-    `2. Stop when: access_token received, "expired_token" error, or ${deviceCode.expires_in}s elapsed`,
-    `3. On success: Save token + get user info + report "✅ Login successful! User: @<login>"`,
+    `2. Stop when: access_token received, "expired_token" error, or timeout`,
+    `3. On success: Save token to ${TOKEN_FILE} + report "✅ Login successful! User: @<login>"`,
     `4. On failure: Report "❌ Authorization expired/denied"`,
     ``,
-    `streamTo: "parent" ensures the result is automatically reported back to this session.`,
-    ``,
-    `Spawn the subagent now.`,
+    `Execute the script now. Do NOT use sessions_spawn - just run the bash command directly.`,
   ].join('\n');
 
   try {
