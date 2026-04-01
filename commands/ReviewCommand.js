@@ -155,7 +155,7 @@ export class ReviewCommand extends Commander {
 
   /**
    * /gtw review           — claim earliest gtw/ready PR from watch list
-   * /gtw review #<pr>    — review specific PR in current repo (from wip.json)
+   * /gtw review <pr>    — review specific PR in current repo (from wip.json)
    */
   async execute(args) {
     const token = await getValidToken();
@@ -177,7 +177,7 @@ export class ReviewCommand extends Commander {
 
     // Determine target repo and PR
     if (targetPrNum) {
-      // /gtw review #<pr> — use repo from wip.json
+      // /gtw review <pr> — use repo from wip.json
       const repo = wip.repo;
       if (!repo) {
         return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
@@ -404,7 +404,7 @@ export class ReviewCommand extends Commander {
     // Build checklist body — if no unresolved items, the comment is suppressed
     // (all-resolved case is handled in the block above)
     const checkboxes = checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
-    const commentBody = `## Review [Round ${round}]\n\n${checkboxes}\n\n---\n_Agent: review the diff and linked issue requirements. Check items as resolved or leave unchecked to flag issues._\n\n_To advance: run /gtw review #${prNum} again after resolving items._`;
+    const commentBody = `## Review [Round ${round}]\n\n${checkboxes}\n\n---\n_Agent: review the diff and linked issue requirements. Check items as resolved or leave unchecked to flag issues._\n\n_To advance: run /gtw review ${prNum} again after resolving items._`;
 
     let commentIdWritten;
     try {
@@ -460,7 +460,7 @@ export class ReviewCommand extends Commander {
       checklist: checklistItems,
       round,
       maxRounds,
-      message: `eyes Claimed PR #${prNum}: ${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nRound ${round}/${maxRounds} checklist active.\nReview the diff, then run /gtw review #${prNum} again after resolving items.`,
+      message: `eyes Claimed PR #${prNum}: ${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nRound ${round}/${maxRounds} checklist active.\nReview the diff, then run /gtw review ${prNum} again after resolving items.`,
       display: [
         `eyes Claimed PR #${prNum}: ${prData.pr.title}`,
         ``,
@@ -473,7 +473,7 @@ export class ReviewCommand extends Commander {
         ...checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`),
         ``,
         `Review the diff against the issue requirements.`,
-        `Run /gtw review #${prNum} again after resolving items.`,
+        `Run /gtw review ${prNum} again after resolving items.`,
       ].join('\n'),
     };
   }
