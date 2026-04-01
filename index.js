@@ -1,4 +1,4 @@
-import { definePluginEntry } from '/home/devin/.npm-global/lib/node_modules/openclaw/dist/plugin-sdk/plugin-entry.js';
+import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 import { writeFileSync } from 'fs';
 import { CommanderFactory } from './commands/CommanderFactory.js';
 import { extractMessages, injectMessage } from './utils/session.js';
