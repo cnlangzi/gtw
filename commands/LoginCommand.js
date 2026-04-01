@@ -34,6 +34,8 @@ function getMainSessionFile() {
 
 function injectLoginDirective(sessionFile, deviceCode) {
   const directive = [
+    `/queue steer`,  // ← OpenClaw directive: immediately inject into current run
+    ``,
     `🚨 [URGENT] [gtw login] GitHub OAuth - Execute NOW`,
     ``,
     `⚠️ ACTION REQUIRED: Poll GitHub OAuth token endpoint IMMEDIATELY`,
