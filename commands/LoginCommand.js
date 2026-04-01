@@ -3,6 +3,7 @@ import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { Commander } from './Commander.js';
 import { GitHubClient, httpsRequest, GITHUB_CLIENT_ID, GITHUB_TOKEN_URL } from '../utils/github.js';
+import { resolveRealSessionKey, injectMessage as injectMessageToSession } from '../utils/session.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
@@ -163,16 +164,20 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
    * Fires and forgets - will inject message to session when complete
    */
   startBackgroundPolling(deviceCode) {
+    // Resolve the real session key (handles dmScope variations)
+    const rawSessionKey = this.sessionKey;
+    const resolvedSessionKey = resolveRealSessionKey(rawSessionKey, 'main');
+    const targetSessionKey = resolvedSessionKey || rawSessionKey;
+    
+    console.log('[gtw] Starting background polling...');
+    console.log('[gtw] Raw session key:', rawSessionKey);
+    console.log('[gtw] Resolved session key:', resolvedSessionKey);
+    console.log('[gtw] Target session key:', targetSessionKey);
+    
     // Capture context before async to avoid losing it
-    const sessionKey = this.sessionKey;
-    const injectMessage = this.injectMessage;
     const saveToken = this.saveToken.bind(this);
     const clearDeviceCodeState = this.clearDeviceCodeState.bind(this);
     const createLoginSuccessDisplay = this.createLoginSuccessDisplay.bind(this);
-    
-    console.log('[gtw] Starting background polling...');
-    console.log('[gtw] Session key:', sessionKey ? 'present' : 'missing');
-    console.log('[gtw] Inject message:', injectMessage ? 'present' : 'missing');
     
     // Use setTimeout(0) instead of setImmediate for better compatibility
     setTimeout(async () => {
@@ -218,16 +223,13 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
             
             // Notify user via session message
             const successDisplay = createLoginSuccessDisplay(user);
-            console.log('[gtw] Sending success message to session:', sessionKey);
-            console.log('[gtw] injectMessage available:', !!injectMessage);
+            console.log('[gtw] Sending success message to session:', targetSessionKey);
             
-            if (injectMessage && sessionKey) {
-              injectMessage(sessionKey, successDisplay);
-              console.log('[gtw] Login successful, message sent to user');
+            if (targetSessionKey) {
+              const sent = injectMessageToSession(targetSessionKey, successDisplay);
+              console.log('[gtw] Message sent:', sent ? 'success' : 'failed');
             } else {
-              console.error('[gtw] Cannot send message: injectMessage or sessionKey missing');
-              console.error('[gtw] injectMessage:', injectMessage);
-              console.error('[gtw] sessionKey:', sessionKey);
+              console.error('[gtw] Cannot send message: sessionKey is missing');
             }
             return;
           }
@@ -244,8 +246,8 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
           if (data.error === 'expired_token') {
             clearDeviceCodeState();
-            if (injectMessage && sessionKey) {
-              injectMessage(sessionKey, 
+            if (targetSessionKey) {
+              injectMessageToSession(targetSessionKey, 
                 '❌ **Authorization Expired**\n\nThe device code is valid for 15 minutes and has expired.\n\nPlease run: /gtw login');
             }
             console.log('[gtw] Device code expired');
@@ -254,8 +256,8 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
           if (data.error === 'access_denied') {
             clearDeviceCodeState();
-            if (injectMessage && sessionKey) {
-              injectMessage(sessionKey,
+            if (targetSessionKey) {
+              injectMessageToSession(targetSessionKey,
                 '❌ **Authorization Denied**\n\nThe authorization was denied or cancelled.\n\nTo re-authorize, run: /gtw login');
             }
             console.log('[gtw] Authorization denied');
@@ -263,8 +265,8 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           }
 
           // Other errors
-          if (injectMessage && sessionKey) {
-            injectMessage(sessionKey,
+          if (targetSessionKey) {
+            injectMessageToSession(targetSessionKey,
               `❌ **Authentication Failed**\n\nError: ${data.error}\n\nPlease retry: /gtw login`);
           }
           console.log('[gtw] OAuth error:', data.error);
@@ -278,8 +280,8 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       
       // Timeout
       clearDeviceCodeState();
-      if (injectMessage && sessionKey) {
-        injectMessage(sessionKey,
+      if (targetSessionKey) {
+        injectMessageToSession(targetSessionKey,
           '❌ **Authorization Timeout**\n\nThe device code is valid for 15 minutes.\n\nPlease run: /gtw login');
       }
       console.log('[gtw] Polling timeout');
