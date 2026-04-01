@@ -2,61 +2,10 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
+import { setPrLabel } from '../utils/labels.js';
 
-const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
 const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
 const DEFAULT_MAX_ROUNDS = 5;
-
-// ---------------------------------------------------------------------------
-// Atomic label operations
-// ---------------------------------------------------------------------------
-
-/**
- * Atomically set a gtw label on a PR/issue: removes all other gtw/* labels first.
- * Returns { ok: true } on success.
- * Throws on failure (caller should abort).
- */
-export async function setGtwLabel(issueNumber, token, repo, targetLabel, isPR = true) {
-  if (!GTW_LABELS.includes(targetLabel)) {
-    throw new Error(`Invalid gtw label: ${targetLabel}. Must be one of: ${GTW_LABELS.join(', ')}`);
-  }
-
-  const endpointBase = isPR ? `/repos/${repo}/pulls/${issueNumber}` : `/repos/${repo}/issues/${issueNumber}`;
-
-  // Fetch current labels on the PR/issue
-  const currentLabels = await apiRequest('GET', `${endpointBase}/labels`, token);
-
-  // Identify which gtw/* labels are currently applied (excluding target)
-  const toRemove = currentLabels
-    .map((l) => l.name)
-    .filter((name) => GTW_LABELS.includes(name) && name !== targetLabel);
-
-  // Remove other gtw labels first
-  for (const label of toRemove) {
-    try {
-      await apiRequest('DELETE', `${endpointBase}/labels/${encodeURIComponent(label)}`, token);
-    } catch (e) {
-      // If removal fails (e.g. 404 race condition), abort — do not continue
-      if (e.message.includes('404') || e.message.includes('Label not found')) {
-        // Label already gone, that's fine
-      } else {
-        throw new Error(`Failed to remove label "${label}" from #${issueNumber}: ${e.message}. Aborting.`);
-      }
-    }
-  }
-
-  // Check if target label is already present (no-op for that label)
-  const alreadyHas = currentLabels.some((l) => l.name === targetLabel);
-  if (!alreadyHas) {
-    try {
-      await apiRequest('POST', `${endpointBase}/labels`, token, {
-        labels: [targetLabel],
-      });
-    } catch (e) {
-      throw new Error(`Failed to set label "${targetLabel}" on #${issueNumber}: ${e.message}. Aborting.`);
-    }
-  }
-}
 
 /**
  * Fetch PR details including diff summary and linked issue.
@@ -295,20 +244,20 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Atomically claim the PR: remove other gtw labels, set gtw/wip
+    // Atomically claim the PR: remove other gtw labels, set gtw/wip.
+    // setPrLabel handles concurrency safety: re-checks labels and rolls back
+    // to gtw/ready if gtw/ready is still present (another runner won the race).
+    let preempted = false;
     try {
-      await setGtwLabel(prNum, token, repo, 'gtw/wip', true);
+      const result = await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/wip');
+      preempted = result.preempted;
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
     }
-
-    // Concurrency check: re-fetch PR to verify claim succeeded.
-    // If gtw/ready is still present, another runner claimed it — abort.
-    const prAfterClaim = await fetchPrDetails(prNum, token, repo);
-    if (prAfterClaim.pr.labels.some((l) => l.name === 'gtw/ready')) {
+    if (preempted) {
       return {
         ok: false,
-        message: `⚠️ PR #${prNum} was claimed by another runner (gtw/ready still present). Aborting.`,
+        message: `⚠️ PR #${prNum} was claimed by another runner (preemption detected). Aborting.`,
       };
     }
 
@@ -335,7 +284,7 @@ export class ReviewCommand extends Commander {
     // Check if max rounds exceeded
     if (round > maxRounds) {
       try {
-        await setGtwLabel(prNum, token, repo, 'gtw/stuck', true);
+        await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/stuck');
       } catch (e) {
         return { ok: false, message: `⚠️ ${e.message}` };
       }
@@ -377,7 +326,7 @@ export class ReviewCommand extends Commander {
 
       // Set gtw/lgtm
       try {
-        await setGtwLabel(prNum, token, repo, 'gtw/lgtm', true);
+        await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/lgtm');
       } catch (e) {
         return { ok: false, message: `⚠️ ${e.message}` };
       }
@@ -408,7 +357,7 @@ export class ReviewCommand extends Commander {
 
     // Apply gtw/revise (replaces gtw/wip) — this is the final state
     try {
-      await setGtwLabel(prNum, token, repo, 'gtw/revise', true);
+      await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/revise');
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
     }
