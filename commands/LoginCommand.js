@@ -3,16 +3,17 @@ import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
 import { Commander } from './Commander.js';
-import { apiRequest } from '../utils/api.js';
+import { apiRequest, validateToken } from '../utils/api.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const DEVICE_CODE_FILE = join(CONFIG_DIR, 'device_code.json');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 /**
- * Login command - supports two modes:
- * 1. Custom OAuth app (GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET env vars)
- * 2. gh CLI fallback (calls `gh auth login` if custom app not configured)
+ * Login command - supports three modes:
+ * 1. PAT (--pat flag or GITHUB_TOKEN env var)
+ * 2. Custom OAuth app (GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET env vars)
+ * 3. gh CLI fallback (calls `gh auth login` if custom app not configured)
  */
 export class LoginCommand extends Commander {
   /**
@@ -25,15 +26,127 @@ export class LoginCommand extends Commander {
   }
 
   async execute(args) {
+    // Check for --pat flag
+    const usePat = args.includes('--pat') || args.includes('-p');
+    
+    if (usePat) {
+      return await this.loginWithPat();
+    }
+
     const clientId = process.env.GITHUB_CLIENT_ID;
     const clientSecret = process.env.GITHUB_CLIENT_SECRET;
 
     if (clientId) {
-      // Mode 1: Custom OAuth app with device code flow
+      // Mode 2: Custom OAuth app with device code flow
       return await this.loginWithCustomApp(clientId, clientSecret);
     } else {
-      // Mode 2: Fallback to gh CLI
+      // Mode 3: Fallback to gh CLI
       return await this.loginWithGhCli();
+    }
+  }
+
+  /**
+   * Login using Personal Access Token (PAT)
+   * Supports both interactive input and GITHUB_TOKEN env var
+   */
+  async loginWithPat() {
+    console.log('🔐 使用 Personal Access Token (PAT) 登录\n');
+    
+    // Try GITHUB_TOKEN environment variable first
+    const envToken = process.env.GITHUB_TOKEN;
+    
+    if (envToken) {
+      console.log('检测到 GITHUB_TOKEN 环境变量，验证中...');
+      const isValid = await validateToken(envToken);
+      if (isValid) {
+        this.saveToken({
+          source: 'pat',
+          access_token: envToken,
+          cached_at: Date.now(),
+        });
+        return {
+          ok: true,
+          message: '✅ 登录成功！PAT 已验证并缓存',
+          token: { source: 'pat', cached_at: Date.now() },
+        };
+      } else {
+        console.log('❌ GITHUB_TOKEN 无效，请重新输入');
+      }
+    }
+
+    // Interactive PAT input
+    console.log('请输入你的 GitHub Personal Access Token:');
+    console.log('提示：Token 不会显示在屏幕上，输入完成后按回车');
+    console.log('生成 Token: https://github.com/settings/tokens (需要 repo 和 workflow 权限)\n');
+
+    try {
+      // Use readline for secure input
+      const readline = await import('readline');
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+
+      const pat = await new Promise((resolve) => {
+        // Try to hide input (works on Unix)
+        process.stdin.setRawMode?.(true);
+        process.stdin.resume();
+        
+        let input = '';
+        
+        rl.on('line', (line) => {
+          input = line;
+          rl.close();
+        });
+
+        rl.on('SIGINT', () => {
+          process.exit(0);
+        });
+
+        // Simple prompt without masking (readline doesn't support password masking by default)
+        process.stdout.write('PAT: ');
+      });
+
+      rl.close();
+      process.stdin.setRawMode?.(false);
+
+      const token = pat.trim();
+      
+      if (!token) {
+        return {
+          ok: false,
+          message: '❌ 未输入 Token',
+        };
+      }
+
+      // Validate PAT
+      console.log('\n验证 Token 中...');
+      const isValid = await validateToken(token);
+      
+      if (!isValid) {
+        return {
+          ok: false,
+          message: '❌ Token 无效，请检查是否正确以及具有 repo 和 workflow 权限',
+        };
+      }
+
+      // Save PAT
+      this.saveToken({
+        source: 'pat',
+        access_token: token,
+        cached_at: Date.now(),
+      });
+
+      return {
+        ok: true,
+        message: '✅ 登录成功！PAT 已验证并缓存到 ~/.openclaw/gtw/token.json',
+        token: { source: 'pat', cached_at: Date.now() },
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        message: `❌ 输入 Token 时出错：${e.message}`,
+      };
     }
   }
 
