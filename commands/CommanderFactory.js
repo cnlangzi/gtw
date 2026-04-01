@@ -15,6 +15,7 @@ import { UpdateCommand } from './UpdateCommand.js';
 import { PrCommand } from './PrCommand.js';
 import { RebaseCommand } from './RebaseCommand.js';
 import { WatchCommand } from './WatchCommand.js';
+import { LoginCommand } from './LoginCommand.js';
 
 /**
  * CommanderFactory — creates the appropriate Commander instance for a given cmd.
@@ -70,4 +71,5 @@ const MAP = {
   pr: PrCommand,
   rebase: RebaseCommand,
   watch: WatchCommand,
+  login: LoginCommand,
 };

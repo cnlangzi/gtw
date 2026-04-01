@@ -80,24 +80,49 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 
 ### Authentication
 
-`gtw` uses the GitHub CLI (`gh`) for authentication. Make sure `gh auth login` has been run with `repo` scope:
+`gtw` supports multiple authentication methods:
+
+**Method 1: Personal Access Token (PAT) - Recommended for CI**
+
+Set the `GITHUB_TOKEN` environment variable:
 
 ```bash
-gh auth login --hostname github.com
+export GITHUB_TOKEN=ghp_your_token_here
+```
+
+**Method 2: Interactive OAuth Login**
+
+Use the device code flow for interactive login:
+
+```
+/gtw login
+```
+
+This will:
+1. Display a verification URL and user code
+2. Wait for you to authorize in your browser
+3. Cache the OAuth token in `~/.openclaw/gtw/token.json`
+4. Automatically reuse the device code if called again within the expiration window (5 minutes)
+
+**Method 3: GitHub CLI Integration**
+
+`gtw` can use `gh` CLI for authentication. Make sure `gh auth login` has been run with `repo` scope:
+
+```bash
+gh auth login --hostname github.com --scopes repo,workflow
 gh auth status
 ```
+
+**Token Priority:**
+1. `GITHUB_TOKEN` environment variable (PAT)
+2. Cached token in `~/.openclaw/gtw/token.json`
+3. `gh auth token` (validated before use)
 
 Check auth status anytime:
 
 ```
-/gtw auth
+/gtw config
 ```
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GITHUB_ACCESS_TOKEN` | No | Falls back to `gh auth token` if not set |
 
 ## Standard Workflow
 
@@ -223,9 +248,10 @@ You: /gtw review 23
 ## State Files
 
 ```
-~/.openclaw/gtw/wip.json       # Workdir, repo, pendingCommit, pendingPr, issue, branch
-~/.openclaw/gtw/token.json     # Cached gh CLI token
-~/.openclaw/gtw/config.json    # Custom AI model setting
+~/.openclaw/gtw/wip.json            # Workdir, repo, pendingCommit, pendingPr, issue, branch
+~/.openclaw/gtw/token.json          # Cached token (PAT, OAuth, or gh CLI)
+~/.openclaw/gtw/device_code.json    # Cached device code for OAuth login reuse
+~/.openclaw/gtw/config.json         # Custom AI model setting
 ```
 
 ### Two-Step Confirm Model
