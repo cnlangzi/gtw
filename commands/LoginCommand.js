@@ -33,35 +33,37 @@ function getMainSessionFile() {
 }
 
 function injectLoginDirective(sessionFile, deviceCode) {
-  // Use exec to run poll-oauth.js script directly (no subagent needed)
-  // This is more reliable than sessions_spawn which requires ACP configuration
-  const scriptPath = join(homedir(), 'code', 'gtw', 'scripts', 'poll-oauth.js');
+  // Tell the running agent to poll GitHub directly (no subprocess).
+  // This is the same pattern as FixCommand: agent does the work and replies.
+  // With /queue steer the agent processes this in the SAME turn, after the
+  // handler returns the device code — so the user sees two messages:
+  // 1. the device code (from handler return)
+  // 2. the final success/failure (from agent's reply to this injected message)
   const directive = [
-    `/queue steer`,  // ← OpenClaw directive: immediately inject into current run
+    `/queue steer`,
     ``,
-    `🚨 [URGENT] [gtw login] GitHub OAuth Poll - Execute Script NOW`,
-    ``,
-    `⚠️ ACTION REQUIRED: Execute poll-oauth.js script to poll GitHub OAuth token endpoint`,
+    `🚨 [gtw login] GitHub OAuth — poll for token and reply to this message when done`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
     `Verification URL: ${deviceCode.verification_uri}`,
-    `Expires in: ${deviceCode.expires_in} seconds`,
-    `Interval: ${deviceCode.interval} seconds`,
+    `Expires in: ${deviceCode.expires_in}s | Poll interval: ${deviceCode.interval}s`,
     ``,
-    `Execute this command immediately:`,
+    `Poll GitHub directly using fetch() — do NOT run a subprocess.`,
     ``,
-    `\`\`\`bash`,
-    `node ${scriptPath} ${deviceCode.device_code} Iv1.ae7385bb1d9e8c02 ${deviceCode.interval} ${deviceCode.expires_in}`,
-    `\`\`\``,
+    `Steps:`,
+    `1. Loop every ${deviceCode.interval}s until: access_token received OR ${deviceCode.expires_in}s elapsed`,
+    `2. POST https://github.com/login/oauth/access_token`,
+    `   Body: {client_id:"178c6fc778ccc68e1d6a",device_code:"${deviceCode.device_code}",grant_type:"urn:ietf:params:oauth:grant-type:device_code"}`,
+    `3. On access_token: save { "source":"oauth","access_token":"<token>","cached_at":<timestamp> } to ${TOKEN_FILE}`,
+    `4. GET https://api.github.com/user (Bearer token) → get login username`,
+    `5. REPLY TO THIS MESSAGE with:`,
+    `   - Success: "✅ GitHub Login Successful! User: @<username>"`,
+    `   - Expired: "❌ OAuth expired. Please run /gtw login again."`,
+    `   - Denied:  "❌ OAuth denied. Please run /gtw login again."`,
+    `   - Timeout: "❌ OAuth timed out. Please run /gtw login again."`,
     ``,
-    `The script will:`,
-    `1. Poll https://github.com/login/oauth/access_token every ${deviceCode.interval}s`,
-    `2. Stop when: access_token received, "expired_token" error, or timeout`,
-    `3. On success: Save token to ${TOKEN_FILE} + report "✅ Login successful! User: @<login>"`,
-    `4. On failure: Report "❌ Authorization expired/denied"`,
-    ``,
-    `Execute the script now. Do NOT use sessions_spawn - just run the bash command directly.`,
+    `Poll now, save token, get username, then reply to this message.`,
   ].join('\n');
 
   try {
@@ -210,21 +212,26 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       // Step 1: Request device code
       const deviceCode = await client.requestDeviceCode();
       
-      // Step 2: Save device code state (for potential re-use)
-      this.saveDeviceCodeState(deviceCode);
+      // Step 2: Build session context for callback
+      const sessionContext = {
+        channel: this.api.channel || 'feishu',
+        target: this.api.chatId || null,
+        sessionKey: this.sessionKey,
+      };
       
-      // Step 3: Return instructions to user IMMEDIATELY
+      // Step 3: Save device code state (for potential re-use)
+      this.saveDeviceCodeState(deviceCode, sessionContext);
+      
+      // Step 4: Return instructions to user IMMEDIATELY
       const display = this.createDeviceCodeDisplay(deviceCode);
       
-      // Step 4: Inject polling directive into main session
+      // Step 5: Inject polling directive into main session
       // The agent will process this and poll until token is received
       const mainSession = getMainSessionFile();
       if (mainSession) {
         const injected = injectLoginDirective(mainSession.file, deviceCode);
         if (!injected) {
-          console.error('[gtw] Warning: failed to inject login directive into session');
-        } else {
-          console.log('[gtw] Login polling directive injected into session');
+          console.error('[gtw] Warning: failed to inject login directive');
         }
       } else {
         console.error('[gtw] Warning: could not find main session file');
@@ -293,7 +300,7 @@ You can now start using gtw commands!`;
   /**
    * Save device code state for background polling
    */
-  saveDeviceCodeState(deviceCode) {
+  saveDeviceCodeState(deviceCode, sessionContext = null) {
     const stateFile = join(CONFIG_DIR, 'device_code.json');
     try {
       mkdirSync(CONFIG_DIR, { recursive: true });
@@ -304,6 +311,12 @@ You can now start using gtw commands!`;
         interval: deviceCode.interval,
         expiresAt: Date.now() + (deviceCode.expires_in * 1000),
         createdAt: new Date().toISOString(),
+        // Session context for callback notification
+        session: sessionContext ? {
+          channel: sessionContext.channel,
+          target: sessionContext.target,
+          sessionKey: sessionContext.sessionKey,
+        } : null,
       };
       writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
     } catch (e) {
