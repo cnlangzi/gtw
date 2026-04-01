@@ -34,7 +34,9 @@ function getMainSessionFile() {
 
 function injectLoginDirective(sessionFile, deviceCode) {
   const directive = [
-    `🔐 [gtw login] GitHub OAuth polling directive`,
+    `🚨 [URGENT] [gtw login] GitHub OAuth - Execute NOW`,
+    ``,
+    `⚠️ ACTION REQUIRED: Poll GitHub OAuth token endpoint IMMEDIATELY`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
