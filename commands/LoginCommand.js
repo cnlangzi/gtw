@@ -8,11 +8,11 @@ const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 /**
- * Login command - supports two-phase OAuth device flow:
- * Phase 1: /gtw login - Returns device code for user to authorize
- * Phase 2: /gtw login --check - Checks if authorization is complete
+ * Login command - supports OAuth device flow with async polling:
+ * - /gtw login: Returns device code immediately, polls in background
+ * - /gtw login --pat <token>: PAT login
  * 
- * Also supports PAT login: /gtw login --pat <token>
+ * No --check needed - async poll completes and notifies user via session message.
  */
 export class LoginCommand extends Commander {
   /**
@@ -22,6 +22,8 @@ export class LoginCommand extends Commander {
     super(context);
     this.api = context.api;
     this.config = context.config;
+    this.sessionKey = context.sessionKey;
+    this.injectMessage = context.injectMessage;
   }
 
   async execute(args) {
@@ -31,15 +33,8 @@ export class LoginCommand extends Commander {
     if (usePat) {
       return await this.loginWithPat(args);
     }
-    
-    // Check for --check flag (phase 2)
-    const checkStatus = args.includes('--check') || args.includes('-c');
-    
-    if (checkStatus) {
-      return await this.checkAuthStatus();
-    }
 
-    // Default: Start OAuth device flow (phase 1)
+    // Default: OAuth device flow with async polling
     return await this.startOAuthFlow();
   }
 
@@ -128,7 +123,8 @@ export class LoginCommand extends Commander {
   }
 
   /**
-   * Phase 1: Start OAuth device flow and return device code to user
+   * Start OAuth device flow, return device code immediately,
+   * and start async polling in background
    */
   async startOAuthFlow() {
     const client = new GitHubClient();
@@ -139,20 +135,20 @@ export class LoginCommand extends Commander {
       // Step 1: Request device code
       const deviceCode = await client.requestDeviceCode();
       
-      // Step 2: Save device code to state file for later polling
+      // Step 2: Save device code state for background polling
       this.saveDeviceCodeState(deviceCode);
       
-      // Step 3: Return instructions to user IMMEDIATELY
-      // User needs to see this before they can authorize
+      // Step 3: Return instructions to user IMMEDIATELY (non-blocking)
+      const display = this.createDeviceCodeDisplay(deviceCode);
+      
+      // Step 4: Start async polling in background (fire-and-forget)
+      // This will notify user via injectMessage when complete
+      this.startBackgroundPolling(deviceCode);
+      
       return {
         ok: true,
-        message: '请按以下步骤完成 GitHub 授权',
-        display: this.createDeviceCodeDisplay(deviceCode),
-        deviceCode: {
-          verification_uri: deviceCode.verification_uri,
-          user_code: deviceCode.user_code,
-          expires_in: deviceCode.expires_in,
-        },
+        message: '已启动 GitHub 授权流程',
+        display: display,
       };
     } catch (e) {
       return {
@@ -163,107 +159,101 @@ export class LoginCommand extends Commander {
   }
 
   /**
-   * Phase 2: Check if user has completed authorization
-   * Polls for token and returns success/failure
+   * Start background polling for OAuth token
+   * Fires and forgets - will inject message to session when complete
    */
-  async checkAuthStatus() {
-    const deviceCode = this.loadDeviceCodeState();
-    
-    if (!deviceCode) {
-      return {
-        ok: false,
-        message: '❌ 未找到进行中的授权会话\n\n请先运行：/gtw login',
-      };
-    }
-    
-    // Check if expired
-    if (Date.now() > deviceCode.expiresAt) {
+  async startBackgroundPolling(deviceCode) {
+    // Use setImmediate to avoid blocking the response
+    setImmediate(async () => {
+      const expiresAt = Date.now() + (deviceCode.expires_in * 1000);
+      const interval = deviceCode.interval * 1000;
+      
+      console.log('[gtw] Background polling started...');
+      
+      while (Date.now() < expiresAt) {
+        await new Promise(resolve => setTimeout(resolve, interval));
+        
+        try {
+          const body = new URLSearchParams({
+            client_id: GITHUB_CLIENT_ID,
+            device_code: deviceCode.device_code,
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          });
+
+          const { data } = await httpsRequest(
+            'POST',
+            GITHUB_TOKEN_URL,
+            {},
+            body.toString()
+          );
+
+          if (data.access_token) {
+            // Success!
+            const client = new GitHubClient(data.access_token);
+            const user = await client.getCurrentUser();
+            
+            // Cache token
+            this.saveToken({
+              source: 'oauth',
+              access_token: data.access_token,
+              cached_at: Date.now(),
+            });
+            
+            // Clear device code state
+            this.clearDeviceCodeState();
+            
+            // Notify user via session message
+            const successDisplay = this.createLoginSuccessDisplay(user);
+            this.injectMessage?.(this.sessionKey, successDisplay);
+            
+            console.log('[gtw] Login successful, notified user');
+            return;
+          }
+
+          if (data.error === 'authorization_pending') {
+            process.stderr.write('.');
+            continue;
+          }
+
+          if (data.error === 'slow_down') {
+            await new Promise(resolve => setTimeout(resolve, interval));
+            continue;
+          }
+
+          if (data.error === 'expired_token') {
+            this.clearDeviceCodeState();
+            this.injectMessage?.(this.sessionKey, 
+              '❌ **授权已超时**\n\n设备码有效期为 15 分钟，已过期。\n\n请重新运行：/gtw login');
+            console.log('[gtw] Device code expired');
+            return;
+          }
+
+          if (data.error === 'access_denied') {
+            this.clearDeviceCodeState();
+            this.injectMessage?.(this.sessionKey,
+              '❌ **授权已被取消**\n\n如需重新授权，请运行：/gtw login');
+            console.log('[gtw] Authorization denied');
+            return;
+          }
+
+          // Other errors
+          this.injectMessage?.(this.sessionKey,
+            `❌ **认证失败**\n\n错误：${data.error}\n\n请重试：/gtw login`);
+          console.log('[gtw] OAuth error:', data.error);
+          return;
+          
+        } catch (e) {
+          // Network errors - retry
+          console.error('[gtw] Polling network error, retrying:', e.message);
+        }
+      }
+      
+      // Timeout
       this.clearDeviceCodeState();
-      return {
-        ok: false,
-        message: '❌ 授权已超时，设备码有效期为 15 分钟\n\n请重新运行：/gtw login',
-      };
-    }
-    
-    // Poll for token (non-blocking check - just one attempt)
-    try {
-      const body = new URLSearchParams({
-        client_id: GITHUB_CLIENT_ID,
-        device_code: deviceCode.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      });
-
-      const { data } = await httpsRequest(
-        'POST',
-        GITHUB_TOKEN_URL,
-        {},
-        body.toString()
-      );
-
-      if (data.access_token) {
-        // Success! Save token and return user info
-        const client = new GitHubClient(data.access_token);
-        const user = await client.getCurrentUser();
-        
-        // Cache token
-        this.saveToken({
-          source: 'oauth',
-          access_token: data.access_token,
-          cached_at: Date.now(),
-        });
-        
-        // Clear device code state
-        this.clearDeviceCodeState();
-        
-        return {
-          ok: true,
-          message: '✅ 登录成功！',
-          user: { login: user.login, name: user.name, id: user.id },
-          display: this.createLoginSuccessDisplay(user),
-        };
-      }
-
-      if (data.error === 'authorization_pending') {
-        return {
-          ok: false,
-          message: '⏳ 等待授权中...\n\n请复制链接到浏览器并完成授权，然后再次运行：/gtw login --check',
-          polling: true,
-        };
-      }
-
-      if (data.error === 'slow_down') {
-        return {
-          ok: false,
-          message: '⏳ GitHub 请求频繁，请稍后再试\n\n等待 10 秒后运行：/gtw login --check',
-        };
-      }
-
-      if (data.error === 'expired_token') {
-        this.clearDeviceCodeState();
-        return {
-          ok: false,
-          message: '❌ 设备码已过期\n\n请重新运行：/gtw login',
-        };
-      }
-
-      if (data.error === 'access_denied') {
-        this.clearDeviceCodeState();
-        return {
-          ok: false,
-          message: '❌ 授权已被取消\n\n如需重新授权，请运行：/gtw login',
-        };
-      }
-
-      return {
-        ok: false,
-        message: `❌ 认证失败：${data.error}`,
-      };
-    } catch (e) {
-      return {
-        ok: false,
-        message: `❌ 检查状态失败：${e.message}`,
-      };
-    }
+      this.injectMessage?.(this.sessionKey,
+        '❌ **授权已超时**\n\n设备码有效期为 15 分钟。\n\n请重新运行：/gtw login');
+      console.log('[gtw] Polling timeout');
+    });
   }
 
   /**
