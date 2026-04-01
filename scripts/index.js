@@ -88,7 +88,17 @@ function postForm(urlStr, data) {
 
 function getWip() { return readJSON(wip_FILE) || {}; }
 function saveWip(p) { writeJSON(wip_FILE, p); }
-function clearWip() { if (fs.existsSync(wip_FILE)) fs.unlinkSync(wip_FILE); }
+/**
+ * Clear WIP pending fields but preserve workdir/repo/createdAt for continuity.
+ * This matches the ESM utils/wip.js behavior.
+ */
+function clearWip() {
+  if (fs.existsSync(wip_FILE)) {
+    const wip = getWip();
+    const { workdir, repo, createdAt } = wip;
+    writeJSON(wip_FILE, { workdir, repo, createdAt });
+  }
+}
 
 function git(cmd, cwd) {
   try { return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim(); }
