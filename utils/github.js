@@ -1,11 +1,11 @@
 /**
  * GitHub API Client
  * Encapsulates GitHub API calls including OAuth device flow.
- * Uses GitHub Copilot's official OAuth app credentials.
+ * Uses GitHub CLI's official OAuth app credentials.
  * 
- * GitHub Copilot OAuth App:
- * - Client ID: Iv1.b507a08c87ecfe98
- * - Reference: github-copilot project
+ * GitHub CLI OAuth App:
+ * - Client ID: 178c6fc778ccc68e1d6a
+ * - Reference: https://github.com/cli/cli
  * 
  * References:
  * - Device flow: https://docs.github.com/en/developers/apps/building-oauth-apps/authorizing-oauth-apps#device-flow
@@ -13,8 +13,8 @@
 
 import https from 'https';
 
-// GitHub Copilot's official OAuth app
-export const GITHUB_CLIENT_ID = 'Iv1.b507a08c87ecfe98';
+// GitHub CLI's official OAuth app
+export const GITHUB_CLIENT_ID = '178c6fc778ccc68e1d6a';
 export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const GITHUB_API_BASE = 'https://api.github.com';
