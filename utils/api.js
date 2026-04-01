@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
+import { GitHubClient } from './github.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
@@ -126,16 +127,6 @@ export async function getValidToken(envToken) {
  * @returns {Promise<boolean>} - True if token is valid
  */
 export async function validateToken(token) {
-  try {
-    await apiRequest('GET', '/user', token);
-    return true;
-  } catch (e) {
-    // 401 means invalid/expired token
-    if (e.message.includes('401')) {
-      return false;
-    }
-    // Other errors (network, etc.) - assume token might be valid
-    console.error('[gtw] Token validation error:', e.message);
-    return true;
-  }
+  const client = new GitHubClient(token);
+  return await client.validateToken();
 }
