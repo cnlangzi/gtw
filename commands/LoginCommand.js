@@ -10,8 +10,10 @@ const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 /**
  * Login command - supports three modes:
  * 1. PAT (--pat flag or GITHUB_TOKEN env var)
- * 2. GitHub OAuth device flow (uses gh CLI's official client_id)
- * 3. gh CLI token reuse (if already logged in)
+ * 2. GitHub OAuth device flow (pure HTTPS, works in chat environments like Feishu)
+ * 3. gh CLI token reuse (optional fallback)
+ * 
+ * Designed for chat environments - no browser launching, all info returned to session.
  */
 export class LoginCommand extends Commander {
   /**
@@ -31,7 +33,7 @@ export class LoginCommand extends Commander {
       return await this.loginWithPat(args);
     }
 
-    // Default: OAuth device flow or gh CLI reuse
+    // Default: OAuth device flow (pure HTTPS, no browser launch)
     return await this.loginWithOAuth();
   }
 
@@ -60,11 +62,13 @@ export class LoginCommand extends Commander {
           access_token: providedToken,
           cached_at: Date.now(),
         });
+        const user = await client.getCurrentUser();
         return {
           ok: true,
           message: '✅ 登录成功！PAT 已验证并缓存',
-          user: { login: (await client.getCurrentUser()).login },
+          user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
+          display: this.createLoginSuccessDisplay(user),
         };
       } else {
         return {
@@ -87,11 +91,13 @@ export class LoginCommand extends Commander {
           access_token: envToken,
           cached_at: Date.now(),
         });
+        const user = await client.getCurrentUser();
         return {
           ok: true,
           message: '✅ 登录成功！PAT (GITHUB_TOKEN) 已验证并缓存',
-          user: { login: (await client.getCurrentUser()).login },
+          user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
+          display: this.createLoginSuccessDisplay(user),
         };
       } else {
         return {
@@ -116,12 +122,13 @@ export class LoginCommand extends Commander {
   }
 
   /**
-   * Login using OAuth device flow (or reuse gh CLI session)
+   * Login using OAuth device flow (pure HTTPS, works in chat environments)
+   * Returns verification URI and user code for user to complete in browser
    */
   async loginWithOAuth() {
     const client = new GitHubClient();
     
-    // Check if gh CLI is installed and logged in
+    // Optional: Check if gh CLI is already logged in (convenience for local dev)
     if (isGhCliInstalled() && isGhCliLoggedIn()) {
       console.log('检测到 gh CLI 已登录，复用现有会话...\n');
       try {
@@ -139,8 +146,9 @@ export class LoginCommand extends Commander {
         return {
           ok: true,
           message: '✅ 登录成功！Token 已从 gh CLI 获取并缓存',
-          user: { login: user.login, name: user.name },
+          user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'gh-cli', cached_at: Date.now() },
+          display: this.createLoginSuccessDisplay(user),
         };
       } catch (e) {
         // Fall through to device flow if gh CLI token fails
@@ -148,29 +156,51 @@ export class LoginCommand extends Commander {
       }
     }
     
-    // Use OAuth device flow
+    // Use OAuth device flow (pure HTTPS)
     try {
       console.log('开始 GitHub OAuth 设备码认证...\n');
-      const result = await client.loginWithDeviceFlow();
       
-      // Cache token
+      // Step 1: Request device code
+      const deviceCode = await client.requestDeviceCode();
+      
+      // Step 2: Return instructions to user (for chat environment)
+      // User will manually open browser and enter code
+      const display = this.createDeviceCodeDisplay(deviceCode);
+      
+      // Step 3: Poll for token (with timeout)
+      console.log('等待用户授权...');
+      const expiresAt = Date.now() + (deviceCode.expires_in * 1000);
+      
+      // Poll in background - in chat environment, user might take time
+      const token = await this.pollWithProgress(
+        deviceCode.device_code,
+        deviceCode.interval,
+        expiresAt
+      );
+      
+      // Step 4: Set token and get user info
+      client.setToken(token);
+      const user = await client.getCurrentUser();
+      
+      // Step 5: Cache token
       this.saveToken({
         source: 'oauth',
-        access_token: result.token,
+        access_token: token,
         cached_at: Date.now(),
       });
       
       return {
         ok: true,
         message: '✅ 登录成功！',
-        user: result.user,
+        user: { login: user.login, name: user.name, id: user.id },
         token: { source: 'oauth', cached_at: Date.now() },
+        display: this.createLoginSuccessDisplay(user),
       };
     } catch (e) {
       if (e.message.includes('expired')) {
         return {
           ok: false,
-          message: '❌ 认证超时，请重试',
+          message: '❌ 认证超时，请重试\n\n提示：设备码有效期为 15 分钟，请在有效期内完成授权。',
         };
       }
       if (e.message.includes('denied')) {
@@ -184,8 +214,104 @@ export class LoginCommand extends Commander {
   }
 
   /**
+   * Poll for token with progress indication
+   */
+  async pollWithProgress(deviceCode, interval, expiresAt) {
+    // Use the same constants from github.js
+    const GITHUB_CLIENT_ID = '178c6fc778ccc68e1d6a';
+    const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+    
+    const { httpsRequest } = await import('../utils/github.js');
+    
+    while (Date.now() < expiresAt) {
+      await new Promise(resolve => setTimeout(resolve, interval * 1000));
+      
+      try {
+        const body = new URLSearchParams({
+          client_id: GITHUB_CLIENT_ID,
+          device_code: deviceCode,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        });
+
+        const { status, data } = await httpsRequest(
+          'POST',
+          GITHUB_TOKEN_URL,
+          {},
+          body.toString()
+        );
+
+        if (data.access_token) {
+          return data.access_token;
+        }
+
+        if (data.error === 'authorization_pending') {
+          // Still waiting - show progress
+          process.stderr.write('.');
+          continue;
+        }
+
+        if (data.error === 'slow_down') {
+          await new Promise(resolve => setTimeout(resolve, interval * 1000));
+          continue;
+        }
+
+        if (data.error === 'expired_token') {
+          throw new Error('Device code expired');
+        }
+
+        if (data.error === 'access_denied') {
+          throw new Error('Authorization denied');
+        }
+
+        throw new Error(`OAuth error: ${data.error}`);
+      } catch (e) {
+        if (e.message.includes('expired') || e.message.includes('denied')) {
+          throw e;
+        }
+        // Network error - retry
+        console.error('网络错误，重试中...');
+      }
+    }
+    
+    throw new Error('Device code expired');
+  }
+
+  /**
+   * Create display message for device code (chat-friendly)
+   */
+  createDeviceCodeDisplay(deviceCode) {
+    return `🔐 **GitHub OAuth 登录**
+
+请按以下步骤完成认证：
+
+1️⃣ **打开链接**
+${deviceCode.verification_uri}
+
+2️⃣ **输入验证码**
+\`${deviceCode.user_code}\`
+
+3️⃣ **等待授权完成**
+系统会自动检测授权状态，有效期 ${Math.floor(deviceCode.expires_in / 60)} 分钟
+
+---
+💡 提示：复制链接到浏览器打开，然后在 GitHub 页面输入验证码并授权。`;
+  }
+
+  /**
+   * Create display message for successful login
+   */
+  createLoginSuccessDisplay(user) {
+    return `✅ **登录成功**
+
+👤 **用户**: @${user.login}${user.name ? ` (${user.name})` : ''}
+🆔 **用户 ID**: ${user.id}
+🔐 **认证方式**: OAuth 设备码
+
+现在可以开始使用 gtw 命令了！`;
+  }
+
+  /**
    * Save token to token.json
-   * @param {object} tokenData
    */
   saveToken(tokenData) {
     try {
