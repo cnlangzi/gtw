@@ -29,7 +29,7 @@ export const GITHUB_API_BASE = 'https://api.github.com';
  * @param {string|null} body - Request body (for POST)
  * @returns {Promise<object>} - Parsed JSON response
  */
-function httpsRequest(method, url, headers = {}, body = null) {
+export function httpsRequest(method, url, headers = {}, body = null) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const options = {
