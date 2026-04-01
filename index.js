@@ -30,16 +30,14 @@ Commands:
   show #<id> [repo]  Show issue details
   poll [issue|pr]    Poll open issues/PRs
   model [model-id]  Set LLM model for draft generation
-  auth               Show auth status (uses gh CLI)
-  login              Interactive OAuth login (device code flow)
-  config             Show current config
+  login              OAuth login or PAT login (--pat)
 
 Workflow: /gtw on -> /gtw new -> /gtw confirm
 
 Auth:
-  - Set GITHUB_TOKEN env var for PAT (recommended for CI)
-  - Or run /gtw login for interactive OAuth
-  - Or use gh CLI: gh auth login (token cached automatically)`;
+  - /gtw login           # OAuth device flow (non-blocking)
+  - /gtw login --pat xxx # Personal Access Token
+  - GITHUB_TOKEN env var # CI environments`;
 
 const gtw = definePluginEntry({
   id: 'gtw',
