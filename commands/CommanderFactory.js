@@ -10,7 +10,6 @@ import { ShowCommand } from './ShowCommand.js';
 import { PollCommand } from './PollCommand.js';
 import { ConfigCommand } from './ConfigCommand.js';
 import { ModelCommand } from './ModelCommand.js';
-import { AuthCommand } from './AuthCommand.js';
 import { UpdateCommand } from './UpdateCommand.js';
 import { PrCommand } from './PrCommand.js';
 import { RebaseCommand } from './RebaseCommand.js';
@@ -66,7 +65,6 @@ const MAP = {
   poll: PollCommand,
   config: ConfigCommand,
   model: ModelCommand,
-  auth: AuthCommand,
   update: UpdateCommand,
   pr: PrCommand,
   rebase: RebaseCommand,
