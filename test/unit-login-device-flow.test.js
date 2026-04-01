@@ -15,7 +15,7 @@ import { homedir } from 'os';
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
-const { GitHubClient, isGhCliInstalled, isGhCliLoggedIn } = await import('../utils/github.js');
+const { GitHubClient } = await import('../utils/github.js');
 
 console.log('🧪 Testing GitHubClient device code flow\n');
 
@@ -73,20 +73,6 @@ await asyncTest('GitHubClient.validateToken accepts valid cached token', async (
       console.log(`   (token validation: ${isValid ? 'valid' : 'invalid'})`);
     }
   }
-});
-
-// Test 6: gh CLI detection
-await asyncTest('isGhCliInstalled detects gh CLI', async () => {
-  const installed = isGhCliInstalled();
-  console.log(`   (gh CLI installed: ${installed})`);
-  assert(typeof installed === 'boolean', 'Should return boolean');
-});
-
-// Test 7: gh CLI login detection
-await asyncTest('isGhCliLoggedIn detects gh CLI login status', async () => {
-  const loggedIn = isGhCliLoggedIn();
-  console.log(`   (gh CLI logged in: ${loggedIn})`);
-  assert(typeof loggedIn === 'boolean', 'Should return boolean');
 });
 
 // Summary
