@@ -1,120 +1,461 @@
 import { Commander } from './Commander.js';
-import { getWip } from '../utils/wip.js';
+import { getWip, saveWip } from '../utils/wip.js';
+import { getConfig } from '../utils/config.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
 
-const REVIEW_ITEMS = [
-  'Does the implementation match the Issue requirements?',
-  'Are there any out-of-scope changes?',
-  'Are there any missing pieces?',
-];
+const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
+const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
+const DEFAULT_MAX_ROUNDS = 5;
+
+// ---------------------------------------------------------------------------
+// Atomic label operations
+// ---------------------------------------------------------------------------
+
+/**
+ * Atomically set a gtw label on a PR/issue: removes all other gtw/* labels first.
+ * Returns { ok: true } on success.
+ * Throws on failure (caller should abort).
+ */
+async function setGtwLabel(issueNumber, token, repo, targetLabel, isPR = true) {
+  if (!GTW_LABELS.includes(targetLabel)) {
+    throw new Error(`Invalid gtw label: ${targetLabel}. Must be one of: ${GTW_LABELS.join(', ')}`);
+  }
+
+  const endpointBase = isPR ? `/repos/${repo}/pulls/${issueNumber}` : `/repos/${repo}/issues/${issueNumber}`;
+
+  // Fetch current labels on the PR/issue
+  const currentLabels = await apiRequest('GET', `${endpointBase}/labels`, token);
+
+  // Identify which gtw/* labels are currently applied (excluding target)
+  const toRemove = currentLabels
+    .map((l) => l.name)
+    .filter((name) => GTW_LABELS.includes(name) && name !== targetLabel);
+
+  // Remove other gtw labels first
+  for (const label of toRemove) {
+    try {
+      await apiRequest('DELETE', `${endpointBase}/labels/${encodeURIComponent(label)}`, token);
+    } catch (e) {
+      // If removal fails (e.g. 404 race condition), abort — do not continue
+      if (e.message.includes('404') || e.message.includes('Label not found')) {
+        // Label already gone, that's fine
+      } else {
+        throw new Error(`Failed to remove label "${label}" from #${issueNumber}: ${e.message}. Aborting.`);
+      }
+    }
+  }
+
+  // Check if target label is already present (no-op for that label)
+  const alreadyHas = currentLabels.some((l) => l.name === targetLabel);
+  if (!alreadyHas) {
+    try {
+      await apiRequest('POST', `${endpointBase}/labels`, token, {
+        labels: [targetLabel],
+      });
+    } catch (e) {
+      throw new Error(`Failed to set label "${targetLabel}" on #${issueNumber}: ${e.message}. Aborting.`);
+    }
+  }
+}
+
+/**
+ * Fetch PR details including diff summary and linked issue.
+ */
+async function fetchPrDetails(prNum, token, repo) {
+  const [pr, files] = await Promise.all([
+    apiRequest('GET', `/repos/${repo}/pulls/${prNum}`, token),
+    apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token),
+  ]);
+
+  let linkedIssue = { number: null, title: '', body: '' };
+  const match = pr.body?.match(/(?:closes|fixes|resolves)\s+#(\d+)/i);
+  if (match) {
+    try {
+      const li = await apiRequest('GET', `/repos/${repo}/issues/${match[1]}`, token);
+      linkedIssue = { number: parseInt(match[1]), title: li.title || '', body: li.body || '' };
+    } catch (e) {
+      // Linked issue not accessible, that's ok
+    }
+  }
+
+  return {
+    pr: {
+      number: pr.number,
+      title: pr.title,
+      body: pr.body || '',
+      url: pr.html_url,
+      user: pr.user?.login,
+      updatedAt: pr.updated_at,
+      state: pr.state,
+      labels: pr.labels || [],
+    },
+    files: files.map((f) => ({
+      filename: f.filename,
+      additions: f.additions,
+      deletions: f.deletions,
+      patch: f.patch || '',
+    })),
+    linkedIssue,
+  };
+}
+
+/**
+ * Find existing checklist comment by this agent on a PR.
+ * Returns the comment object or null.
+ */
+async function findChecklistComment(prNum, token, repo, myLogin) {
+  const comments = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/comments`, token);
+  return (
+    comments.find(
+      (c) =>
+        c.user?.login === myLogin && c.body?.includes('## Review [Round'),
+    ) || null
+  );
+}
+
+/**
+ * Extract checked/unchecked state from existing checklist comment.
+ * Returns array of { text, checked }.
+ */
+function parseChecklistFromComment(body) {
+  const result = [];
+  for (const line of body.split('\n')) {
+    const m = line.match(/^\s*-\s*\[([ x])\]\s*(.+)/);
+    if (m) {
+      result.push({ text: m[2].trim(), checked: m[1] === 'x' });
+    }
+  }
+  return result;
+}
+
+/**
+ * Merge previous checklist state with current canonical items.
+ * Returns array of { text, checked } for the re-review.
+ * Removes checkboxes that were resolved (checked in previous, not in current canonical).
+ * Keeps checkboxes that are still unresolved (unchecked in previous, or not in canonical).
+ */
+function mergeChecklistState(prevItems, canonicalItems) {
+  const canonicalSet = new Set(canonicalItems);
+  // Keep checked state for items still in canonical list
+  return canonicalItems.map((text) => {
+    const prev = prevItems.find((p) => p.text === text);
+    return { text, checked: prev ? prev.checked : false };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ReviewCommand
+// ---------------------------------------------------------------------------
 
 export class ReviewCommand extends Commander {
+  constructor(context) {
+    super(context);
+  }
+
+  /**
+   * /gtw review           — claim earliest gtw/ready PR from watch list
+   * /gtw review #<pr>    — review specific PR in current repo (from wip.json)
+   */
   async execute(args) {
     const token = await getValidToken();
     const wip = getWip();
-    const verdictArg = args.find((a) => a === 'approved' || a === 'changes') || null;
-    const repo = wip.repo || args.find((a) => String(a).includes('/')) || '';
+    const config = getConfig();
+    const maxRounds = config.maxReviewRounds || DEFAULT_MAX_ROUNDS;
 
-    if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
-
-    const myLogin = (await apiRequest('GET', '/user', token)).login;
-
-    // Parse PR number
+    // Parse optional PR number argument
     let targetPrNum = null;
     for (const a of args) {
       const m = String(a).match(/^#?(\d+)$/);
-      if (m) { targetPrNum = parseInt(m[1]); break; }
+      if (m) {
+        targetPrNum = parseInt(m[1]);
+        break;
+      }
     }
 
-    let targetPr = null;
+    const myLogin = (await apiRequest('GET', '/user', token)).login;
+
+    // Determine target repo and PR
     if (targetPrNum) {
-      try {
-        targetPr = await apiRequest('GET', `/repos/${repo}/pulls/${targetPrNum}`, token);
-      } catch (e) {
-        throw new Error(`PR #${targetPrNum} not found`);
+      // /gtw review #<pr> — use repo from wip.json
+      const repo = wip.repo;
+      if (!repo) {
+        return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
       }
+      return this._reviewSpecificPr(targetPrNum, repo, token, myLogin, wip, maxRounds);
     } else {
-      const params = new URLSearchParams({ state: 'open', per_page: '50', sort: 'created', direction: 'asc' });
-      const prs = await apiRequest('GET', `/repos/${repo}/pulls?${params}`, token);
-      for (const pr of prs) {
-        if (pr.user?.login === myLogin) continue;
-        const comments = await apiRequest('GET', `/repos/${repo}/issues/${pr.number}/comments`, token);
-        if (!comments.some((c) => c.body?.includes('eyes'))) { targetPr = pr; break; }
-      }
+      // /gtw review — scan watch list for gtw/ready PRs
+      return this._reviewNextFromWatchList(token, myLogin, wip, maxRounds);
     }
+  }
 
-    if (!targetPr) {
-      return { ok: true, message: 'No unclaimed PRs found', repo, display: `🔍 No unclaimed PRs found` };
-    }
+  /**
+   * Scan watch list and claim the earliest gtw/ready PR.
+   */
+  async _reviewNextFromWatchList(token, myLogin, wip, maxRounds) {
+    const config = getConfig();
+    const watchList = config.watchList || [];
 
-    const prNum = targetPr.number;
-
-    // Get linked issue
-    let linkedIssue = { title: '', body: '' };
-    const match = targetPr.body?.match(/(?:closes|fixes|cloze)s?\s+#(\d+)/i);
-    if (match) {
-      try {
-        const li = await apiRequest('GET', `/repos/${repo}/issues/${match[1]}`, token);
-        linkedIssue = { title: li.title || '', body: li.body || '' };
-      } catch (e) {}
-    }
-
-    const allComments = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/comments`, token);
-    const myPrevComments = allComments.filter((c) => c.user?.login === myLogin);
-
-    // Second call with verdict
-    if (verdictArg) {
-      const emoji = verdictArg;
-      const reviewState = verdictArg === 'approved' ? 'APPROVED' : 'CHANGES_REQUESTED';
-      for (const c of myPrevComments) {
-        await apiRequest('DELETE', `/repos/${repo}/issues/comments/${c.id}`, token).catch(() => {});
-      }
-      await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
-        body: `${emoji} **Review complete** by @${myLogin} — ${verdictArg === 'approved' ? 'approves' : 'requests changes'}`,
-      });
-      await apiRequest('POST', `/repos/${repo}/pulls/${prNum}/reviews`, token, { body: emoji, event: reviewState });
+    if (watchList.length === 0) {
       return {
         ok: true,
-        verdict: verdictArg,
-        pr: { number: prNum, title: targetPr.title, url: targetPr.html_url },
-        repo,
-        message: `${emoji} Review complete for PR #${prNum} — claim released`,
-        display:
-          verdictArg === 'approved'
-            ? `✅ PR #${prNum} approved\n\n${targetPr.title}\n\nClaim released, ready to merge`
-            : `❌ PR #${prNum} changes requested\n\n${targetPr.title}\n\nClaim released, developer can submit revisions`,
+        message: '🔍 Watch list is empty. Add repos with /gtw watch add <owner>/<repo>',
+        display: '🔍 Watch list is empty.\n\nAdd repos to watch:\n  /gtw watch add <owner>/<repo>',
       };
     }
 
-    // First call — claim
-    const prevChecked = {};
-    for (const c of myPrevComments) {
-      for (const line of c.body.split('\n')) {
-        const m = line.match(/^\s*-\s*\[([ x])\]\s*(.+)/);
-        if (m) prevChecked[m[2].trim()] = m[1] === 'x';
+    // Find all gtw/ready PRs across watched repos
+    const candidatePrs = [];
+    for (const repo of watchList) {
+      try {
+        const params = new URLSearchParams({ state: 'open', per_page: 100, sort: 'updated', direction: 'asc' });
+        const prs = await apiRequest('GET', `/repos/${repo}/pulls?${params}`, token);
+
+        for (const pr of prs) {
+          if (pr.user?.login === myLogin) continue; // skip own PRs
+          // Check if PR has gtw/ready label
+          const labels = pr.labels || [];
+          if (labels.some((l) => l.name === 'gtw/ready')) {
+            candidatePrs.push({
+              repo,
+              pr: {
+                number: pr.number,
+                title: pr.title,
+                url: pr.html_url,
+                user: pr.user?.login,
+                updatedAt: pr.updated_at,
+              },
+            });
+          }
+        }
+      } catch (e) {
+        // Skip repos we don't have access to
+        console.error(`[ReviewCommand] Failed to fetch PRs from ${repo}: ${e.message}`);
       }
     }
-    const checklistItems = REVIEW_ITEMS.map((item) => ({ text: item, checked: !!prevChecked[item] }));
-    const checklistLines = checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
 
-    await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
-      body: `eyes **Review claimed** by @${myLogin}\n\n_Emoji: eyes = in progress, approved = done, changes = needs changes_\n\n## Review Checklist\n\n${checklistLines}\n\n---\n_Agent: review the diff and linked issue, then call:\n  /gtw review #${prNum} approved   # or changes_`,
-    });
+    if (candidatePrs.length === 0) {
+      return {
+        ok: true,
+        message: '🔍 No PRs with gtw/ready label found in watched repos',
+        display: `🔍 No gtw/ready PRs found\n\nWatched repos: ${watchList.join(', ') || '(none)'}\n\nNo PRs labeled gtw/ready are awaiting review.`,
+      };
+    }
 
-    const files = await apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token);
-    const filesSummary = files.map((f) => `  - ${f.filename}: +${f.additions} -${f.deletions}`).join('\n');
+    // Sort by updated_at ascending (oldest first)
+    candidatePrs.sort((a, b) => new Date(a.pr.updatedAt) - new Date(b.pr.updatedAt));
+
+    // Pick the earliest
+    const chosen = candidatePrs[0];
+    return this._claimAndReviewPr(chosen.repo, chosen.pr.number, token, myLogin, wip, maxRounds);
+  }
+
+  /**
+   * Review a specific PR by number in a given repo.
+   */
+  async _reviewSpecificPr(prNum, repo, token, myLogin, wip, maxRounds) {
+    // Verify PR exists
+    let prData;
+    try {
+      prData = await fetchPrDetails(prNum, token, repo);
+    } catch (e) {
+      if (e.message.includes('404')) {
+        return { ok: false, message: `⚠️ PR #${prNum} not found in ${repo}` };
+      }
+      throw e;
+    }
+
+    return this._claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData);
+  }
+
+  /**
+   * Core logic: claim PR (set gtw/wip), create/update checklist, track round in wip.
+   * If checklist is empty (all items resolved), delete checklist, post approved comment, set gtw/lgtm.
+   * If round exceeds max, set gtw/stuck.
+   */
+  async _claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData = null) {
+    // Fetch fresh PR data if not provided
+    if (!prData) {
+      prData = await fetchPrDetails(prNum, token, repo);
+    }
+
+    // Read current wip state for this PR (if any)
+    const currentWip = getWip();
+    const reviewState = currentWip.reviewState || {};
+    const thisPrKey = `${repo}#${prNum}`;
+    const existingState = reviewState[thisPrKey] || {};
+
+    // Check if already stuck — do not re-review
+    const labels = prData.pr.labels || [];
+    if (labels.some((l) => l.name === 'gtw/stuck')) {
+      return {
+        ok: true,
+        message: `⏸ PR #${prNum} is stuck (exceeded max review rounds). Manual intervention required.`,
+        display: `⏸ PR #${prNum} is stuck\n\n${prData.pr.title}\n\nExceeded ${maxRounds} review rounds without resolution.\n\nPlease review manually and set gtw/lgtm or gtw/revise as appropriate.`,
+      };
+    }
+
+    // Atomically claim the PR: remove other gtw labels, set gtw/wip
+    try {
+      await setGtwLabel(prNum, token, repo, 'gtw/wip', true);
+    } catch (e) {
+      return { ok: false, message: `⚠️ ${e.message}` };
+    }
+
+    // Find existing checklist comment
+    const existingComment = await findChecklistComment(prNum, token, repo, myLogin);
+
+    let round = 1;
+    let checklistItems = CHECKLIST_ITEMS.map((text) => ({ text, checked: false }));
+    let commentId = null;
+
+    if (existingComment) {
+      // Parse round from title "## Review [Round N]"
+      const roundMatch = existingComment.body.match(/## Review \[Round (\d+)\]/);
+      round = roundMatch ? parseInt(roundMatch[1]) + 1 : 2;
+
+      // Parse previous checklist state
+      const prevItems = parseChecklistFromComment(existingComment.body);
+
+      // Merge: keep unresolved items, drop resolved ones
+      checklistItems = mergeChecklistState(prevItems, CHECKLIST_ITEMS);
+      commentId = existingComment.id;
+    }
+
+    // Check if max rounds exceeded
+    if (round > maxRounds) {
+      try {
+        await setGtwLabel(prNum, token, repo, 'gtw/stuck', true);
+      } catch (e) {
+        return { ok: false, message: `⚠️ ${e.message}` };
+      }
+
+      // Update wip: clear this PR's review state
+      const updatedWip = { ...currentWip };
+      const newReviewState = { ...(updatedWip.reviewState || {}) };
+      delete newReviewState[thisPrKey];
+      updatedWip.reviewState = newReviewState;
+      updatedWip.updatedAt = new Date().toISOString();
+      saveWip(updatedWip);
+
+      return {
+        ok: true,
+        stuck: true,
+        repo,
+        pr: prData.pr,
+        round,
+        maxRounds,
+        message: `⚠️ PR #${prNum} is stuck — max rounds (${maxRounds}) exceeded`,
+        display: `⚠️ PR #${prNum} stuck — max rounds exceeded\n\n${prData.pr.title}\n\nRound ${round} reached maximum of ${maxRounds}.\n\nManual intervention required.`,
+      };
+    }
+
+    // If all checklist items are checked (resolved), approve and finish
+    const allResolved = checklistItems.length > 0 && checklistItems.every((i) => i.checked);
+    if (allResolved && existingComment) {
+      // Delete checklist comment
+      try {
+        await apiRequest('DELETE', `/repos/${repo}/issues/comments/${existingComment.id}`, token);
+      } catch (e) {
+        console.error(`[ReviewCommand] Failed to delete checklist comment: ${e.message}`);
+      }
+
+      // Post approved comment
+      await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
+        body: `✅ **Approved** — all checklist items resolved.\n\nReviewed by @${myLogin}`,
+      });
+
+      // Set gtw/lgtm
+      try {
+        await setGtwLabel(prNum, token, repo, 'gtw/lgtm', true);
+      } catch (e) {
+        return { ok: false, message: `⚠️ ${e.message}` };
+      }
+
+      // Clear wip review state for this PR
+      const updatedWip = { ...currentWip };
+      const newReviewState = { ...(updatedWip.reviewState || {}) };
+      delete newReviewState[thisPrKey];
+      updatedWip.reviewState = newReviewState;
+      updatedWip.updatedAt = new Date().toISOString();
+      saveWip(updatedWip);
+
+      return {
+        ok: true,
+        approved: true,
+        repo,
+        pr: prData.pr,
+        round,
+        message: `✅ PR #${prNum} approved — all checklist items resolved`,
+        display: `✅ PR #${prNum} approved\n\n${prData.pr.title}\n\nAll checklist items resolved. Ready to merge.`,
+      };
+    }
+
+    // Build and post/update checklist comment
+    const checkboxes = checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`).join('\n');
+    const commentBody = `## Review [Round ${round}]\n\n${checkboxes}\n\n---\n_Agent: review the diff and linked issue requirements. Check items as resolved or leave unchecked to flag issues._\n\n_To advance: run /gtw review #${prNum} again after resolving items._`;
+
+    let comment;
+    if (commentId) {
+      // Update existing checklist comment
+      comment = await apiRequest('PATCH', `/repos/${repo}/issues/comments/${commentId}`, token, { body: commentBody });
+    } else {
+      // Create new checklist comment
+      comment = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, { body: commentBody });
+      commentId = comment.id;
+    }
+
+    // Update wip.json with review state for this PR
+    const updatedWip = {
+      ...currentWip,
+      reviewState: {
+        ...(currentWip.reviewState || {}),
+        [thisPrKey]: {
+          repo,
+          prNumber: prNum,
+          round,
+          checklistCommentId: commentId,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    saveWip(updatedWip);
+
+    // Build diff summary
+    const filesSummary = prData.files
+      .map((f) => `  - ${f.filename}: +${f.additions} -${f.deletions}`)
+      .join('\n');
+
+    const linkedIssueLine =
+      prData.linkedIssue.number
+        ? `Linked Issue: #${prData.linkedIssue.number} — ${prData.linkedIssue.title || 'none'}`
+        : 'Linked Issue: none';
 
     return {
       ok: true,
       claimed: true,
-      pr: { number: prNum, title: targetPr.title, url: targetPr.html_url, user: targetPr.user?.login },
-      linkedIssue,
-      files: files.map((f) => ({ filename: f.filename, additions: f.additions, deletions: f.deletions, patch: f.patch })),
-      checklist: checklistItems,
-      hasPrevReview: myPrevComments.length > 0,
       repo,
-      verdictNeeded: `/gtw review #${prNum} approved   # or changes`,
-      message: `eyes Claimed PR #${prNum}: ${targetPr.title}\n\nLinked Issue: ${linkedIssue.title || 'none'}\n\nFiles changed (${files.length}):\n${filesSummary}\n\nReview the diff against the issue requirements, then call:\n/gtw review #${prNum} approved   # or changes`,
+      pr: prData.pr,
+      linkedIssue: prData.linkedIssue,
+      files: prData.files,
+      checklist: checklistItems,
+      round,
+      maxRounds,
+      message: `eyes Claimed PR #${prNum}: ${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nRound ${round}/${maxRounds} checklist active.\nReview the diff, then run /gtw review #${prNum} again after resolving items.`,
+      display: [
+        `eyes Claimed PR #${prNum}: ${prData.pr.title}`,
+        ``,
+        linkedIssueLine,
+        ``,
+        `Files changed (${prData.files.length}):`,
+        filesSummary || '(none)',
+        ``,
+        `Review [Round ${round}/${maxRounds}]`,
+        ...checklistItems.map((i) => `  - [${i.checked ? 'x' : ' '}] ${i.text}`),
+        ``,
+        `Review the diff against the issue requirements.`,
+        `Run /gtw review #${prNum} again after resolving items.`,
+      ].join('\n'),
     };
   }
 }

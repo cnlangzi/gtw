@@ -63,8 +63,11 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 ### Review
 
 ```
-/gtw review             Claim earliest unclaimed PR (adds eyes comment with review checklist)
-/gtw review #<pr> approved   # or changes   Finalize review — labels PR, posts verdict comment, releases claim
+/gtw review             Claim earliest PR with gtw/ready label from watch list
+/gtw review #<pr>       Claim/review specific PR in current repo
+/gtw watch add <owner>/<repo>   Add repo to watch list
+/gtw watch rm <owner>/<repo>    Remove repo from watch list
+/gtw watch list         Show watched repos
 ```
 
 ### Config
@@ -178,23 +181,44 @@ You: /gtw confirm
 ### Review Workflow
 
 ```
+You: /gtw watch add owner/repo
+→ ✅ Now watching: owner/repo
+
 You: /gtw review
 → eyes Claimed PR #23: fix: handle null pointer
-   Linked Issue: handle null pointer in auth
+   Linked Issue: #12 — handle null pointer in auth
    Files changed (3):
      - src/auth.js: +10 -2
      - tests/auth.test.js: +5 -0
-   Review the diff against the issue requirements, then call:
-   /gtw review #23 approved   # or changes
+   Review [Round 1/5]
+     - [ ] Destructive
+     - [ ] Out-of-scope
+   Review the diff against the issue requirements.
+   Run /gtw review #23 again after resolving items.
 
-You: /gtw review #23 approved
-→ ✅ PR #23 approved
-   Claim released, ready to merge
+You: /gtw review #23
+→ eyes PR #23 re-review (Round 2/5)
+   [Items still unresolved kept as unchecked]
+   Review the diff and update checklist.
 ```
 
-**Two-call review verdict flow:**
-1. First call (`/gtw review` or `/gtw review #<pr>`): Claims the PR by adding an `eyes` comment with a review checklist. The PR is considered "in progress".
-2. Second call (with `approved` or `changes`): Finalizes the review — deletes the eyes comment, posts the verdict emoji, submits the GitHub review with the appropriate state (APPROVED or CHANGES_REQUESTED), and releases the claim.
+**Review protocol:**
+- `/gtw review` (no-arg): Scans watch list for PRs labeled `gtw/ready`, picks the oldest by `updated_at`, claims it (`gtw/wip`), creates a Round 1 checklist.
+- `/gtw review #<pr>`: Reviews specific PR in the current repo (from `wip.json`). If a checklist exists, increments the round and updates the same comment.
+- Checklist items (always two): **Destructive** and **Out-of-scope** — the canonical checks to prevent AI-caused unplanned or out-of-scope modifications.
+- Each invocation increments the round number. Unresolved items remain unchecked.
+- When all checkboxes are resolved (checked): checklist comment is deleted, approved comment posted, `gtw/lgtm` label applied.
+- When round reaches 5: `gtw/stuck` label applied, manual intervention required.
+- **No GitHub Review API** is used — all review state is tracked via labels and a single persistent checklist comment per PR.
+
+**Label system (mutually exclusive):**
+| Label | Meaning |
+|-------|---------|
+| `gtw/ready` | Pending review |
+| `gtw/wip` | Review in progress |
+| `gtw/lgtm` | Approved |
+| `gtw/revise` | Needs changes |
+| `gtw/stuck` | Exceeded max rounds |
 
 ## State Files
 
@@ -252,8 +276,9 @@ After any change to command logic, verify the affected flow:
 | `pendingPr` created | `wip.json` contains `pendingPr` after `/gtw pr` |
 | `gtw/wip` label applied | GitHub issue shows `gtw/wip` label after `/gtw fix` |
 | `gtw/wip` label removed | GitHub issue loses `gtw/wip` label after fix flow completes |
-| Eyes comment posted | GitHub PR shows `eyes` comment from your login |
-| Review verdict posted | GitHub PR shows `approved` or `changes` emoji comment |
+| `gtw/ready` PR claimed | GitHub PR shows `gtw/wip` label after `/gtw review` |
+| Checklist comment posted | GitHub PR shows `## Review [Round N]` comment |
+| Checklist cleared | Checklist comment deleted, `gtw/lgtm` applied |
 
 ## Architecture
 
@@ -263,6 +288,15 @@ gtw/
 ├── openclaw.plugin.json     # Plugin manifest
 ├── package.json             # ESM package
 ├── commands/                # OOP Commander pattern (one class per command)
+│   ├── Commander.js         # Base interface
+│   ├── CommanderFactory.js  # Factory: cmd string → Commander instance
+│   ├── OnCommand.js         # Set workdir + repo
+│   ├── NewCommand.js        # Auto-generate issue draft via AI
+│   ├── FixCommand.js        # Claim issue, create branch, spawn subagent fix
+│   ├── PushCommand.js       # Generate commit message draft (pendingCommit)
+│   ├── ConfirmCommand.js    # Execute pending actions
+│   ├── ReviewCommand.js     # Review workflow with checklist comments + labels
+│   ├── WatchCommand.js      # Manage watch list (add/rm/list repos)
 │   └── *.js
 └── utils/
     ├── session.js           # Parent session read/write (JSONL injection)
