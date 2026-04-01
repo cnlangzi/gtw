@@ -30,7 +30,7 @@ export class LoginCommand extends Commander {
     const usePat = args.includes('--pat') || args.includes('-p');
     
     if (usePat) {
-      return await this.loginWithPat();
+      return await this.loginWithPat(args);
     }
 
     const clientId = process.env.GITHUB_CLIENT_ID;
@@ -47,12 +47,44 @@ export class LoginCommand extends Commander {
 
   /**
    * Login using Personal Access Token (PAT)
-   * Supports both interactive input and GITHUB_TOKEN env var
+   * Usage: /gtw login --pat [token]
+   * - With token arg: validates and caches the provided PAT
+   * - Without token arg: uses GITHUB_TOKEN env var or prompts for input
    */
-  async loginWithPat() {
+  async loginWithPat(args) {
     console.log('🔐 使用 Personal Access Token (PAT) 登录\n');
     
-    // Try GITHUB_TOKEN environment variable first
+    // Extract PAT from args if provided
+    const patIndex = args.findIndex(arg => arg === '--pat' || arg === '-p');
+    let providedToken = null;
+    if (patIndex !== -1 && args[patIndex + 1] && !args[patIndex + 1].startsWith('-')) {
+      providedToken = args[patIndex + 1].trim();
+    }
+    
+    // Priority 1: Use provided token from command line
+    if (providedToken) {
+      console.log('验证提供的 Token 中...');
+      const isValid = await validateToken(providedToken);
+      if (isValid) {
+        this.saveToken({
+          source: 'pat',
+          access_token: providedToken,
+          cached_at: Date.now(),
+        });
+        return {
+          ok: true,
+          message: '✅ 登录成功！PAT 已验证并缓存到 ~/.openclaw/gtw/token.json',
+          token: { source: 'pat', cached_at: Date.now() },
+        };
+      } else {
+        return {
+          ok: false,
+          message: '❌ Token 无效，请检查是否正确以及具有 repo 和 workflow 权限',
+        };
+      }
+    }
+    
+    // Priority 2: Use GITHUB_TOKEN environment variable
     const envToken = process.env.GITHUB_TOKEN;
     
     if (envToken) {
@@ -66,88 +98,29 @@ export class LoginCommand extends Commander {
         });
         return {
           ok: true,
-          message: '✅ 登录成功！PAT 已验证并缓存',
+          message: '✅ 登录成功！PAT (GITHUB_TOKEN) 已验证并缓存',
           token: { source: 'pat', cached_at: Date.now() },
         };
       } else {
-        console.log('❌ GITHUB_TOKEN 无效，请重新输入');
-      }
-    }
-
-    // Interactive PAT input
-    console.log('请输入你的 GitHub Personal Access Token:');
-    console.log('提示：Token 不会显示在屏幕上，输入完成后按回车');
-    console.log('生成 Token: https://github.com/settings/tokens (需要 repo 和 workflow 权限)\n');
-
-    try {
-      // Use readline for secure input
-      const readline = await import('readline');
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-
-      const pat = await new Promise((resolve) => {
-        // Try to hide input (works on Unix)
-        process.stdin.setRawMode?.(true);
-        process.stdin.resume();
-        
-        let input = '';
-        
-        rl.on('line', (line) => {
-          input = line;
-          rl.close();
-        });
-
-        rl.on('SIGINT', () => {
-          process.exit(0);
-        });
-
-        // Simple prompt without masking (readline doesn't support password masking by default)
-        process.stdout.write('PAT: ');
-      });
-
-      rl.close();
-      process.stdin.setRawMode?.(false);
-
-      const token = pat.trim();
-      
-      if (!token) {
         return {
           ok: false,
-          message: '❌ 未输入 Token',
+          message: '❌ GITHUB_TOKEN 无效，请检查是否正确以及具有 repo 和 workflow 权限',
         };
       }
-
-      // Validate PAT
-      console.log('\n验证 Token 中...');
-      const isValid = await validateToken(token);
-      
-      if (!isValid) {
-        return {
-          ok: false,
-          message: '❌ Token 无效，请检查是否正确以及具有 repo 和 workflow 权限',
-        };
-      }
-
-      // Save PAT
-      this.saveToken({
-        source: 'pat',
-        access_token: token,
-        cached_at: Date.now(),
-      });
-
-      return {
-        ok: true,
-        message: '✅ 登录成功！PAT 已验证并缓存到 ~/.openclaw/gtw/token.json',
-        token: { source: 'pat', cached_at: Date.now() },
-      };
-    } catch (e) {
-      return {
-        ok: false,
-        message: `❌ 输入 Token 时出错：${e.message}`,
-      };
     }
+    
+    // Priority 3: No token provided - show usage
+    return {
+      ok: false,
+      message: `❌ 未提供 PAT
+
+用法:
+  /gtw login --pat <your_token>      # 直接提供 Token
+  export GITHUB_TOKEN=xxx            # 或使用环境变量
+  /gtw login                         # 或使用 gh CLI 登录
+
+生成 Token: https://github.com/settings/tokens (需要 repo 和 workflow 权限)`,
+    };
   }
 
   /**
