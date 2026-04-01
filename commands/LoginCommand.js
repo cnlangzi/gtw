@@ -130,7 +130,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     const client = new GitHubClient();
     
     try {
-      console.log('开始 GitHub OAuth 设备码认证...\n');
+      console.log('Starting GitHub OAuth device code flow...\n');
       
       // Step 1: Request device code
       const deviceCode = await client.requestDeviceCode();
@@ -147,13 +147,13 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       
       return {
         ok: true,
-        message: '已启动 GitHub 授权流程',
+        message: 'GitHub authorization flow started',
         display: display,
       };
     } catch (e) {
       return {
         ok: false,
-        message: `❌ 获取设备码失败：${e.message}`,
+        message: `❌ Failed to get device code: ${e.message}`,
       };
     }
   }
@@ -223,7 +223,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           if (data.error === 'expired_token') {
             this.clearDeviceCodeState();
             this.injectMessage?.(this.sessionKey, 
-              '❌ **授权已超时**\n\n设备码有效期为 15 分钟，已过期。\n\n请重新运行：/gtw login');
+              '❌ **Authorization Expired**\n\nThe device code is valid for 15 minutes and has expired.\n\nPlease run: /gtw login');
             console.log('[gtw] Device code expired');
             return;
           }
@@ -231,14 +231,14 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           if (data.error === 'access_denied') {
             this.clearDeviceCodeState();
             this.injectMessage?.(this.sessionKey,
-              '❌ **授权已被取消**\n\n如需重新授权，请运行：/gtw login');
+              '❌ **Authorization Denied**\n\nThe authorization was denied or cancelled.\n\nTo re-authorize, run: /gtw login');
             console.log('[gtw] Authorization denied');
             return;
           }
 
           // Other errors
           this.injectMessage?.(this.sessionKey,
-            `❌ **认证失败**\n\n错误：${data.error}\n\n请重试：/gtw login`);
+            `❌ **Authentication Failed**\n\nError: ${data.error}\n\nPlease retry: /gtw login`);
           console.log('[gtw] OAuth error:', data.error);
           return;
           
@@ -251,7 +251,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       // Timeout
       this.clearDeviceCodeState();
       this.injectMessage?.(this.sessionKey,
-        '❌ **授权已超时**\n\n设备码有效期为 15 分钟。\n\n请重新运行：/gtw login');
+        '❌ **Authorization Timeout**\n\nThe device code is valid for 15 minutes.\n\nPlease run: /gtw login');
       console.log('[gtw] Polling timeout');
     });
   }
@@ -306,7 +306,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           throw e;
         }
         // Network error - retry
-        console.error('网络错误，重试中...');
+        console.error('Network error, retrying...');
       }
     }
     
@@ -317,34 +317,35 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
    * Create display message for device code (chat-friendly)
    */
   createDeviceCodeDisplay(deviceCode) {
-    return `🔐 **GitHub OAuth 登录**
+    return `🔐 **GitHub OAuth Login**
 
-请按以下步骤完成认证：
+Please complete the authorization following these steps:
 
-1️⃣ **打开链接**
+1️⃣ **Open this link**
 ${deviceCode.verification_uri}
 
-2️⃣ **输入验证码**
+2️⃣ **Enter this code**
 \`${deviceCode.user_code}\`
 
-3️⃣ **等待授权完成**
-系统会自动检测授权状态，有效期 ${Math.floor(deviceCode.expires_in / 60)} 分钟
+3️⃣ **Wait for authorization**
+The system will automatically detect when authorization is complete.
+Valid for ${Math.floor(deviceCode.expires_in / 60)} minutes.
 
 ---
-💡 提示：复制链接到浏览器打开，然后在 GitHub 页面输入验证码并授权。`;
+💡 **Tip**: Copy the link to your browser, open it, then enter the code on GitHub and authorize.`;
   }
 
   /**
    * Create display message for successful login
    */
   createLoginSuccessDisplay(user) {
-    return `✅ **登录成功**
+    return `✅ **Login Successful**
 
-👤 **用户**: @${user.login}${user.name ? ` (${user.name})` : ''}
-🆔 **用户 ID**: ${user.id}
-🔐 **认证方式**: OAuth 设备码
+👤 **User**: @${user.login}${user.name ? ` (${user.name})` : ''}
+🆔 **User ID**: ${user.id}
+🔐 **Auth Method**: OAuth Device Code
 
-现在可以开始使用 gtw 命令了！`;
+You can now start using gtw commands!`;
   }
 
   /**
