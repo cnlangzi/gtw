@@ -64,7 +64,7 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 
 ```
 /gtw review             Claim earliest PR with gtw/ready label from watch list
-/gtw review #<pr>       Claim/review specific PR in current repo
+/gtw review <pr>       Claim/review specific PR in current repo
 /gtw watch add <owner>/<repo>   Add repo to watch list
 /gtw watch rm <owner>/<repo>    Remove repo from watch list
 /gtw watch list         Show watched repos
@@ -194,9 +194,9 @@ You: /gtw review
      - [ ] Destructive
      - [ ] Out-of-scope
    Review the diff against the issue requirements.
-   Run /gtw review #23 again after resolving items.
+   Run /gtw review 23 again after resolving items.
 
-You: /gtw review #23
+You: /gtw review 23
 → eyes PR #23 re-review (Round 2/5)
    [Items still unresolved kept as unchecked]
    Review the diff and update checklist.
@@ -204,7 +204,7 @@ You: /gtw review #23
 
 **Review protocol:**
 - `/gtw review` (no-arg): Scans watch list for PRs labeled `gtw/ready`, picks the oldest by `updated_at`, claims it (`gtw/wip`), creates a Round 1 checklist.
-- `/gtw review #<pr>`: Reviews specific PR in the current repo (from `wip.json`). If a checklist exists, increments the round and updates the same comment.
+- `/gtw review <pr>`: Reviews specific PR in the current repo (from `wip.json`). If a checklist exists, increments the round and updates the same comment.
 - Checklist items (always two): **Destructive** and **Out-of-scope** — the canonical checks to prevent AI-caused unplanned or out-of-scope modifications.
 - Each invocation increments the round number. Unresolved items remain unchecked.
 - When all checkboxes are resolved (checked): checklist comment is deleted, approved comment posted, `gtw/lgtm` label applied.
@@ -265,7 +265,7 @@ After any change to command logic, verify the affected flow:
 
 **`/gtw review` flow:**
 1. `/gtw review` → should claim an unclaimed PR (eyes comment appears)
-2. `/gtw review #<pr> approved` → should post approved comment and submit GitHub review
+2. `/gtw review <pr> approved` → should post approved comment and submit GitHub review
 3. PR page → should show review state as "Approved"
 
 ### What to Observe

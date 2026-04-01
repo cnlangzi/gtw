@@ -22,7 +22,7 @@ Commands:
   fix [name]         Create fix branch
   pr                 Push branch to origin
   push               Commit and push current branch
-  review [#n]           Claim and review PR (no-arg: picks earliest gtw/ready from watch list)
+  review <pr>            Claim and review PR (no-arg: picks earliest gtw/ready from watch list)
   watch add <owner>/<repo>  Add repo to watch list
   watch rm <owner>/<repo>   Remove repo from watch list
   watch list          Show watched repos

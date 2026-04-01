@@ -166,7 +166,7 @@ export class ReviewCommand extends Commander {
     // Parse optional PR number argument
     let targetPrNum = null;
     for (const a of args) {
-      const m = String(a).match(/^#?(\d+)$/);
+      const m = String(a).match(/^(\d+)$/);
       if (m) {
         targetPrNum = parseInt(m[1]);
         break;
