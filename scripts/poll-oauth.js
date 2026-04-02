@@ -9,19 +9,126 @@
  * - expired_token error (failure)
  * - access_denied error (failure)
  * - timeout reached (failure)
+ * 
+ * Uses http_proxy/https_proxy environment variables for GitHub access.
  */
 
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join, homedir } from 'path';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
+const DEVICE_CODE_FILE = join(CONFIG_DIR, 'device_code.json');
+
+/**
+ * Get the session JSONL file path for a given session key.
+ */
+function getSessionFile(sessionKey) {
+  const agentId = sessionKey?.split(':')[1];
+  if (!agentId) {
+    console.log(`[poll-oauth] Cannot parse agentId from sessionKey: ${sessionKey}`);
+    return null;
+  }
+  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+  if (!existsSync(sessionsPath)) {
+    console.log(`[poll-oauth] Sessions file not found: ${sessionsPath}`);
+    return null;
+  }
+
+  try {
+    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    const entry = sessionsData[sessionKey];
+    if (!entry?.sessionFile) {
+      console.log(`[poll-oauth] No sessionFile for key: ${sessionKey}`);
+      console.log(`[poll-oauth] Available keys:`, Object.keys(sessionsData));
+      return null;
+    }
+    if (!existsSync(entry.sessionFile)) {
+      console.log(`[poll-oauth] Session file doesn't exist: ${entry.sessionFile}`);
+      return null;
+    }
+    return entry.sessionFile;
+  } catch (e) {
+    console.error(`[poll-oauth] Error reading sessions: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Append a user message to a session JSONL (injects into conversation).
+ */
+function injectMessage(sessionKey, text) {
+  const sessionFile = getSessionFile(sessionKey);
+  if (!sessionFile) {
+    console.log(`[poll-oauth] ❌ Cannot find session file for: ${sessionKey}`);
+    return false;
+  }
+
+  try {
+    const entry = JSON.stringify({
+      type: 'message',
+      id: `gtw-oauth-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text }],
+      },
+    });
+    appendFileSync(sessionFile, entry + '\n');
+    console.log(`[poll-oauth] ✅ Message injected into session: ${sessionKey}`);
+    return true;
+  } catch (e) {
+    console.error(`[poll-oauth] ❌ Failed to inject message: ${e.message}`);
+    return false;
+  }
+}
+
+/**
+ * Send notification to original session by injecting a message.
+ */
+function notifySession(message, isSuccess = true) {
+  try {
+    let sessionKey = null;
+    
+    // Try to get sessionKey from device_code.json
+    if (existsSync(DEVICE_CODE_FILE)) {
+      const state = JSON.parse(readFileSync(DEVICE_CODE_FILE, 'utf8'));
+      const session = state?.session;
+      
+      if (session?.sessionKey) {
+        sessionKey = session.sessionKey;
+        console.log(`[poll-oauth] Found sessionKey in device_code.json: ${sessionKey}`);
+      } else if (session?.channel) {
+        console.log(`[poll-oauth] device_code.json session context:`, JSON.stringify(session, null, 2));
+      }
+    }
+    
+    // Fallback to main session if no sessionKey found
+    if (!sessionKey) {
+      sessionKey = 'agent:main:main';
+      console.log(`[poll-oauth] Using fallback main session: ${sessionKey}`);
+    }
+    
+    // Format message with prefix for visibility
+    const prefix = isSuccess ? '✅' : '❌';
+    const formattedMessage = `${prefix} [gtw login] ${message}`;
+    
+    // Use injectMessage to append directly to session JSONL
+    injectMessage(sessionKey, formattedMessage);
+    
+  } catch (e) {
+    console.error('[poll-oauth] Failed to notify session:', e.message);
+  }
+}
 
 async function pollOAuth(deviceCode, clientId, interval = 5, expiresIn = 900) {
   const expiresAt = Date.now() + (expiresIn * 1000);
   
   console.log(`[poll-oauth] Starting poll for device code: ${deviceCode}`);
   console.log(`[poll-oauth] Expires in: ${expiresIn}s, interval: ${interval}s`);
+  console.log(`[poll-oauth] http_proxy: ${process.env.http_proxy || 'not set'}`);
+  console.log(`[poll-oauth] https_proxy: ${process.env.https_proxy || 'not set'}`);
   
   while (Date.now() < expiresAt) {
     try {
@@ -40,6 +147,7 @@ async function pollOAuth(deviceCode, clientId, interval = 5, expiresIn = 900) {
       });
       
       const data = await response.json();
+      console.log(`[poll-oauth] Response:`, JSON.stringify(data));
       
       // Check for success
       if (data.access_token) {
@@ -67,6 +175,10 @@ async function pollOAuth(deviceCode, clientId, interval = 5, expiresIn = 900) {
         console.log(`[poll-oauth] ✅ Login successful! User: @${user.login}`);
         console.log(`[poll-oauth] User ID: ${user.id}, Name: ${user.name || 'N/A'}`);
         
+        // Notify original session
+        const successMessage = `**GitHub Login Successful**\n\n👤 User: @${user.login}${user.name ? ` (${user.name})` : ''}\n🆔 User ID: ${user.id}\n\nYou can now use gtw commands!`;
+        notifySession(successMessage, true);
+        
         return {
           ok: true,
           login: user.login,
@@ -78,21 +190,25 @@ async function pollOAuth(deviceCode, clientId, interval = 5, expiresIn = 900) {
       // Check for errors
       if (data.error === 'expired_token') {
         console.log('[poll-oauth] ❌ Authorization expired');
+        notifySession('GitHub OAuth authorization expired. Please try `/gtw login` again.', false);
         return { ok: false, error: 'expired_token' };
       }
       
       if (data.error === 'access_denied') {
         console.log('[poll-oauth] ❌ Authorization denied by user');
+        notifySession('GitHub OAuth authorization was denied. Please try `/gtw login` again if you changed your mind.', false);
         return { ok: false, error: 'access_denied' };
       }
       
       // authorization_pending - continue polling
       if (data.error === 'authorization_pending') {
         console.log(`[poll-oauth] Waiting for authorization... (${Math.floor((expiresAt - Date.now()) / 1000)}s remaining)`);
+      } else if (data.error) {
+        console.log(`[poll-oauth] Unknown error: ${data.error}`);
       }
       
     } catch (e) {
-      console.error(`[poll-oauth] Error: ${e.message}`);
+      console.error(`[poll-oauth] Fetch error: ${e.message}`);
     }
     
     // Wait before next poll
@@ -100,6 +216,7 @@ async function pollOAuth(deviceCode, clientId, interval = 5, expiresIn = 900) {
   }
   
   console.log('[poll-oauth] ❌ Authorization timed out');
+  notifySession('GitHub OAuth authorization timed out. Please try `/gtw login` again.', false);
   return { ok: false, error: 'timeout' };
 }
 
@@ -117,11 +234,7 @@ const expiresIn = parseInt(args[3] || '900', 10);
 
 pollOAuth(deviceCode, clientId, interval, expiresIn)
   .then(result => {
-    if (result.ok) {
-      process.exit(0);
-    } else {
-      process.exit(1);
-    }
+    process.exit(result.ok ? 0 : 1);
   })
   .catch(e => {
     console.error(`[poll-oauth] Fatal error: ${e.message}`);
