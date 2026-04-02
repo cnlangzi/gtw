@@ -9,6 +9,11 @@
     "test:watch": "node --test --watch test/*.test.js"
   },
   "openclaw": {
-    "extensions": ["./index.js"]
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "devDependencies": {
+    "https-proxy-agent": "^9.0.0"
   }
 }
