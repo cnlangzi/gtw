@@ -12,6 +12,12 @@
  */
 
 import https from 'https';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+
+// Support system proxy from environment variables
+if (process.env.http_proxy || process.env.https_proxy) {
+  // Proxy env vars are already set - https-proxy-agent will pick them up
+}
 
 // GitHub CLI's official OAuth app
 export const GITHUB_CLIENT_ID = '178c6fc778ccc68e1d6a';
@@ -41,12 +47,19 @@ export function httpsRequest(method, url, headers = {}, body = null) {
         ...headers,
       },
     };
-    
+
+    // Support proxy from environment variables
+    const proxyUrl = process.env.https_proxy || process.env.HTTPS_PROXY ||
+                     process.env.http_proxy || process.env.HTTP_PROXY;
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
+
     if (body) {
       options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
       options.headers['Content-Length'] = Buffer.byteLength(body);
     }
-    
+
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
@@ -59,7 +72,7 @@ export function httpsRequest(method, url, headers = {}, body = null) {
         }
       });
     });
-    
+
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
