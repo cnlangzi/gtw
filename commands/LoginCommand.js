@@ -8,7 +8,7 @@ const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 // ---------------------------------------------------------------------------
-// Helper: Inject login polling directive into main session
+// Inject login polling directive into main session
 // ---------------------------------------------------------------------------
 
 function getMainSessionFile() {
@@ -16,13 +16,11 @@ function getMainSessionFile() {
   if (!existsSync(sessionsPath)) return null;
   try {
     const data = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    // Try main:main key first
     const key = 'agent:main:main';
     const entry = data[key];
     if (entry?.sessionFile && existsSync(entry.sessionFile)) {
       return { key, file: entry.sessionFile };
     }
-    // Fallback: find first entry that has a sessionFile
     for (const [k, v] of Object.entries(data)) {
       if (k.startsWith('agent:') && v?.sessionFile && existsSync(v.sessionFile)) {
         return { key: k, file: v.sessionFile };
@@ -33,69 +31,68 @@ function getMainSessionFile() {
 }
 
 function injectLoginDirective(sessionFile, deviceCode) {
-  // Same pattern as FixCommand: inject a directive, agent spawns a subagent,
-  // subagent does the work and replies to this message.
+  const dc = deviceCode;
   const directive = [
-    `/queue steer`,
-    ``,
-    `🚨 [gtw login] GitHub OAuth polling subagent`,
-    ``,
-    `Device Code: ${deviceCode.device_code}`,
-    `User Code: ${deviceCode.user_code}`,
-    `Verification URL: ${deviceCode.verification_uri}`,
-    `Expires in: ${deviceCode.expires_in}s | Poll interval: ${deviceCode.interval}s`,
-    ``,
-    `Spawn a polling subagent (mode=run) with the following task:`,
-    ``,
-    `Task:`,
-    `===`,
-    `You are polling GitHub OAuth device flow for token: ${deviceCode.device_code}`,
-    ``,
-    `Steps:`,
-    `1. Loop every ${deviceCode.interval}s until: access_token received OR ${deviceCode.expires_in}s elapsed`,
-    `2. POST https://github.com/login/oauth/access_token`,
-    `   Content-Type: application/json`,
-    `   Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"${deviceCode.device_code}","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
-    ``,
-    `3. Parse the response:`,
-    `   - If "access_token" present: save to ${TOKEN_FILE} as`,
-    `     {"source":"oauth","access_token":"<token>","cached_at":<timestamp>}`,
-    `   - If "error": "authorization_pending" → continue polling`,
-    `   - If "error": "access_denied" → stop and report denied`,
-    `   - If "error": "expired_token" → stop and report expired`,
-    ``,
-    `4. If access_token received, GET https://api.github.com/user`,
-    `   Header: Authorization: Bearer <token>`,
-    `   Extract the "login" field from the response`,
-    ``,
-    `5. Reply to this message with:`,
-    `   - Success: "✅ GitHub Login Successful! User: @<username>"`,
-    `   - Expired: "❌ OAuth expired. Please run /gtw login again."`,
-    `   - Denied:  "❌ OAuth denied. Please run /gtw login again."`,
-    `   - Timeout: "❌ OAuth timed out. Please run /gtw login again."`,
-    `===`,
-    ``,
-    `Do this now. Spawn the subagent, wait for it to finish, then reply to this message.`,
+    '🚨 [gtw login] GitHub OAuth polling — reply to this message with result',
+    '',
+    'Device Code: ' + dc.device_code,
+    'User Code: ' + dc.user_code,
+    'Verification URL: ' + dc.verification_uri,
+    'Expires in: ' + dc.expires_in + 's | Poll interval: ' + dc.interval + 's',
+    '',
+    'Please perform the following steps in order:',
+    '',
+    '1. Spawn a polling subagent (mode=run) with the following task:',
+    '',
+    '   Task:',
+    '   ====',
+    '   You are polling GitHub OAuth device flow.',
+    '',
+    '   Steps:',
+    '   1. Loop every ' + dc.interval + 's until access_token received OR ' + dc.expires_in + 's elapsed:',
+    '      POST https://github.com/login/oauth/access_token',
+    '      Content-Type: application/json',
+    '      Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"' + dc.device_code + '","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}',
+    '',
+    '   2. Parse the response:',
+    '      - If "access_token" present: continue to step 3',
+    '      - If "error": "authorization_pending" → continue polling',
+    '      - If "error": "access_denied" → reply "❌ OAuth denied. Please run /gtw login again." and exit',
+    '      - If "error": "expired_token" → reply "❌ OAuth expired. Please run /gtw login again." and exit',
+    '',
+    '   3. If access_token received:',
+    '      a. Save token to ' + TOKEN_FILE + ' as {"source":"oauth","access_token":"<token>","cached_at":<timestamp>}',
+    '      b. GET https://api.github.com/user (Header: Authorization: Bearer <token>)',
+    '         Extract the "login" field (username)',
+    '      c. Reply to this message with: "✅ GitHub OAuth complete. Username: @<username>. Token saved."',
+    '      d. Exit immediately',
+    '',
+    '   ====',
+    '',
+    '2. Wait for the polling subagent to finish.',
+    '',
+    '3. Read the token file at ' + TOKEN_FILE + ' and extract the username from it.',
+    '',
+    '4. Reply to this message with: "✅ GitHub Login Successful! User: @<username from token>"',
   ].join('\n');
 
   try {
     const entry = JSON.stringify({
       type: 'message',
-      id: `gtw-login-${Date.now()}`,
+      id: 'gtw-login-' + Date.now(),
       timestamp: new Date().toISOString(),
       message: {
         role: 'user',
         content: [{ type: 'text', text: directive }],
       },
     });
-    appendFileSync(sessionFile, entry + '\n');
+    fs.appendFileSync(sessionFile, entry + '\n');
     return true;
   } catch (e) {
     console.error('[gtw] Failed to inject login directive:', e.message);
     return false;
   }
 }
-
 /**
  * Login command - supports OAuth device flow with async polling:
  * - /gtw login: Returns device code immediately, polls in background
