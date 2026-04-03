@@ -32,9 +32,8 @@ function getMainSessionFile() {
 
 function injectLoginDirective(sessionFile, deviceCode) {
   // Same pattern as FixCommand: inject a directive, the main agent spawns
-  // a subagent, and the subagent replies to this message.
-  // The injected message becomes the last user message in the session,
-  // so "Reply to this message" sends the reply back into this same conversation.
+  // a subagent, and the main agent does all writing and reply.
+  // The subagent only returns a structured result; main agent owns everything else.
   const directive = [
     `🚨 [gtw login] GitHub OAuth polling — reply to this message with result`,
     ``,
@@ -45,41 +44,51 @@ function injectLoginDirective(sessionFile, deviceCode) {
     ``,
     `Please perform the following steps in order:`,
     ``,
-    `1. Spawn a polling subagent (mode=run) with the following task:`,
+    `1. Spawn a subagent (mode=run) with the following task:`,
     ``,
     `   Task:`,
     `   ===`,
-    `   You are polling GitHub OAuth device flow for token: ${deviceCode.device_code}`,
+    `   You are polling GitHub OAuth device flow.`,
     ``,
-    `   Steps:`,
-    `   1. Loop every ${deviceCode.interval}s until: access_token received OR ${deviceCode.expires_in}s elapsed`,
+    `   Your job (do this ONLY, return nothing else):`,
+    `   1. Loop every ${deviceCode.interval}s for up to ${deviceCode.expires_in}s:`,
     `   2. POST https://github.com/login/oauth/access_token`,
     `      Content-Type: application/json`,
     `      Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"${deviceCode.device_code}","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
-    ``,
     `   3. Parse the response:`,
-    `      - If "access_token" present: save to ${TOKEN_FILE} as`,
-    `        {"source":"oauth","access_token":"<token>","cached_at":<timestamp>}`,
-    `      - If "error": "authorization_pending" → continue polling`,
-    `      - If "error": "access_denied" → stop and report denied`,
-    `      - If "error": "expired_token" → stop and report expired`,
-    ``,
-    `   4. If access_token received, GET https://api.github.com/user`,
-    `      Header: Authorization: Bearer <token>`,
-    `      Extract the "login" field from the response`,
-    ``,
-    `   5. **CRITICAL: When you get access_token:**
-      a. Save token to: ${TOKEN_FILE} (format: {"source":"oauth","access_token":"<token>","cached_at":<timestamp>})
-      b. Read /Users/bin/.openclaw/agents/main/sessions/sessions.json
-      c. Get sessionFile for key "agent:main:main"
-      d. Append this JSON (replace <username> with actual username):
-         {"type":"message","id":"oauth-result-${new Date().toISOString()}","timestamp":"${new Date().toISOString()}","message":{"role":"assistant","content":[{"type":"text","text":"✅ GitHub Login Successful! User: @<username>"}]}}
-      e. Exit immediately — do NOT print anything else`,
+    `      - If "access_token" present: output "RESULT:<token>" and exit 0`,
+    `      - If "error":"authorization_pending": continue to next poll`,
+    `      - If "error":"access_denied": output "DENIED" and exit 0`,
+    `      - If "error":"expired_token": output "EXPIRED" and exit 0`,
+    `   4. If ${deviceCode.expires_in}s elapse with no access_token: output "TIMEOUT" and exit 0`,
     `   ===`,
     ``,
-    `2. Wait for the polling subagent to finish.`,
+    `2. Wait for the subagent to finish.`,
     ``,
-    `3. Read the main session file and reply to this message with the result.`,
+    `3. Based on the subagent output:`,
+    ``,
+    `   **If output starts with "RESULT:":**`,
+    `   Extract the token (everything after "RESULT:").`,
+    `   a. Write to ${TOKEN_FILE}:`,
+    `      {"source":"oauth","access_token":"<token>","cached_at":<current_timestamp_ms>}`,
+    `   b. GET https://api.github.com/user`,
+    `      Header: Authorization: Bearer <token>`,
+    `   c. Extract the "login" field from the response`,
+    `   d. Reply to this message: ✅ GitHub Login Successful! User: @<username>`,
+    ``,
+    `   **If output is "DENIED":**`,
+    `      Reply to this message: ❌ Access Denied — you rejected the authorization`,
+    ``,
+    `   **If output is "EXPIRED":**`,
+    `      Reply to this message: ❌ Token Expired — the device code expired before authorization`,
+    ``,
+    `   **If output is "TIMEOUT":**`,
+    `      Reply to this message: ❌ Authorization Timeout — you did not complete login in time`,
+    ``,
+    `   **Otherwise:**`,
+    `      Reply to this message: ❌ OAuth Polling Error: <the raw output>`,
+    ``,
+    `IMPORTANT: Do this work now, step by step. Do not skip any step.`,
   ].join('\n');
 
   try {
