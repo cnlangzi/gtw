@@ -36,9 +36,9 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
     );
   }
 
-  const endpointBase = isPR
-    ? `/repos/${repo}/pulls/${prNum}`
-    : `/repos/${repo}/issues/${prNum}`;
+  // GitHub labels API is unified under the issues endpoint, even for PRs.
+  // /pulls/{num}/labels does not exist (404) — use /issues/{num}/labels instead.
+  const endpointBase = `/repos/${repo}/issues/${prNum}`;
 
   // Step 1: fetch current labels
   const currentLabels = await api('GET', `${endpointBase}/labels`, token);
@@ -62,14 +62,12 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
     }
   }
 
-  // Step 3: set target label (skip if already present)
-  const alreadyHas = currentLabels.some((l) => l.name === label);
-  if (!alreadyHas) {
-    try {
-      await api('POST', `${endpointBase}/labels`, token, { labels: [label] });
-    } catch (e) {
-      throw new Error(`Failed to set label "${label}" on #${prNum}: ${e.message}. Aborting.`);
-    }
+  // Step 3: set target label — always POST to avoid stale alreadyHas races.
+  // GitHub's label API is idempotent; duplicate POST is a no-op server-side.
+  try {
+    await api('POST', `${endpointBase}/labels`, token, { labels: [label] });
+  } catch (e) {
+    throw new Error(`Failed to set label "${label}" on #${prNum}: ${e.message}. Aborting.`);
   }
 
   // Step 4: concurrency safety — only needed when claiming gtw/wip

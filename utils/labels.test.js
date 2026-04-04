@@ -50,10 +50,10 @@ describe('setPrLabel: success (AC1 — mutual exclusion)', () => {
       const operations = [];
       let idx = 0;
 
-      // Correct call counts:
-      // gtw/ready: already present → only GET (no DELETE, no POST)
-      // gtw/lgtm/revise/stuck: DELETE gtw/ready + POST new → 3 calls (GET, DELETE, POST)
-      // gtw/wip: DELETE gtw/ready + POST + recheck GET → 4 calls
+      // Call counts after always-POST change:
+      // gtw/ready: GET + POST → 2 calls (no DELETE, no recheck)
+      // gtw/lgtm/revise/stuck: GET + DELETE + POST → 3 calls
+      // gtw/wip: GET + DELETE + POST + recheck GET → 4 calls
       const isReady = label === 'gtw/ready';
       const isWip = label === 'gtw/wip';
 
@@ -66,10 +66,8 @@ describe('setPrLabel: success (AC1 — mutual exclusion)', () => {
         ...(isReady ? [] : [
           async () => { operations.push(`DELETE #${++idx}`); return {}; },
         ]),
-        // POST new label (skipped if gtw/ready already set)
-        ...(isReady ? [] : [
-          async () => { operations.push(`POST #${++idx}`); return {}; },
-        ]),
+        // POST new label — always, no alreadyHas skip
+        async () => { operations.push(`POST #${++idx}`); return {}; },
         // GET recheck for gtw/wip claim
         ...(isWip ? [
           async () => {
@@ -392,13 +390,13 @@ describe('setPrLabel: 404 during removal is non-fatal', () => {
 // Target label already present: no-op on POST
 // ---------------------------------------------------------------------------
 
-describe('setPrLabel: target label already present — skips POST', () => {
-  it('if label already set (gtw/wip), skips POST and does recheck', async () => {
+describe('setPrLabel: always POSTs target label (no alreadyHas skip)', () => {
+  it('gtw/wip: always POSTs, then recheck', async () => {
     const ops = [];
     const handlers = [
       async () => { ops.push('GET'); return [{ name: 'gtw/wip' }]; }, // already has gtw/wip
       // No DELETE needed (gtw/wip === target)
-      // No POST (alreadyHas = true)
+      async () => { ops.push('POST'); return {}; }, // always POST
       async () => { ops.push('GET-recheck'); return [{ name: 'gtw/wip' }]; }, // recheck
     ];
 
@@ -410,15 +408,15 @@ describe('setPrLabel: target label already present — skips POST', () => {
 
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.preempted, false);
-    assert.deepStrictEqual(ops, ['GET', 'GET-recheck']);
+    assert.deepStrictEqual(ops, ['GET', 'POST', 'GET-recheck']);
   });
 
-  it('if label already set (non-wip), skips POST and no recheck', async () => {
+  it('non-wip label: always POSTs, no recheck', async () => {
     const ops = [];
     const handlers = [
       async () => { ops.push('GET'); return [{ name: 'gtw/lgtm' }]; },
-      // No DELETE (gtw/lgtm === target, excluded from toRemove)
-      // No POST (alreadyHas = true)
+      // No DELETE (gtw/lgtm === target)
+      async () => { ops.push('POST'); return {}; }, // always POST
     ];
 
     const result = await setPrLabel(
@@ -429,7 +427,7 @@ describe('setPrLabel: target label already present — skips POST', () => {
 
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.preempted, false);
-    assert.deepStrictEqual(ops, ['GET']);
+    assert.deepStrictEqual(ops, ['GET', 'POST']);
   });
 });
 
