@@ -88,13 +88,12 @@ describe('AC1: Label mutual exclusion', () => {
   for (const label of GTW_LABELS) {
     it(`${label}: sets label and removes other gtw labels`, async () => {
       const ops = [];
-      const isReady = label === 'gtw/ready';
       const isWip = label === 'gtw/wip';
-
+      // always POST: gtw/ready needs GET + POST; others need GET + DELETE + POST
       const handlers = [
         async () => { ops.push('GET'); return [{ name: 'gtw/ready' }, { name: 'priority/high' }]; },
-        ...(isReady ? [] : [async () => { ops.push('DELETE'); return {}; }]),
-        ...(isReady ? [] : [async () => { ops.push('POST'); return {}; }]),
+        ...(label === 'gtw/ready' ? [] : [async () => { ops.push('DELETE'); return {}; }]),
+        async () => { ops.push('POST'); return {}; }, // always POST
         ...(isWip ? [async () => { ops.push('RECHECK'); return [{ name: label }]; }] : []),
       ];
 
@@ -695,10 +694,11 @@ describe('AC10: Edge cases', () => {
     );
   });
 
-  it('target label already present → skips POST', async () => {
+  it('target label already present → still POSTs (always POST policy)', async () => {
     const ops = [];
     const handlers = [
       async () => { ops.push('GET'); return [{ name: 'gtw/wip' }]; }, // already has gtw/wip
+      async () => { ops.push('POST'); return {}; }, // always POST
       async () => { ops.push('RECHECK'); return [{ name: 'gtw/wip' }]; },
     ];
 
@@ -710,7 +710,7 @@ describe('AC10: Edge cases', () => {
 
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.preempted, false);
-    assert.ok(!ops.includes('POST'));
+    assert.ok(ops.includes('POST'), 'POST should always be called');
   });
 
   it('isPR=false uses /issues/ not /pulls/', async () => {
