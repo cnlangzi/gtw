@@ -17,12 +17,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run all tests
+      - name: Run unit tests
         run: |
           node --test \
             utils/git.test.js \
             utils/git.checkout.test.js \
             utils/labels.test.js \
             commands/WatchCommand.test.js \
-            commands/ReviewCommand.test.js \
-            commands/e2e.test.js
+            commands/ReviewCommand.test.js
+
+      - name: Run E2E workflow tests
+        run: |
+          node --test commands/e2e/workflow.test.js
