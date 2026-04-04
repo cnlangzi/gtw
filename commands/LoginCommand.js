@@ -15,7 +15,7 @@ const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 function injectLoginDirective(sessionFile, deviceCode) {
   // Direct polling: main agent does the polling itself, no subagent involved.
   const directive = [
-    `🚨 [gtw login] GitHub OAuth polling — do this now, step by step`,
+    `🚨 [gtw login] GitHub OAuth polling - do this now, step by step`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
@@ -32,9 +32,9 @@ function injectLoginDirective(sessionFile, deviceCode) {
     `2. Parse the response:`,
     `   - If "access_token" present: go to step 3`,
     `   - If "error":"authorization_pending": wait ${deviceCode.interval}s, repeat poll`,
-    `   - If "error":"access_denied": reply "❌ Access Denied — you rejected the authorization" and stop`,
-    `   - If "error":"expired_token": reply "❌ Token Expired — the device code expired before authorization" and stop`,
-    `   - If timeout (${deviceCode.expires_in}s elapsed): reply "❌ Authorization Timeout — you did not complete login in time" and stop`,
+    `   - If "error":"access_denied": reply "❌ Access Denied - you rejected the authorization" and stop`,
+    `   - If "error":"expired_token": reply "❌ Token Expired - the device code expired before authorization" and stop`,
+    `   - If timeout (${deviceCode.expires_in}s elapsed): reply "❌ Authorization Timeout - you did not complete login in time" and stop`,
     ``,
     `3. When you receive an access_token:`,
     `   a. Write to ${TOKEN_FILE}:`,
@@ -69,7 +69,7 @@ function injectLoginDirective(sessionFile, deviceCode) {
  * Login command - supports OAuth device flow with async polling:
  * - /gtw login: Returns device code immediately, polls in background
  * - /gtw login --pat <token>: PAT login
- * 
+ *
  * No --check needed - async poll completes and notifies user via session message.
  */
 export class LoginCommand extends Commander {
@@ -93,7 +93,7 @@ export class LoginCommand extends Commander {
 
     // Check for --pat flag
     const usePat = args.includes('--pat') || args.includes('-p');
-    
+
     if (usePat) {
       return await this.loginWithPat(args);
     }
@@ -108,14 +108,14 @@ export class LoginCommand extends Commander {
    */
   async loginWithPat(args) {
     const client = new GitHubClient();
-    
+
     // Extract PAT from args if provided
     const patIndex = args.findIndex(arg => arg === '--pat' || arg === '-p');
     let providedToken = null;
     if (patIndex !== -1 && args[patIndex + 1] && !args[patIndex + 1].startsWith('-')) {
       providedToken = args[patIndex + 1].trim();
     }
-    
+
     // Priority 1: Use provided token from command line
     if (providedToken) {
       console.log('Validating provided token...');
@@ -133,7 +133,7 @@ export class LoginCommand extends Commander {
           message: '✅ Login successful! PAT validated and cached',
           user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
-          display: this.createLoginSuccessDisplay(user),
+          display: this.createLoginSuccessDisplay(user, 'pat'),
         };
       } else {
         return {
@@ -142,7 +142,7 @@ export class LoginCommand extends Commander {
         };
       }
     }
-    
+
     // Priority 2: Use GITHUB_TOKEN environment variable
     const envToken = process.env.GITHUB_TOKEN;
     
@@ -152,7 +152,7 @@ export class LoginCommand extends Commander {
       const isValid = await client.validateToken();
       if (isValid) {
         this.saveToken({
-          source: 'pat',
+          source: 'github_token',
           access_token: envToken,
           cached_at: Date.now(),
         });
@@ -161,8 +161,8 @@ export class LoginCommand extends Commander {
           ok: true,
           message: '✅ Login successful! PAT (GITHUB_TOKEN) validated and cached',
           user: { login: user.login, name: user.name, id: user.id },
-          token: { source: 'pat', cached_at: Date.now() },
-          display: this.createLoginSuccessDisplay(user),
+          token: { source: 'github_token', cached_at: Date.now() },
+          display: this.createLoginSuccessDisplay(user, 'github_token'),
         };
       } else {
         return {
@@ -171,7 +171,7 @@ export class LoginCommand extends Commander {
         };
       }
     }
-    
+
     // Priority 3: No token provided - show usage
     return {
       ok: false,
@@ -206,7 +206,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
             const user = await client.getCurrentUser();
             return {
               ok: true,
-              message: '✅ Token 有效，可以使用 gtw 命令',
+              message: '✅ Token 有效,可以使用 gtw 命令',
               user: { login: user.login, name: user.name, id: user.id },
               display: this.createLoginSuccessDisplay(user),
             };
@@ -223,7 +223,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
         const state = JSON.parse(readFileSync(deviceCodeFile, 'utf8'));
         if (state.device_code && state.expiresAt > Date.now()) {
           const displayLines = [
-            '🔐 **授权流程已开始，请完成以下步骤：**',
+            '🔐 **授权流程已开始,请完成以下步骤:**',
             '',
             '1️⃣ **打开链接**',
             state.verification_uri || 'https://github.com/login/device',
@@ -231,10 +231,10 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
             '2️⃣ **输入验证码**',
             state.user_code,
             '',
-            '⚠️ 授权尚未完成，请在浏览器中完成授权',
+            '⚠️ 授权尚未完成,请在浏览器中完成授权',
             '',
             '---',
-            '💡 授权完成后，系统会自动检测并通知你结果。',
+            '💡 授权完成后,系统会自动检测并通知你结果。',
           ];
           const display = displayLines.join('\n');
 
@@ -252,7 +252,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     // Step 3: Neither token nor device code found
     return {
       ok: false,
-      message: '❌ 未检测到授权流程，请先运行 /gtw login',
+      message: '❌ 未检测到授权流程,请先运行 /gtw login',
     };
   }
 
@@ -263,14 +263,14 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
    */
   async startOAuthFlow() {
     const client = new GitHubClient();
-    
+
     try {
       console.log('Starting GitHub OAuth device code flow...\n');
-      
+
       // Step 0: Check for existing valid device code first
       const existingState = this.loadDeviceCodeState();
       let deviceCode;
-      
+
       if (existingState && existingState.device_code && existingState.expiresAt > Date.now()) {
         // Reuse existing valid device code
         console.log('Reusing existing valid device code (expires in',
@@ -286,20 +286,20 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
         // Request new device code
         deviceCode = await client.requestDeviceCode();
       }
-      
+
       // Step 1: Build session context for callback
       const sessionContext = {
         channel: this.api.channel || 'feishu',
         target: this.api.chatId || null,
         sessionKey: this.sessionKey,
       };
-      
+
       // Step 2: Save device code state (for potential re-use)
       this.saveDeviceCodeState(deviceCode, sessionContext);
-      
+
       // Step 3: Return instructions to user IMMEDIATELY
       const display = this.createDeviceCodeDisplay(deviceCode);
-      
+
       // Step 4: Inject polling directive into main session
       // The agent will process this and poll until token is received
       const sessionFile = getSessionFile(this.sessionKey);
@@ -311,7 +311,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       } else {
         console.error('[gtw] Warning: could not find main session file');
       }
-      
+
       return {
         ok: true,
         message: 'GitHub OAuth login started',
@@ -350,12 +350,13 @@ Valid for ${Math.floor(deviceCode.expires_in / 60)} minutes.
   /**
    * Create display message for successful login
    */
-  createLoginSuccessDisplay(user) {
+  createLoginSuccessDisplay(user, authMethod = 'OAuth Device Code') {
+    const methodLabel = authMethod === 'pat' ? 'PAT' : authMethod === 'github_token' ? 'GITHUB_TOKEN' : authMethod;
     return `✅ **Login Successful**
 
 👤 **User**: @${user.login}${user.name ? ` (${user.name})` : ''}
 🆔 **User ID**: ${user.id}
-🔐 **Auth Method**: OAuth Device Code
+🔐 **Auth Method**: ${methodLabel}
 
 You can now start using gtw commands!`;
   }
