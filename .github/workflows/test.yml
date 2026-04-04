@@ -17,8 +17,12 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run unit tests
-        run: node --test utils/git.test.js
+      - name: Run all tests
+        run: |
+          node --test \
+            utils/git.test.js \
+            utils/git.checkout.test.js \
+            utils/labels.test.js \
+            commands/WatchCommand.test.js \
+            commands/ReviewCommand.test.js \
+            commands/e2e.test.js
