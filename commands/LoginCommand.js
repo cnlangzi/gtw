@@ -2,6 +2,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { Commander } from './Commander.js';
+import { getSessionFile } from '../utils/session.js';
 import { GitHubClient } from '../utils/github.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
@@ -11,84 +12,39 @@ const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 // Inject login polling directive into main session
 // ---------------------------------------------------------------------------
 
-function getMainSessionFile() {
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) return null;
-  try {
-    const data = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    const key = 'agent:main:main';
-    const entry = data[key];
-    if (entry?.sessionFile && existsSync(entry.sessionFile)) {
-      return { key, file: entry.sessionFile };
-    }
-    for (const [k, v] of Object.entries(data)) {
-      if (k.startsWith('agent:') && v?.sessionFile && existsSync(v.sessionFile)) {
-        return { key: k, file: v.sessionFile };
-      }
-    }
-  } catch {}
-  return null;
-}
-
 function injectLoginDirective(sessionFile, deviceCode) {
-  // Same pattern as FixCommand: inject a directive, the main agent spawns
-  // a subagent, and the main agent does all writing and reply.
-  // The subagent only returns a structured result; main agent owns everything else.
+  // Direct polling: main agent does the polling itself, no subagent involved.
   const directive = [
-    `🚨 [gtw login] GitHub OAuth polling — reply to this message with result`,
+    `🚨 [gtw login] GitHub OAuth polling — do this now, step by step`,
     ``,
     `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
     `Verification URL: ${deviceCode.verification_uri}`,
     `Expires in: ${deviceCode.expires_in}s | Poll interval: ${deviceCode.interval}s`,
     ``,
-    `Please perform the following steps in order:`,
+    `Please perform the following steps:`,
     ``,
-    `1. Spawn a subagent (mode=run) with the following task:`,
+    `1. Poll GitHub OAuth device flow every ${deviceCode.interval}s for up to ${deviceCode.expires_in}s:`,
+    `   POST https://github.com/login/oauth/access_token`,
+    `   Content-Type: application/json`,
+    `   Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"${deviceCode.device_code}","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
     ``,
-    `   Task:`,
-    `   ===`,
-    `   You are polling GitHub OAuth device flow.`,
+    `2. Parse the response:`,
+    `   - If "access_token" present: go to step 3`,
+    `   - If "error":"authorization_pending": wait ${deviceCode.interval}s, repeat poll`,
+    `   - If "error":"access_denied": reply "❌ Access Denied — you rejected the authorization" and stop`,
+    `   - If "error":"expired_token": reply "❌ Token Expired — the device code expired before authorization" and stop`,
+    `   - If timeout (${deviceCode.expires_in}s elapsed): reply "❌ Authorization Timeout — you did not complete login in time" and stop`,
     ``,
-    `   Your job (do this ONLY, return nothing else):`,
-    `   1. Loop every ${deviceCode.interval}s for up to ${deviceCode.expires_in}s:`,
-    `   2. POST https://github.com/login/oauth/access_token`,
-    `      Content-Type: application/json`,
-    `      Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"${deviceCode.device_code}","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
-    `   3. Parse the response:`,
-    `      - If "access_token" present: output "RESULT:<token>" and exit 0`,
-    `      - If "error":"authorization_pending": continue to next poll`,
-    `      - If "error":"access_denied": output "DENIED" and exit 0`,
-    `      - If "error":"expired_token": output "EXPIRED" and exit 0`,
-    `   4. If ${deviceCode.expires_in}s elapse with no access_token: output "TIMEOUT" and exit 0`,
-    `   ===`,
-    ``,
-    `2. Wait for the subagent to finish.`,
-    ``,
-    `3. Based on the subagent output:`,
-    ``,
-    `   **If output starts with "RESULT:":**`,
-    `   Extract the token (everything after "RESULT:").`,
+    `3. When you receive an access_token:`,
     `   a. Write to ${TOKEN_FILE}:`,
     `      {"source":"oauth","access_token":"<token>","cached_at":<current_timestamp_ms>}`,
     `   b. GET https://api.github.com/user`,
     `      Header: Authorization: Bearer <token>`,
     `   c. Extract the "login" field from the response`,
-    `   d. Reply to this message: ✅ GitHub Login Successful! User: @<username>`,
+    `   d. Reply: ✅ GitHub Login Successful! User: @<username>`,
     ``,
-    `   **If output is "DENIED":**`,
-    `      Reply to this message: ❌ Access Denied — you rejected the authorization`,
-    ``,
-    `   **If output is "EXPIRED":**`,
-    `      Reply to this message: ❌ Token Expired — the device code expired before authorization`,
-    ``,
-    `   **If output is "TIMEOUT":**`,
-    `      Reply to this message: ❌ Authorization Timeout — you did not complete login in time`,
-    ``,
-    `   **Otherwise:**`,
-    `      Reply to this message: ❌ OAuth Polling Error: <the raw output>`,
-    ``,
-    `IMPORTANT: Do this work now, step by step. Do not skip any step.`,
+    `IMPORTANT: Do this now, step by step. Do not skip any step. Do not reply until polling completes or fails.`,
   ].join('\n');
 
   try {
@@ -303,6 +259,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
   /**
    * Start OAuth device flow, return device code immediately,
    * and inject polling directive into session for agent to process
+   * Reuses existing valid device code instead of requesting a new one.
    */
   async startOAuthFlow() {
     const client = new GitHubClient();
@@ -310,27 +267,44 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     try {
       console.log('Starting GitHub OAuth device code flow...\n');
       
-      // Step 1: Request device code
-      const deviceCode = await client.requestDeviceCode();
+      // Step 0: Check for existing valid device code first
+      const existingState = this.loadDeviceCodeState();
+      let deviceCode;
       
-      // Step 2: Build session context for callback
+      if (existingState && existingState.device_code && existingState.expiresAt > Date.now()) {
+        // Reuse existing valid device code
+        console.log('Reusing existing valid device code (expires in',
+          Math.round((existingState.expiresAt - Date.now()) / 1000), 's)');
+        deviceCode = {
+          device_code: existingState.device_code,
+          user_code: existingState.user_code,
+          verification_uri: existingState.verification_uri,
+          expires_in: Math.round((existingState.expiresAt - Date.now()) / 1000),
+          interval: existingState.interval,
+        };
+      } else {
+        // Request new device code
+        deviceCode = await client.requestDeviceCode();
+      }
+      
+      // Step 1: Build session context for callback
       const sessionContext = {
         channel: this.api.channel || 'feishu',
         target: this.api.chatId || null,
         sessionKey: this.sessionKey,
       };
       
-      // Step 3: Save device code state (for potential re-use)
+      // Step 2: Save device code state (for potential re-use)
       this.saveDeviceCodeState(deviceCode, sessionContext);
       
-      // Step 4: Return instructions to user IMMEDIATELY
+      // Step 3: Return instructions to user IMMEDIATELY
       const display = this.createDeviceCodeDisplay(deviceCode);
       
-      // Step 5: Inject polling directive into main session
+      // Step 4: Inject polling directive into main session
       // The agent will process this and poll until token is received
-      const mainSession = getMainSessionFile();
-      if (mainSession) {
-        const injected = injectLoginDirective(mainSession.file, deviceCode);
+      const sessionFile = getSessionFile(this.sessionKey);
+      if (sessionFile) {
+        const injected = injectLoginDirective(sessionFile, deviceCode);
         if (!injected) {
           console.error('[gtw] Warning: failed to inject login directive');
         }
