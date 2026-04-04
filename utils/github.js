@@ -25,6 +25,9 @@ export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const GITHUB_API_BASE = 'https://api.github.com';
 
+// Request timeout in milliseconds
+const REQUEST_TIMEOUT_MS = 15000;
+
 /**
  * Make an HTTPS request to GitHub API
  * @param {string} method - HTTP method
@@ -73,7 +76,20 @@ export function httpsRequest(method, url, headers = {}, body = null) {
       });
     });
 
-    req.on('error', reject);
+    // Timeout handling
+    req.on('error', (err) => {
+      if (err.message.includes('ETIMEDOUT') || err.message.includes('ECONNREFUSED') || err.message.includes('TIMEOUT')) {
+        reject(new Error(`Request timeout: ${err.message}`));
+      } else {
+        reject(err);
+      }
+    });
+
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      req.destroy();
+      reject(new Error(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`));
+    });
+
     if (body) req.write(body);
     req.end();
   });
