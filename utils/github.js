@@ -59,7 +59,6 @@ export function httpsRequest(method, url, headers = {}, body = null) {
     }
 
     if (body) {
-      options.headers['Content-Type'] = 'application/x-www-form-urlencoded';
       options.headers['Content-Length'] = Buffer.byteLength(body);
     }
 

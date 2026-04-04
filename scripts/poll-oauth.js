@@ -16,73 +16,11 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getSessionFile, injectMessage } from '../utils/session.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 const DEVICE_CODE_FILE = join(CONFIG_DIR, 'device_code.json');
-
-/**
- * Get the session JSONL file path for a given session key.
- */
-function getSessionFile(sessionKey) {
-  const agentId = sessionKey?.split(':')[1];
-  if (!agentId) {
-    console.log(`[poll-oauth] Cannot parse agentId from sessionKey: ${sessionKey}`);
-    return null;
-  }
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) {
-    console.log(`[poll-oauth] Sessions file not found: ${sessionsPath}`);
-    return null;
-  }
-
-  try {
-    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    const entry = sessionsData[sessionKey];
-    if (!entry?.sessionFile) {
-      console.log(`[poll-oauth] No sessionFile for key: ${sessionKey}`);
-      console.log(`[poll-oauth] Available keys:`, Object.keys(sessionsData));
-      return null;
-    }
-    if (!existsSync(entry.sessionFile)) {
-      console.log(`[poll-oauth] Session file doesn't exist: ${entry.sessionFile}`);
-      return null;
-    }
-    return entry.sessionFile;
-  } catch (e) {
-    console.error(`[poll-oauth] Error reading sessions: ${e.message}`);
-    return null;
-  }
-}
-
-/**
- * Append a user message to a session JSONL (injects into conversation).
- */
-function injectMessage(sessionKey, text) {
-  const sessionFile = getSessionFile(sessionKey);
-  if (!sessionFile) {
-    console.log(`[poll-oauth] ❌ Cannot find session file for: ${sessionKey}`);
-    return false;
-  }
-
-  try {
-    const entry = JSON.stringify({
-      type: 'message',
-      id: `gtw-oauth-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text }],
-      },
-    });
-    appendFileSync(sessionFile, entry + '\n');
-    console.log(`[poll-oauth] ✅ Message injected into session: ${sessionKey}`);
-    return true;
-  } catch (e) {
-    console.error(`[poll-oauth] ❌ Failed to inject message: ${e.message}`);
-    return false;
-  }
-}
 
 /**
  * Send notification to original session by injecting a message.
