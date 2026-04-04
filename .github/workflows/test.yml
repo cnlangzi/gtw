@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install dependencies
+        run: npm install
+
       - name: Run unit tests
         run: |
           node --test \
@@ -38,6 +41,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
 
       - name: Run E2E workflow tests
         run: node --test commands/e2e/workflow.test.js
