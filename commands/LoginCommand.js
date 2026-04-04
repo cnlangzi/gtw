@@ -276,6 +276,24 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
   }
 
   /**
+   * Load existing polling state (device code) from polling_state.json
+   */
+  loadExistingPollingState() {
+    try {
+      if (existsSync(POLLING_STATE_FILE)) {
+        const state = JSON.parse(readFileSync(POLLING_STATE_FILE, 'utf8'));
+        // Only reuse if pending and not expired
+        if (state.device_code && state.expires_at > Date.now() && state.status === 'pending') {
+          return state;
+        }
+      }
+    } catch (e) {
+      console.error('[gtw] Failed to load polling state:', e.message);
+    }
+    return null;
+  }
+
+  /**
    * Start OAuth device flow, return device code immediately,
    * and inject directive for main agent to spawn polling sub-agent.
    */
@@ -285,25 +303,24 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     try {
       console.log('Starting GitHub OAuth device code flow...\n\n');
 
-      // Check for existing valid device code
-      const existingState = this.loadDeviceCodeState();
+      // Check for existing valid device code in polling_state.json
+      const existingState = this.loadExistingPollingState();
       let deviceCode;
 
-      if (existingState && existingState.device_code && existingState.expiresAt > Date.now()) {
+      if (existingState) {
         console.log('Reusing existing valid device code (expires in',
-          Math.round((existingState.expiresAt - Date.now()) / 1000), 's)');
+          Math.round((existingState.expires_at - Date.now()) / 1000), 's)');
         deviceCode = {
           device_code: existingState.device_code,
           user_code: existingState.user_code,
           verification_uri: existingState.verification_uri,
-          expires_in: Math.round((existingState.expiresAt - Date.now()) / 1000),
-          interval: existingState.interval,
+          expires_in: Math.round((existingState.expires_at - Date.now()) / 1000),
+          interval: existingState.interval || 5,
         };
       } else {
         deviceCode = await client.requestDeviceCode();
       }
 
-      // Extract user open_id
       // Save polling state for sub-agent
       savePollingState(deviceCode);
 
@@ -356,7 +373,7 @@ Click "Authorize" to grant access.
 
 ---
 ✅ Once authorized, the system will notify you automatically.
-You can continue using other commands while waiting.`;
+💡 Or manually verify with: \`gtw login --check\``;
   }
 
   createLoginSuccessDisplay(user, authMethod = 'OAuth Device Code') {
@@ -377,19 +394,5 @@ You can now start using gtw commands!`;
     } catch (e) {
       console.error('[gtw] Failed to save token:', e.message);
     }
-  }
-
-
-
-  loadDeviceCodeState() {
-    const stateFile = join(CONFIG_DIR, 'device_code.json');
-    try {
-      if (existsSync(stateFile)) {
-        return JSON.parse(readFileSync(stateFile, 'utf8'));
-      }
-    } catch (e) {
-      console.error('[gtw] Failed to load device code state:', e.message);
-    }
-    return null;
   }
 }
