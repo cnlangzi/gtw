@@ -7,44 +7,56 @@ import { GitHubClient } from '../utils/github.js';
 
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
+const POLLING_STATE_FILE = join(CONFIG_DIR, 'polling_state.json');
 
 // ---------------------------------------------------------------------------
 // Inject login polling directive into main session
+// The main agent will see this on its next turn and spawn a sub-agent
 // ---------------------------------------------------------------------------
 
-function injectLoginDirective(sessionFile, deviceCode) {
-  // Direct polling: main agent does the polling itself, no subagent involved.
+function injectLoginDirective(sessionKey, sessionFile, deviceCode) {
+  const pollIntervalSec = deviceCode.interval || 5;
+
   const directive = [
-    `🚨 [gtw login] GitHub OAuth polling - do this now, step by step`,
+    `🚨 [gtw login] GitHub OAuth polling - spawn sub-agent to handle this`,
     ``,
-    `Device Code: ${deviceCode.device_code}`,
     `User Code: ${deviceCode.user_code}`,
     `Verification URL: ${deviceCode.verification_uri}`,
-    `Expires in: ${deviceCode.expires_in}s | Poll interval: ${deviceCode.interval}s`,
+    `Poll interval: ${pollIntervalSec}s | Device code expires in: ${deviceCode.expires_in}s`,
     ``,
-    `Please perform the following steps:`,
+    `Please spawn a sub-agent to handle this OAuth polling task:`,
     ``,
-    `1. Poll GitHub OAuth device flow every ${deviceCode.interval}s for up to ${deviceCode.expires_in}s:`,
-    `   POST https://github.com/login/oauth/access_token`,
-    `   Content-Type: application/json`,
-    `   Body: {"client_id":"178c6fc778ccc68e1d6a","device_code":"${deviceCode.device_code}","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}`,
+    `Sub-agent task:`,
+    `===`,
+    `You are handling GitHub OAuth polling for gtw.`,
     ``,
-    `2. Parse the response:`,
-    `   - If "access_token" present: go to step 3`,
-    `   - If "error":"authorization_pending": wait ${deviceCode.interval}s, repeat poll`,
-    `   - If "error":"access_denied": reply "❌ Access Denied - you rejected the authorization" and stop`,
-    `   - If "error":"expired_token": reply "❌ Token Expired - the device code expired before authorization" and stop`,
-    `   - If timeout (${deviceCode.expires_in}s elapsed): reply "❌ Authorization Timeout - you did not complete login in time" and stop`,
+    `Your job:`,
+    `1. Read polling state from ${POLLING_STATE_FILE}. Extract expires_at (Unix ms timestamp). Stop polling once current time exceeds expires_at.`,
+    `2. Poll GitHub OAuth token endpoint every ${pollIntervalSec}s using exec curl:`,
+    `   curl -X POST https://github.com/login/oauth/access_token \\`,
+    `     -H "Content-Type: application/json" \\`,
+    `     -d '{"client_id":"178c6fc778ccc68e1d6a","device_code":"<device_code>","grant_type":"urn:ietf:params:oauth:grant-type:device_code"}'`,
     ``,
-    `3. When you receive an access_token:`,
-    `   a. Write to ${TOKEN_FILE}:`,
-    `      {"source":"oauth","access_token":"<token>","cached_at":<current_timestamp_ms>}`,
-    `   b. GET https://api.github.com/user`,
-    `      Header: Authorization: Bearer <token>`,
-    `   c. Extract the "login" field from the response`,
-    `   d. Reply: ✅ GitHub Login Successful! User: @<username>`,
+    `3. Parse response:`,
+    `   - access_token present → write to ${TOKEN_FILE}: {"source":"oauth","access_token":"<token>","cached_at":<timestamp>}`,
+    `   - error: "authorization_pending" → check if now > expires_at: if so, Announce timeout and stop; otherwise wait ${pollIntervalSec}s and poll again`,
+    `   - error: "access_denied" → Announce: ❌ GitHub authorization was denied. If you changed your mind, run /gtw login again.`,
+    `   - error: "expired_token" → Announce: ❌ GitHub authorization expired. Please run /gtw login again to get a new code.`,
     ``,
-    `IMPORTANT: Do this now, step by step. Do not skip any step. Do not reply until polling completes or fails.`,
+    `4. On timeout (current time > expires_at):`,
+    `   Announce: ⏰ Authorization timed out. The device code has expired. Please run /gtw login again to get a new code.`,
+    ``,
+    `5. On success:`,
+    `   a. Get user info: curl https://api.github.com/user -H "Authorization: Bearer <token>"`,
+    `   b. Announce: ✅ GitHub login successful! User: @<username>`,
+    `   c. Update ${POLLING_STATE_FILE}: {"status": "completed", "login": "<username>"}`,
+    ``,
+    `6. Use exec with proxy if needed:`,
+    `   export https_proxy=http://192.168.31.225:1087; export http_proxy=http://192.168.31.225:1087; curl ...`,
+    ``,
+    `===`,
+    ``,
+    `IMPORTANT: Do this now. Poll every ${pollIntervalSec}s until done. Announce the result when complete.`,
   ].join('\n');
 
   try {
@@ -65,58 +77,64 @@ function injectLoginDirective(sessionFile, deviceCode) {
   }
 }
 
-/**
- * Login command - supports OAuth device flow with async polling:
- * - /gtw login: Returns device code immediately, polls in background
- * - /gtw login --pat <token>: PAT login
- *
- * No --check needed - async poll completes and notifies user via session message.
- */
+// ---------------------------------------------------------------------------
+// Save polling state for sub-agent to read
+// ---------------------------------------------------------------------------
+
+function savePollingState(deviceCode) {
+  try {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    const state = {
+      device_code: deviceCode.device_code,
+      user_code: deviceCode.user_code,
+      verification_uri: deviceCode.verification_uri,
+      interval: deviceCode.interval || 5,
+      expires_at: Date.now() + (deviceCode.expires_in * 1000),
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    writeFileSync(POLLING_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    console.log(`[gtw] Saved polling state to ${POLLING_STATE_FILE}`);
+  } catch (e) {
+    console.error(`[gtw] Failed to save polling state: ${e.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LoginCommand
+// ---------------------------------------------------------------------------
+
 export class LoginCommand extends Commander {
-  /**
-   * @param {{ api: object, config: object }} context
-   */
   constructor(context) {
     super(context);
-    this.api = context.api;
-    this.config = context.config;
     this.sessionKey = context.sessionKey;
-    this.injectMessage = context.injectMessage;
   }
 
   async execute(args) {
-    // Check for --check flag
     const useCheck = args.includes('--check') || args.includes('-c');
     if (useCheck) {
       return await this.checkAuthStatus();
     }
 
-    // Check for --pat flag
     const usePat = args.includes('--pat') || args.includes('-p');
-
     if (usePat) {
       return await this.loginWithPat(args);
     }
 
-    // Default: OAuth device flow with async polling
     return await this.startOAuthFlow();
   }
 
   /**
    * Login using Personal Access Token (PAT)
-   * Usage: /gtw login --pat [token]
    */
   async loginWithPat(args) {
     const client = new GitHubClient();
-
-    // Extract PAT from args if provided
     const patIndex = args.findIndex(arg => arg === '--pat' || arg === '-p');
     let providedToken = null;
     if (patIndex !== -1 && args[patIndex + 1] && !args[patIndex + 1].startsWith('-')) {
       providedToken = args[patIndex + 1].trim();
     }
 
-    // Priority 1: Use provided token from command line
     if (providedToken) {
       console.log('Validating provided token...');
       client.setToken(providedToken);
@@ -143,9 +161,7 @@ export class LoginCommand extends Commander {
       }
     }
 
-    // Priority 2: Use GITHUB_TOKEN environment variable
     const envToken = process.env.GITHUB_TOKEN;
-    
     if (envToken) {
       console.log('GITHUB_TOKEN detected, validating...');
       client.setToken(envToken);
@@ -172,7 +188,6 @@ export class LoginCommand extends Commander {
       }
     }
 
-    // Priority 3: No token provided - show usage
     return {
       ok: false,
       message: `❌ No PAT provided
@@ -188,14 +203,13 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
   /**
    * Check current authentication status
-   * Usage: /gtw login --check
    */
   async checkAuthStatus() {
     const client = new GitHubClient();
-    const tokenFile = join(CONFIG_DIR, 'token.json');
-    const deviceCodeFile = join(CONFIG_DIR, 'device_code.json');
+    const tokenFile = TOKEN_FILE;
+    const pollingStateFile = POLLING_STATE_FILE;
 
-    // Step 1: Check if token exists and is valid
+    // Check if token exists and is valid
     if (existsSync(tokenFile)) {
       try {
         const tokenData = JSON.parse(readFileSync(tokenFile, 'utf8'));
@@ -206,42 +220,48 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
             const user = await client.getCurrentUser();
             return {
               ok: true,
-              message: '✅ Token 有效,可以使用 gtw 命令',
+              message: '✅ Token valid, gtw commands are ready to use',
               user: { login: user.login, name: user.name, id: user.id },
               display: this.createLoginSuccessDisplay(user),
             };
           }
         }
       } catch (e) {
-        // Token invalid or error - fall through to check device code
+        // Token invalid or error - fall through
       }
     }
 
-    // Step 2: Check if device code exists (auth started but not completed)
-    if (existsSync(deviceCodeFile)) {
+    // Check if polling is in progress
+    if (existsSync(pollingStateFile)) {
       try {
-        const state = JSON.parse(readFileSync(deviceCodeFile, 'utf8'));
-        if (state.device_code && state.expiresAt > Date.now()) {
+        const state = JSON.parse(readFileSync(pollingStateFile, 'utf8'));
+        if (state.status === 'pending' && state.expires_at > Date.now()) {
           const displayLines = [
-            '🔐 **授权流程已开始,请完成以下步骤:**',
+            '🔐 **Authorization in progress...**',
             '',
-            '1️⃣ **打开链接**',
-            state.verification_uri || 'https://github.com/login/device',
+            `📋 Code: ${state.user_code}`,
+            `🔗 URL: ${state.verification_uri}`,
             '',
-            '2️⃣ **输入验证码**',
-            state.user_code,
+            `⏳ Waiting for authorization...`,
+            `⏰ Time remaining: ${Math.floor((state.expires_at - Date.now()) / 1000)}s`,
             '',
-            '⚠️ 授权尚未完成,请在浏览器中完成授权',
-            '',
-            '---',
-            '💡 授权完成后,系统会自动检测并通知你结果。',
+            '💡 Complete authorization on GitHub and the system will notify you automatically.',
           ];
           const display = displayLines.join('\n');
 
           return {
             ok: false,
-            message: '⚠️ 授权尚未完成',
+            message: '⏳ Authorization still in progress',
             display: display,
+          };
+        } else if (state.status === 'completed') {
+          // Token was received
+          const user = await client.getCurrentUser();
+          return {
+            ok: true,
+            message: '✅ Token valid, gtw commands are ready to use',
+            user: { login: user.login, name: user.name, id: user.id },
+            display: this.createLoginSuccessDisplay(user),
           };
         }
       } catch (e) {
@@ -249,30 +269,28 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
       }
     }
 
-    // Step 3: Neither token nor device code found
+    // No token or polling state found
     return {
       ok: false,
-      message: '❌ 未检测到授权流程,请先运行 /gtw login',
+      message: '❌ No authorization flow detected. Run /gtw login to start one',
     };
   }
 
   /**
    * Start OAuth device flow, return device code immediately,
-   * and inject polling directive into session for agent to process
-   * Reuses existing valid device code instead of requesting a new one.
+   * and inject directive for main agent to spawn polling sub-agent.
    */
   async startOAuthFlow() {
     const client = new GitHubClient();
 
     try {
-      console.log('Starting GitHub OAuth device code flow...\n');
+      console.log('Starting GitHub OAuth device code flow...\n\n');
 
-      // Step 0: Check for existing valid device code first
+      // Check for existing valid device code
       const existingState = this.loadDeviceCodeState();
       let deviceCode;
 
       if (existingState && existingState.device_code && existingState.expiresAt > Date.now()) {
-        // Reuse existing valid device code
         console.log('Reusing existing valid device code (expires in',
           Math.round((existingState.expiresAt - Date.now()) / 1000), 's)');
         deviceCode = {
@@ -283,28 +301,24 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           interval: existingState.interval,
         };
       } else {
-        // Request new device code
         deviceCode = await client.requestDeviceCode();
       }
 
-      // Step 1: Build session context for callback
-      const sessionContext = {
-        channel: this.api.channel || 'feishu',
-        target: this.api.chatId || null,
-        sessionKey: this.sessionKey,
-      };
+      // Extract user open_id
+      // Save polling state for sub-agent
+      savePollingState(deviceCode);
 
-      // Step 2: Save device code state (for potential re-use)
-      this.saveDeviceCodeState(deviceCode, sessionContext);
-
-      // Step 3: Return instructions to user IMMEDIATELY
+      // Return instructions to user immediately
       const display = this.createDeviceCodeDisplay(deviceCode);
 
-      // Step 4: Inject polling directive into main session
-      // The agent will process this and poll until token is received
+      // Inject directive into main session for next turn
       const sessionFile = getSessionFile(this.sessionKey);
       if (sessionFile) {
-        const injected = injectLoginDirective(sessionFile, deviceCode);
+        const injected = injectLoginDirective(
+          this.sessionKey,
+          sessionFile,
+          deviceCode
+        );
         if (!injected) {
           console.error('[gtw] Warning: failed to inject login directive');
         }
@@ -325,9 +339,6 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     }
   }
 
-  /**
-   * Create display message for device code (chat-friendly)
-   */
   createDeviceCodeDisplay(deviceCode) {
     return `🔐 **GitHub OAuth Login**
 
@@ -339,17 +350,16 @@ ${deviceCode.verification_uri}
 2️⃣ **Enter this code**
 \`${deviceCode.user_code}\`
 
-3️⃣ **Wait for authorization**
-The system will automatically detect when authorization is complete.
-Valid for ${Math.floor(deviceCode.expires_in / 60)} minutes.
+3️⃣ **Authorize the application**
+Click "Authorize" to grant access.
+
+⏱️ Code expires in ${Math.floor(deviceCode.expires_in / 60)} minutes.
 
 ---
-💡 **Tip**: Copy the link to your browser, open it, then enter the code on GitHub and authorize.`;
+✅ Once authorized, the system will notify you automatically.
+You can continue using other commands while waiting.`;
   }
 
-  /**
-   * Create display message for successful login
-   */
   createLoginSuccessDisplay(user, authMethod = 'OAuth Device Code') {
     const methodLabel = authMethod === 'pat' ? 'PAT' : authMethod === 'github_token' ? 'GITHUB_TOKEN' : authMethod;
     return `✅ **Login Successful**
@@ -361,9 +371,6 @@ Valid for ${Math.floor(deviceCode.expires_in / 60)} minutes.
 You can now start using gtw commands!`;
   }
 
-  /**
-   * Save token to token.json
-   */
   saveToken(tokenData) {
     try {
       mkdirSync(CONFIG_DIR, { recursive: true });
@@ -373,36 +380,8 @@ You can now start using gtw commands!`;
     }
   }
 
-  /**
-   * Save device code state for background polling
-   */
-  saveDeviceCodeState(deviceCode, sessionContext = null) {
-    const stateFile = join(CONFIG_DIR, 'device_code.json');
-    try {
-      mkdirSync(CONFIG_DIR, { recursive: true });
-      const state = {
-        device_code: deviceCode.device_code,
-        user_code: deviceCode.user_code,
-        verification_uri: deviceCode.verification_uri,
-        interval: deviceCode.interval,
-        expiresAt: Date.now() + (deviceCode.expires_in * 1000),
-        createdAt: new Date().toISOString(),
-        // Session context for callback notification
-        session: sessionContext ? {
-          channel: sessionContext.channel,
-          target: sessionContext.target,
-          sessionKey: sessionContext.sessionKey,
-        } : null,
-      };
-      writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
-    } catch (e) {
-      console.error('[gtw] Failed to save device code state:', e.message);
-    }
-  }
 
-  /**
-   * Load device code state
-   */
+
   loadDeviceCodeState() {
     const stateFile = join(CONFIG_DIR, 'device_code.json');
     try {
@@ -413,23 +392,5 @@ You can now start using gtw commands!`;
       console.error('[gtw] Failed to load device code state:', e.message);
     }
     return null;
-  }
-
-  /**
-   * Clear device code state
-   */
-  clearDeviceCodeState() {
-    const stateFile = join(CONFIG_DIR, 'device_code.json');
-    try {
-      if (existsSync(stateFile)) {
-        // Keep the file but clear the device_code to invalidate the session
-        const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-        state.device_code = null;
-        state.clearedAt = new Date().toISOString();
-        writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
-      }
-    } catch (e) {
-      console.error('[gtw] Failed to clear device code state:', e.message);
-    }
   }
 }
