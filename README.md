@@ -74,6 +74,11 @@ This registers the `/gtw` slash command and enables the plugin. Gateway hot-relo
 
 ```
 /gtw config             Show current config and wip.json
+/gtw model              Show current AI model (gtw-specific or session default)
+/gtw model <model>      Set custom AI model (e.g. github/gpt-4o)
+/gtw model off          Clear custom model, use session default
+/gtw login              Interactive OAuth login (device code flow)
+/gtw login --pat <token>  Register a Personal Access Token directly
 ```
 
 ## Configuration
@@ -135,6 +140,34 @@ Check auth status anytime:
 
 ```
 /gtw config
+```
+
+### Configuration Items
+
+`~/.openclaw/gtw/config.json` stores gtw-specific settings:
+
+```json
+{
+  "model": "github/gpt-4o",
+  "watchList": ["owner/repo1", "owner/repo2"],
+  "maxReviewRounds": 5
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `model` | session default | AI model used for issue/PR generation and review. Use `github/<model>` for Copilot models, `minimax/<model>` for MiniMax, etc. |
+| `watchList` | `[]` | Watch list of repos scanned by `/gtw review` (no-arg) for `gtw/ready` PRs. |
+| `maxReviewRounds` | `5` | Maximum review rounds before a PR is marked `gtw/stuck`. Set to `0` to disable. |
+
+View/edit via:
+
+```
+/gtw model <provider/model-id>   # set custom AI model
+/gtw model                      # show current model
+/gtw model off                  # clear custom model
+/gtw watch add <owner>/<repo>   # add to watch list
+/gtw watch list                 # show watch list
 ```
 
 ## Standard Workflow
@@ -245,8 +278,9 @@ You: /gtw review 23
 - `/gtw review <pr>`: Reviews specific PR in the current repo (from `wip.json`). If a checklist exists, increments the round and updates the same comment.
 - Checklist items (always two): **Destructive** and **Out-of-scope** — the canonical checks to prevent AI-caused unplanned or out-of-scope modifications.
 - Each invocation increments the round number. Unresolved items remain unchecked.
-- When all checkboxes are resolved (checked): checklist comment is deleted, approved comment posted, `gtw/lgtm` label applied.
-- When round reaches 5: `gtw/stuck` label applied, manual intervention required.
+- When all checkboxes are resolved (all items checked): checklist comment is deleted, approved comment posted, `gtw/lgtm` label applied. PR is ready to merge.
+- When unresolved items remain: `gtw/revise` label is applied (replaces `gtw/wip`), a new "changes needed" comment is posted listing the unresolved items. The previous checklist comment is preserved as-is.
+- When round reaches `maxReviewRounds` (default 5) with unresolved items: `gtw/stuck` label applied, manual intervention required.
 - **No GitHub Review API** is used — all review state is tracked via labels and a single persistent checklist comment per PR.
 
 **Label system (mutually exclusive):**
@@ -257,6 +291,53 @@ You: /gtw review 23
 | `gtw/lgtm` | Approved |
 | `gtw/revise` | Needs changes |
 | `gtw/stuck` | Exceeded max rounds |
+
+**State transition diagram:**
+
+```
+                    ┌──────────────────────────────────────┐
+                    │                                      │
+   ┌────────────────▼──────────┐     reviewer claims       │
+   │       gtw/ready            │◄─────────────────────────┤
+   │   (pending review)         │                          │
+   └────────────────────────────┘                          │
+              ▲         │      │                          │
+              │         │      │                          │
+              │         │      │                          │
+   ┌───────────┴────┐   │      │  ┌────────────────────────┘
+   │                │   │      │  │
+   │  round ≥ max   │   │      │  │
+   │      └─────────+───┼──────┼──┘
+   │                   │      │
+   │  ┌────────────────▼──────▼──────────────┐
+   │  │              gtw/wip                │
+   │  │      (review in progress)           │
+   │  └──────────────────────────────────────┘
+   │              │
+   │              ├──────────────────────────────────────────┐
+   │              │                                          │
+   │              │ all checklist items resolved             │ unresolved items remain
+   │              ▼                                          │
+   │       ┌──────────┐                               ┌───────────┐
+   │       │ gtw/lgtm │                               │ gtw/revise│
+   │       └──────────┘                               └───────────┘
+   │                                                      │
+   │                                                      │ developer resubmits
+   │                                                      │ /gtw review <pr>
+   │                                                      │
+   │                                                      ▼
+   │                                           ┌──────────────────────────┐
+   │                                           │ gtw/wip (resets, round++) │
+   │                                           └──────────────────────────┘
+   │
+   │  unresolved + round ≥ max
+   │
+   └────────►┌──────────┐
+             │ gtw/stuck│  (manual intervention required)
+             └──────────┘
+```
+
+> Note: `gtw/revise` is automatically applied when unresolved items remain. When the developer resubmits (`/gtw review <pr>`), `gtw/wip` is set and the round increments.
 
 ## State Files
 
