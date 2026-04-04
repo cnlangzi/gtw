@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { Commander } from './Commander.js';
+import { getSessionFile } from '../utils/session.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { git, getDefaultBranch, getRemoteRepo } from '../utils/git.js';
 import { apiRequest, getValidToken } from '../utils/api.js';
@@ -85,27 +86,6 @@ async function unclaimIssue(issueId, token, repo) {
 }
 
 // Get the main agent session file path
-function getMainSessionFile() {
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) return null;
-  try {
-    const data = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-    // Try main:main key first
-    const key = 'agent:main:main';
-    const entry = data[key];
-    if (entry?.sessionFile && existsSync(entry.sessionFile)) {
-      return { key, file: entry.sessionFile };
-    }
-    // Fallback: find first entry that has a sessionFile
-    for (const [k, v] of Object.entries(data)) {
-      if (k.startsWith('agent:') && v?.sessionFile && existsSync(v.sessionFile)) {
-        return { key: k, file: v.sessionFile };
-      }
-    }
-  } catch {}
-  return null;
-}
-
 // Inject a directive message into the main session transcript
 function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchName, issueTitle, issueBody) {
   const directive = [
@@ -300,11 +280,11 @@ export class FixCommand extends Commander {
     saveWip(updated);
 
     // Step 7: Inject directive into main session to trigger subagent workflow
-    const mainSession = getMainSessionFile();
-    if (mainSession) {
+    const sessionFile = getSessionFile(this.sessionKey);
+    if (sessionFile) {
       const injected = injectFixDirective(
-        mainSession.key,
-        mainSession.file,
+        this.sessionKey,
+        sessionFile,
         issueId,
         workdir,
         branchName,
