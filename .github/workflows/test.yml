@@ -29,6 +29,8 @@ jobs:
 
   e2e-workflow-tests:
     runs-on: ubuntu-latest
+    env:
+      GTW_CONFIG_DIR: /tmp/gtw-test
     steps:
       - uses: actions/checkout@v4
 

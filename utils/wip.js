@@ -1,8 +1,5 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
-
-const WIP_FILE = join(homedir(), '.openclaw', 'gtw', 'wip.json');
+import { WIP_FILE } from './config.js';
 
 export function getWip() {
   try {
