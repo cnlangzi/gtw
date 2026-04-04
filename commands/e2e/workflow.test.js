@@ -237,39 +237,39 @@ describe('WF3: Round tracking and stuck detection', () => {
 // WF4: Watch list + review integration
 // ---------------------------------------------------------------------------
 
+// NOTE: no beforeEach/afterEach here — each test is self-contained and writes its own config.
+// WF4 uses the same CONFIG_DIR as WatchCommand.test.js.
+// Do NOT add cleanup hooks here; they can cause state-leak races in CI
+// when WatchCommand.test.js runs in the same process (cleanupFiles writes {})
+// and the file-write flush timing in CI differs from local.
 describe('WF4: Watch list + review integration', () => {
-  beforeEach(() => cleanupFiles());
-  afterEach(() => cleanupFiles());
-
-  it('WatchCommand: add → config persists → review reads it', () => {
+  it('WatchCommand: add → config persists', () => {
+    cleanupFiles(); // ensure clean slate
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     cmd.execute(['add', 'cnlangzi/gtw']);
 
     const config = readConfig();
     assert.ok(config.watchList.includes('cnlangzi/gtw'));
-
-    // Verify other repos are not affected
     assert.strictEqual(config.watchList.length, 1);
   });
 
   it('WatchCommand: add duplicate → no-op, list unchanged', async () => {
-    const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
+    cleanupFiles();
     writeConfig({ watchList: ['cnlangzi/gtw'] });
 
+    const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     const r = await cmd.execute(['add', 'cnlangzi/gtw']);
     assert.ok(r.message.includes('already'));
-
-    const config = readConfig();
-    assert.strictEqual(config.watchList.length, 1);
+    assert.strictEqual(readConfig().watchList.length, 1);
   });
 
   it('WatchCommand: rm last → empty watch list', async () => {
-    const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
+    cleanupFiles();
     writeConfig({ watchList: ['only/one'] });
 
+    const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     await cmd.execute(['rm', 'only/one']);
-    const config = readConfig();
-    assert.deepStrictEqual(config.watchList, []);
+    assert.deepStrictEqual(readConfig().watchList, []);
   });
 });
 

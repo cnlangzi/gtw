@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +26,15 @@ jobs:
             commands/WatchCommand.test.js \
             commands/ReviewCommand.test.js
 
+  e2e-workflow-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Run E2E workflow tests
-        run: |
-          node --test commands/e2e/workflow.test.js
+        run: node --test commands/e2e/workflow.test.js
