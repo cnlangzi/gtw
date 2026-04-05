@@ -185,16 +185,10 @@ export class NewCommand extends Commander {
     // Clean messages: strip role prefixes and any JSON-like metadata from discussion
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-    // Language-aware prompts
-    const isZh = lang === 'zh';
-    const prompt = isZh
-      ? `根据以下讨论写一个 GitHub issue。仅输出有效 JSON，不要其他内容。
-
-讨论：
-${cleanMessages}
-
-JSON：`
-      : `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
+    // Language-aware prompt — English template with dynamic language instruction
+    const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
+    const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
+Generate the issue title and body in ${langLabel}.
 
 Discussion:
 ${cleanMessages}
@@ -205,12 +199,9 @@ JSON:`;
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const systemPrompt = isZh
-      ? `你根据讨论内容撰写 GitHub issue。你只输出有效 JSON。不要 markdown。不要解释。不要在 JSON 对象之外输出任何内容。
-
-JSON 格式：
-{"title":"fix: 简短描述","body":"## 背景\\n\\n## 修改内容\\n\\n## 验收标准\\n"}`
-      : `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
+    const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
+    const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
+Generate the issue title and body in ${langLabel}.
 
 JSON format:
 {"title":"fix: short description","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
