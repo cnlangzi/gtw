@@ -1,6 +1,6 @@
 import * as isoGit from 'isomorphic-git';
 import { Buffer } from 'buffer';
-import { execSync } from 'child_process';
+import { execSync as _exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { join, resolve, dirname } from 'path';
@@ -31,14 +31,14 @@ function runGitSync(fn, workdir, ...args) {
 
 function execGit(cmd, cwd) {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return _exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch (e) {
     throw new Error(`Git error: ${e.message}`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Legacy execSync wrapper — kept for ad-hoc commands isomorphic-git doesn't support
+// Legacy wrapper — kept for ad-hoc commands isomorphic-git doesn't support
 // ---------------------------------------------------------------------------
 
 export function git(cmd, cwd) {
@@ -115,7 +115,7 @@ export function getDefaultBranch(workdir) {
       }
     }
     // Try symbolic-ref
-    const symRef = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+    const symRef = _exec('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: workdir,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -129,7 +129,7 @@ export function getDefaultBranch(workdir) {
 export { getDefaultBranch as defaultBranch, getDefaultBranch as getDefaultBranchSync };
 
 // ---------------------------------------------------------------------------
-// fetch — use execSync (isomorphic-git fetch requires HTTP agent config)
+// fetch — use _exec (isomorphic-git fetch requires HTTP agent config)
 // ---------------------------------------------------------------------------
 
 export async function fetch(workdir, { remote = 'origin', ref, depth, tags = true } = {}) {
@@ -209,7 +209,7 @@ export async function existsRef(workdir, ref) {
 }
 
 // ---------------------------------------------------------------------------
-// resetHard — sync reset to a ref via execSync (simple and reliable)
+// resetHard — sync reset to a ref via _exec (simple and reliable)
 // ---------------------------------------------------------------------------
 
 export async function resetHard(workdir, ref = 'HEAD') {
@@ -382,7 +382,7 @@ export async function diffStaged(workdir) {
 
 // ---------------------------------------------------------------------------
 // Simple staged diff using git diff --cached
-// For complex diffs, fall back to execSync-based diff (safer than incorrect output)
+// For complex diffs, fall back to _exec-based diff (safer than incorrect output)
 // ---------------------------------------------------------------------------
 
 export function getStagedDiff(workdir) {
