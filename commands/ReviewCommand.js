@@ -1,7 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
-import { getValidToken, apiRequest } from '../utils/api.js';
+import { getValidToken, apiRequest, graphqlRequest } from '../utils/api.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
 import crypto from 'crypto';
@@ -550,66 +550,56 @@ function stableItemId(file, location, title) {
  * 3. GitHub timeline: cross-reference events to/from the PR
  * Returns array of { number, title, body }.
  */
+/**
+ * Find all linked issues for a PR via GitHub GraphQL API.
+ * Uses pullRequest.closingIssuesReferences — the canonical "Development" panel linkage.
+ * Falls back to REST regex parsing of PR body if GraphQL is unavailable.
+ */
 async function findLinkedIssues(prNum, prBody, token, repo) {
-  const issuesMap = new Map();
+  const [owner, repoName] = repo.split('/');
 
-  // Strategy 1: parse "Closes #N" from PR body (existing behavior)
-  // Matches: Closes #N, Closes: #N, Fix #N, Fixes: #N, etc.
+  // Primary: GraphQL — this is the official "linked issues" from GitHub Development panel
+  try {
+    const gqlQuery = `query GetLinkedIssues($owner: String!, $repo: String!, $prNum: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $prNum) {
+          closingIssuesReferences(first: 20) {
+            nodes { number title body }
+          }
+        }
+      }
+    }`;
+    const data = await graphqlRequest(gqlQuery, { owner, repo: repoName, prNum }, token);
+    const nodes = data?.repository?.pullRequest?.closingIssuesReferences?.nodes || [];
+    if (nodes.length > 0) {
+      console.log(`[ReviewCommand] Found ${nodes.length} linked issue(s) via GraphQL`);
+      return nodes.map(n => ({
+        number: n.number,
+        title: n.title || '',
+        body: n.body || '',
+        source: 'github-development-link',
+      }));
+    }
+  } catch (e) {
+    console.error(`[ReviewCommand] GraphQL linked issues failed (${e.message}), falling back to body regex`);
+  }
+
+  // Fallback: REST body regex for "Closes #N / Fixes: #N"
+  const issuesMap = new Map();
   const bodyMatches = prBody?.matchAll(/(?:closes?|fixes?|resolves?)\s*:?\s*#(\d+)/gi) || [];
   for (const match of bodyMatches) {
     const num = parseInt(match[1]);
-    if (!issuesMap.has(num)) issuesMap.set(num, { source: 'body-keyword', numbers: [num] });
-    else if (!issuesMap.get(num).numbers.includes(num)) issuesMap.get(num).numbers.push(num);
+    if (!issuesMap.has(num)) issuesMap.set(num, { source: 'body-keyword' });
   }
 
-  // Strategy 2: GitHub search — issues that mention #{prNum} in body or title
-  try {
-    const queries = [
-      `is:issue repo:${repo} "#${prNum}" in:body`,
-      `is:issue repo:${repo} "#${prNum}" in:title`,
-    ];
-    for (const q of queries) {
-      try {
-        const result = await apiRequest('GET', `/search/issues?q=${encodeURIComponent(q)}&per_page=20`, token);
-        for (const item of (result.items || [])) {
-          const num = item.number;
-          if (!issuesMap.has(num)) {
-            issuesMap.set(num, { source: 'search-mention', numbers: [num], title: item.title, body: item.body || '' });
-          }
-        }
-      } catch (e) {
-        // search may fail on rate limits, skip silently
-      }
-    }
-  } catch (e) {}
-
-  // Strategy 3: Timeline events — cross-reference events linking to this PR
-  try {
-    const events = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/timeline?per_page=100`, token);
-    for (const event of (events || [])) {
-      if (event.event !== 'cross-reference') continue;
-      const src = event.source;
-      if (src?.type === 'issue') {
-        const num = src.issue?.number;
-        if (num && !issuesMap.has(num)) {
-          issuesMap.set(num, { source: 'timeline-cross-ref', numbers: [num], title: src.issue.title, body: src.issue.body || '' });
-        }
-      }
-    }
-  } catch (e) {}
-
-  // Fetch full issue details for all candidates
   const linkedIssues = [];
   for (const [num, meta] of issuesMap) {
     try {
       const issue = await apiRequest('GET', `/repos/${repo}/issues/${num}`, token);
-      if (issue.pull_request) continue; // skip if it's a PR, not an issue
+      if (issue.pull_request) continue;
       linkedIssues.push({ number: issue.number, title: issue.title || '', body: issue.body || '', source: meta.source });
-    } catch (e) {
-      // inaccessible issue, skip
-    }
+    } catch (e) { /* skip */ }
   }
-
   return linkedIssues;
 }
 

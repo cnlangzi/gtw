@@ -105,3 +105,43 @@ export async function validateToken(token) {
   const client = new GitHubClient(token);
   return await client.validateToken();
 }
+
+export async function graphqlRequest(query, variables, token) {
+  return new Promise((resolve, reject) => {
+    const bodyStr = JSON.stringify({ query, variables });
+    const options = {
+      hostname: 'api.github.com',
+      port: 443,
+      path: '/graphql',
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(bodyStr),
+        'User-Agent': 'github-work-skill/1.0',
+        'X-GitHub-Api-Version': '2022-11-28',
+        Accept: 'application/vnd.github.v4+json',
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            if (parsed.errors) reject(new Error(`GraphQL errors: ${JSON.stringify(parsed.errors)}`));
+            else resolve(parsed.data);
+          } else {
+            reject(new Error(`GraphQL API ${res.statusCode}: ${data.substring(0, 200)}`));
+          }
+        } catch (e) {
+          reject(new Error(`GraphQL parse error (${res.statusCode}): ${data.substring(0, 200)}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(bodyStr);
+    req.end();
+  });
+}
