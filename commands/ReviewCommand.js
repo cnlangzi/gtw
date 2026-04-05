@@ -119,13 +119,19 @@ async function createReviewWorktree(workdir, prNum) {
  * Remove a git worktree. Silently ignores errors.
  */
 function removeReviewWorktree(worktreePath, gitRoot) {
-  if (!worktreePath || !fs.existsSync(worktreePath)) return;
-  try {
-    worktreeRemoveByPath(worktreePath, gitRoot);
-  } catch {}
-  // Fallback: remove directory if git doesn't know about it
-  if (worktreePath && fs.existsSync(worktreePath)) {
+  if (!worktreePath) return;
+  // Try git worktree remove with full path first (git cleans up registry + dir)
+  try { worktreeRemoveByPath(worktreePath, gitRoot); } catch {}
+
+  // Fallback: if path still exists, try git prune to clean orphaned registry entries
+  if (fs.existsSync(worktreePath)) {
     try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  }
+
+  // Also clean old-style sibling path if it exists (legacy worktrees before worktrees/ subdir)
+  const oldStylePath = path.resolve(path.dirname(gitRoot), path.basename(worktreePath));
+  if (oldStylePath !== worktreePath && fs.existsSync(oldStylePath)) {
+    try { fs.rmSync(oldStylePath, { recursive: true, force: true }); } catch {}
   }
 }
 
