@@ -177,11 +177,13 @@ export class NewCommand extends Commander {
       if (langKey) lang = gtwConfig[langKey] || 'en';
     } catch {}
 
+    // Language label for AI prompts (used in both prompt and systemPrompt below)
+    const langLabel = getLangLabel(lang);
+
     // Clean messages: strip role prefixes and any JSON-like metadata from discussion
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-    // Language-aware prompt — English template with dynamic language instruction
-    const langLabel = getLangLabel(lang);
+    // Language-aware prompt — generates issue in the configured language
     const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
 Generate the issue title and body in ${langLabel}.
 
