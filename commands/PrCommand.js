@@ -56,8 +56,8 @@ function parsePrResponse(rawText) {
 // Generate PR title/body via LLM
 // ---------------------------------------------------------------------------
 
-async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang }) {
-  const { model } = await resolveModel();
+async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang, sessionKey }) {
+  const { model } = await resolveModel(sessionKey);
 
   const langLabel = getLangLabel(lang);
 
@@ -123,6 +123,11 @@ function getCommitLogDiff(workdir, headBranch, baseBranch) {
 // ---------------------------------------------------------------------------
 
 export class PrCommand extends Commander {
+  constructor(context) {
+    super(context);
+    this.sessionKey = context.sessionKey;
+  }
+
   async execute(args) {
     const wip = getWip();
     if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
@@ -239,6 +244,7 @@ export class PrCommand extends Commander {
         issueBody,
         issueId,
         baseBranch,
+        sessionKey: this.sessionKey,
         lang,
       });
     } catch (e) {

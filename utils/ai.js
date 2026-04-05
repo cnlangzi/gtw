@@ -1,15 +1,18 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
+import { getConfig } from './config.js';
+import { getSessionEntry } from './session.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
  * Supports "model-id" (searches all providers) or "provider/model-id" (direct lookup).
  * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
+ * @param {string} [agentId='main'] - Agent ID for models.json lookup
  * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
  */
-export function findModelProviderConfig(model) {
-  const modelsPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json');
+export function findModelProviderConfig(model, agentId = 'main') {
+  const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
   if (!existsSync(modelsPath)) return null;
   try {
     const data = JSON.parse(readFileSync(modelsPath, 'utf8'));
@@ -50,10 +53,11 @@ export function findModelProviderConfig(model) {
  * @param {string} model - Model id (with optional provider prefix)
  * @param {string} systemPrompt
  * @param {string} userPrompt
+ * @param {string} [agentId='main'] - Agent ID for models.json lookup
  * @returns {Promise<string>} - Response text
  */
-export async function callAI(model, systemPrompt, userPrompt) {
-  const providerConfig = findModelProviderConfig(model);
+export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') {
+  const providerConfig = findModelProviderConfig(model, agentId);
   if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
 
   const { provider, baseUrl, authHeader } = providerConfig;
@@ -62,7 +66,7 @@ export async function callAI(model, systemPrompt, userPrompt) {
 
   const headers = { 'Content-Type': 'application/json' };
   try {
-    const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+    const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
     const authData = JSON.parse(readFileSync(authPath, 'utf8'));
     const token = authData.profiles?.[authKey]?.access;
     if (token) {
@@ -81,7 +85,8 @@ export async function callAI(model, systemPrompt, userPrompt) {
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
-    const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
+    const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
+    const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
         .find((m) => m.id === modelId)
@@ -110,25 +115,24 @@ export async function callAI(model, systemPrompt, userPrompt) {
 
 /**
  * Resolve the model to use for gtw commands.
- * Priority: /gtw model config > current session model > default.
- * @returns {{ model: string, provider: string }}
+ * Priority: /gtw model config (gtw/config.json) > current session model.
+ * @param {string|null} [sessionKey=null] - Session key to read session model from.
+ *        If not provided, only gtw/config.json is consulted.
+ * @returns {{ model: string, modelProvider: string }}
  */
-export async function resolveModel() {
-  let model = 'MiniMax-M2.7';
-  let modelProvider = 'minimax-portal';
+export async function resolveModel(sessionKey = null) {
+  // 1. Session model (if sessionKey provided — throws if session not found or model missing)
+  let model = null;
+  let modelProvider = null;
+  if (sessionKey) {
+    const cfg = getConfig();
+    const dmScope = cfg.session?.dmScope || 'main';
+    const entry = getSessionEntry(sessionKey, dmScope, cfg);
+    modelProvider = entry.modelProvider;
+    model = entry.model;
+  }
 
-  try {
-    const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-    if (existsSync(sessionsPath)) {
-      const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-      const mainSession = sessionsData['agent:main:main'];
-      if (mainSession) {
-        modelProvider = mainSession.modelProvider || modelProvider;
-        model = mainSession.model || model;
-      }
-    }
-  } catch {}
-
+  // 2. gtw/config.json override (always checked; applies on top of session model)
   try {
     const gtwConfigPath = join(homedir(), '.openclaw', 'gtw', 'config.json');
     if (existsSync(gtwConfigPath)) {
@@ -136,6 +140,15 @@ export async function resolveModel() {
       if (gtwConfig.model) model = gtwConfig.model;
     }
   } catch {}
+
+  // 3. At this point model must be set (sessionKey ensures this, or config fallback)
+  if (!model || !modelProvider) {
+    throw new Error(
+      sessionKey
+        ? `Session ${sessionKey} has no model`
+        : 'No model configured in gtw/config.json'
+    );
+  }
 
   return { model, modelProvider };
 }

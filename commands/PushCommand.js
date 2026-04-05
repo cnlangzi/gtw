@@ -48,8 +48,8 @@ function parseCommitResponse(rawText) {
   return null;
 }
 
-async function generateCommitMessage(diff, branch) {
-  const { model } = await resolveModel();
+async function generateCommitMessage(diff, branch, sessionKey) {
+  const { model } = await resolveModel(sessionKey);
   const branchType = getBranchType(branch);
 
   const systemPrompt = `You are a senior software engineer writing professional git commit messages.
@@ -79,6 +79,11 @@ Output ONLY valid JSON.`;
 }
 
 export class PushCommand extends Commander {
+  constructor(context) {
+    super(context);
+    this.sessionKey = context.sessionKey;
+  }
+
   async execute(args) {
     const wip = getWip();
     if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
@@ -105,7 +110,7 @@ export class PushCommand extends Commander {
 
     let msg;
     try {
-      msg = await generateCommitMessage(diff, branch);
+      msg = await generateCommitMessage(diff, branch, this.sessionKey);
     } catch (e) {
       return {
         ok: false,
