@@ -5,7 +5,8 @@ import { Commander } from './Commander.js';
 import { getSessionFile } from '../utils/session.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { git, getDefaultBranch, getRemoteRepo, fetch, checkout, branchExists } from '../utils/git.js';
-import { apiRequest, getValidToken } from '../utils/api.js';
+import { getValidToken } from '../utils/api.js';
+import { GitHubClient } from '../utils/github.js';
 import { resolveModel } from '../utils/ai.js';
 import https from 'https';
 
@@ -35,24 +36,24 @@ function ensureUniqueBranch(workdir, baseName) {
 }
 
 // Fetch a GitHub issue by number from the repo configured in wip
-async function fetchIssue(issueId, token, repo) {
-  const data = await apiRequest('GET', `/repos/${repo}/issues/${issueId}`, token);
+async function fetchIssue(issueId, repo, client) {
+  const data = await client.request('GET', `/repos/${repo}/issues/${issueId}`);
   return data;
 }
 
 // Claim an issue by adding the "gtw/wip" label.
 // Returns { ok: true } on success.
 // Returns { ok: false, reason: 'already_claimed' } if the label is already present.
-async function claimIssue(issueId, token, repo) {
+async function claimIssue(issueId, repo, client) {
   // First check if gtw/wip label already exists on this issue
-  const labelsData = await apiRequest('GET', `/repos/${repo}/issues/${issueId}/labels`, token);
+  const labelsData = await client.request('GET', `/repos/${repo}/issues/${issueId}/labels`);
   const hasWip = labelsData.some(l => l.name === 'gtw/wip');
   if (hasWip) {
     return { ok: false, reason: 'already_claimed' };
   }
   // Try to add the label
   try {
-    await apiRequest('POST', `/repos/${repo}/issues/${issueId}/labels`, token, {
+    await client.request('POST', `/repos/${repo}/issues/${issueId}/labels`, {
       labels: ['gtw/wip'],
     });
     return { ok: true };
@@ -66,9 +67,9 @@ async function claimIssue(issueId, token, repo) {
 }
 
 // Remove the "gtw/wip" label from an issue (for cleanup after fix done/failed).
-async function unclaimIssue(issueId, token, repo) {
+async function unclaimIssue(issueId, repo, client) {
   try {
-    await apiRequest('DELETE', `/repos/${repo}/issues/${issueId}/labels/gtw/wip`, token);
+    await client.request('DELETE', `/repos/${repo}/issues/${issueId}/labels/gtw/wip`);
   } catch (e) {
     // 404 = label wasn't there, ignore
     if (!e.message.includes('404')) {
@@ -205,11 +206,12 @@ export class FixCommand extends Commander {
 
     // Get token once and reuse throughout the command
     const token = await getValidToken();
+    const client = new GitHubClient(token);
 
     // Step 3: Fetch issue from GitHub
     let issue;
     try {
-      issue = await fetchIssue(issueId, token, repo);
+      issue = await fetchIssue(issueId, repo, client);
     } catch (e) {
       if (e.message.includes('404')) {
         return { ok: false, message: `⚠️ Issue #${issueId} not found in ${repo}. Check the issue number or repo.` };
@@ -225,7 +227,7 @@ export class FixCommand extends Commander {
 
     // Step 4: Claim the issue (add gtw/wip label) before any work
     try {
-      const claimResult = await claimIssue(issueId, token, repo);
+      const claimResult = await claimIssue(issueId, repo, client);
       if (!claimResult.ok) {
         return {
           ok: false,
@@ -258,7 +260,7 @@ export class FixCommand extends Commander {
       // Best-effort attempt to remove the gtw/wip label before returning the failure.
       // Errors from unclaimIssue() are logged but do not mask the original git error.
       try {
-        await unclaimIssue(issueId, token, repo);
+        await unclaimIssue(issueId, repo, client);
       } catch (unclaimErr) {
         console.error('[FixCommand] Warning: unclaimIssue() failed during git error recovery', unclaimErr);
       }

@@ -158,6 +158,29 @@ export class GitHubClient {
   }
 
   /**
+   * Execute a GraphQL query using the authenticated token.
+   * @param {string} query - GraphQL query string
+   * @param {object} variables - Query variables
+   * @returns {Promise<object>} - GraphQL response data
+   */
+  async graphql(query, variables = {}) {
+    const bodyStr = JSON.stringify({ query, variables });
+    const headers = {
+      Authorization: `Bearer ${this.token}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'gtw/1.0',
+      'X-GitHub-Api-Version': '2022-11-28',
+      Accept: 'application/vnd.github.v4+json',
+    };
+    const { status, data } = await httpsRequest('POST', GITHUB_API_BASE + '/graphql', headers, bodyStr);
+    if (status >= 200 && status < 300) {
+      if (data.errors) throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
+      return data.data;
+    }
+    throw new Error(`GraphQL API ${status}: ${JSON.stringify(data)}`);
+  }
+
+  /**
    * Request a device code for OAuth device flow
    * @returns {Promise<{
    *   device_code: string,

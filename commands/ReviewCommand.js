@@ -1,7 +1,8 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
-import { getValidToken, apiRequest, graphqlRequest } from '../utils/api.js';
+import { getValidToken } from '../utils/api.js';
+import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
 import crypto from 'crypto';
@@ -75,7 +76,7 @@ IMPORTANT:
  * Create a git worktree for the PR branch using git.js helpers.
  * Worktree path: ../gtw-review-{prNum} relative to plugin root.
  */
-async function createReviewWorktree(repo, prNum, token) {
+async function createReviewWorktree(repo, prNum) {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const worktreeName = `gtw-review-${prNum}`;
   const worktreePath = path.resolve(pluginRoot, '..', worktreeName);
@@ -531,7 +532,7 @@ function stableItemId(file, location, title) {
  * Uses pullRequest.closingIssuesReferences — the canonical "Development" panel linkage.
  * Falls back to REST regex parsing of PR body if GraphQL is unavailable.
  */
-async function findLinkedIssues(prNum, prBody, token, repo) {
+async function findLinkedIssues(prNum, prBody, client, repo) {
   const [owner, repoName] = repo.split('/');
 
   // Primary: GraphQL — this is the official "linked issues" from GitHub Development panel
@@ -545,7 +546,7 @@ async function findLinkedIssues(prNum, prBody, token, repo) {
         }
       }
     }`;
-    const data = await graphqlRequest(gqlQuery, { owner, repo: repoName, prNum }, token);
+    const data = await client.graphql(gqlQuery, { owner, repo: repoName, prNum });
     const nodes = data?.repository?.pullRequest?.closingIssuesReferences?.nodes || [];
     if (nodes.length > 0) {
       console.log(`[ReviewCommand] Found ${nodes.length} linked issue(s) via GraphQL`);
@@ -571,7 +572,7 @@ async function findLinkedIssues(prNum, prBody, token, repo) {
   const linkedIssues = [];
   for (const [num, meta] of issuesMap) {
     try {
-      const issue = await apiRequest('GET', `/repos/${repo}/issues/${num}`, token);
+      const issue = await client.request('GET', `/repos/${repo}/issues/${num}`);
       if (issue.pull_request) continue;
       linkedIssues.push({ number: issue.number, title: issue.title || '', body: issue.body || '', source: meta.source });
     } catch (e) { /* skip */ }
@@ -582,13 +583,13 @@ async function findLinkedIssues(prNum, prBody, token, repo) {
 /**
  * Fetch PR details including diff summary and linked issues.
  */
-export async function fetchPrDetails(prNum, token, repo) {
+export async function fetchPrDetails(prNum, client, repo) {
   const [pr, files] = await Promise.all([
-    apiRequest('GET', `/repos/${repo}/pulls/${prNum}`, token),
-    apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token),
+    client.request('GET', `/repos/${repo}/pulls/${prNum}`),
+    client.request('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`),
   ]);
 
-  const linkedIssues = await findLinkedIssues(prNum, pr.body, token, repo);
+  const linkedIssues = await findLinkedIssues(prNum, pr.body, client, repo);
 
   // Get base branch
   const baseBranch = pr.base?.ref || 'main';
@@ -619,8 +620,8 @@ export async function fetchPrDetails(prNum, token, repo) {
  * Find existing review comment by this agent on a PR.
  * Returns the comment object or null.
  */
-export async function findReviewComment(prNum, token, repo, myLogin) {
-  const comments = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/comments`, token);
+export async function findReviewComment(prNum, client, repo, myLogin) {
+  const comments = await client.request('GET', `/repos/${repo}/issues/${prNum}/comments`);
   return (
     comments.find(
       (c) =>
@@ -632,9 +633,9 @@ export async function findReviewComment(prNum, token, repo, myLogin) {
 /**
  * Delete a comment by ID. Silently ignores 404s.
  */
-async function deleteComment(commentId, prNum, repo, token) {
+async function deleteComment(commentId, prNum, repo, client) {
   try {
-    await apiRequest('DELETE', `/repos/${repo}/issues/comments/${commentId}`, token);
+    await client.request('DELETE', `/repos/${repo}/issues/comments/${commentId}`);
   } catch (e) {
     if (!e.message.includes('404')) {
       console.error(`[ReviewCommand] Failed to delete comment ${commentId}: ${e.message}`);
@@ -766,6 +767,7 @@ export class ReviewCommand extends Commander {
    */
   async execute(args) {
     const token = await getValidToken();
+    const client = new GitHubClient(token);
     const wip = getWip();
     const config = getConfig();
     const maxRounds = config.maxReviewRounds || DEFAULT_MAX_ROUNDS;
@@ -780,7 +782,7 @@ export class ReviewCommand extends Commander {
       }
     }
 
-    const myLogin = (await apiRequest('GET', '/user', token)).login;
+    const myLogin = (await client.request('GET', '/user')).login;
 
     // Determine target repo and PR
     if (targetPrNum) {
@@ -789,17 +791,17 @@ export class ReviewCommand extends Commander {
       if (!repo) {
         return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
       }
-      return this._reviewSpecificPr(targetPrNum, repo, token, myLogin, wip, maxRounds);
+      return this._reviewSpecificPr(targetPrNum, repo, client, myLogin, wip, maxRounds);
     } else {
       // /gtw review — scan watch list for gtw/ready PRs
-      return this._reviewNextFromWatchList(token, myLogin, wip, maxRounds);
+      return this._reviewNextFromWatchList(client, myLogin, wip, maxRounds);
     }
   }
 
   /**
    * Scan watch list and claim the earliest gtw/ready PR.
    */
-  async _reviewNextFromWatchList(token, myLogin, wip, maxRounds) {
+  async _reviewNextFromWatchList(client, myLogin, wip, maxRounds) {
     const config = getConfig();
     const watchList = config.watchList || [];
 
@@ -816,7 +818,7 @@ export class ReviewCommand extends Commander {
     for (const repo of watchList) {
       try {
         const params = new URLSearchParams({ state: 'open', per_page: 100, sort: 'updated', direction: 'asc' });
-        const prs = await apiRequest('GET', `/repos/${repo}/pulls?${params}`, token);
+        const prs = await client.request('GET', `/repos/${repo}/pulls?${params}`);
 
         for (const pr of prs) {
           if (pr.user?.login === myLogin) continue; // skip own PRs
@@ -854,17 +856,17 @@ export class ReviewCommand extends Commander {
 
     // Pick the earliest
     const chosen = candidatePrs[0];
-    return this._claimAndReviewPr(chosen.repo, chosen.pr.number, token, myLogin, wip, maxRounds);
+    return this._claimAndReviewPr(chosen.repo, chosen.pr.number, client, myLogin, wip, maxRounds);
   }
 
   /**
    * Review a specific PR by number in a given repo.
    */
-  async _reviewSpecificPr(prNum, repo, token, myLogin, wip, maxRounds) {
+  async _reviewSpecificPr(prNum, repo, client, myLogin, wip, maxRounds) {
     // Verify PR exists
     let prData;
     try {
-      prData = await fetchPrDetails(prNum, token, repo);
+      prData = await fetchPrDetails(prNum, client, repo);
     } catch (e) {
       if (e.message.includes('404')) {
         return { ok: false, message: `⚠️ PR #${prNum} not found in ${repo}` };
@@ -872,17 +874,17 @@ export class ReviewCommand extends Commander {
       throw e;
     }
 
-    return this._claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData);
+    return this._claimAndReviewPr(repo, prNum, client, myLogin, wip, maxRounds, prData);
   }
 
   /**
    * Core logic: claim PR (set gtw/wip), call LLM, update review comment, track round.
    * Enhanced to use git worktree + full codebase scanning.
    */
-  async _claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData = null) {
+  async _claimAndReviewPr(repo, prNum, client, myLogin, wip, maxRounds, prData = null) {
     // Fetch fresh PR data if not provided
     if (!prData) {
-      prData = await fetchPrDetails(prNum, token, repo);
+      prData = await fetchPrDetails(prNum, client, repo);
     }
 
     // Check if already stuck — do not re-review
@@ -911,7 +913,7 @@ export class ReviewCommand extends Commander {
     const previousItems = existingReviewState.items || [];
 
     // Find existing review comment
-    const existingComment = await findReviewComment(prNum, token, repo, myLogin);
+    const existingComment = await findReviewComment(prNum, client, repo, myLogin);
 
     let round = 1;
     if (existingComment) {
@@ -926,7 +928,7 @@ export class ReviewCommand extends Commander {
     // Check if max rounds exceeded
     if (round > maxRounds) {
       try {
-        await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/stuck');
+        await setPrLabel({ prNum, repo, client, isPR: true }, 'gtw/stuck');
       } catch (e) {
         return { ok: false, message: `⚠️ ${e.message}` };
       }
@@ -950,7 +952,7 @@ export class ReviewCommand extends Commander {
     // Atomically claim the PR: remove other gtw labels, set gtw/wip.
     let preempted = false;
     try {
-      const result = await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/wip');
+      const result = await setPrLabel({ prNum, repo, client, isPR: true }, 'gtw/wip');
       preempted = result.preempted;
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
@@ -965,11 +967,11 @@ export class ReviewCommand extends Commander {
     // NEW: Create worktree for PR branch
     let worktreePath = null;
     try {
-      worktreePath = await createReviewWorktree(repo, prNum, token);
+      worktreePath = await createReviewWorktree(repo, prNum);
     } catch (e) {
       // Rollback label on worktree failure
       try {
-        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+        await setPrLabel({ prNum, repo, client, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
       } catch (rollbackErr) {
         console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
       }
@@ -1030,7 +1032,7 @@ export class ReviewCommand extends Commander {
     } catch (e) {
       // LLM failed — rollback to previous label
       try {
-        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+        await setPrLabel({ prNum, repo, client, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
       } catch (rollbackErr) {
         console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
       }
@@ -1064,7 +1066,7 @@ export class ReviewCommand extends Commander {
 
     // Delete existing comment if present
     if (previousCommentId) {
-      await deleteComment(previousCommentId, prNum, repo, token);
+      await deleteComment(previousCommentId, prNum, repo, client);
     }
 
     // Render and post new review comment
@@ -1081,14 +1083,14 @@ export class ReviewCommand extends Commander {
 
     let newCommentId;
     try {
-      const commentResp = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
+      const commentResp = await client.request('POST', `/repos/${repo}/issues/${prNum}/comments`, {
         body: commentBody,
       });
       newCommentId = commentResp.id;
     } catch (e) {
       // Failed to post comment — rollback label
       try {
-        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+        await setPrLabel({ prNum, repo, client, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
       } catch (rollbackErr) {
         console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
       }
@@ -1103,7 +1105,7 @@ export class ReviewCommand extends Commander {
 
     // Apply final label
     try {
-      await setPrLabel({ prNum, repo, token, isPR: true }, finalLabel);
+      await setPrLabel({ prNum, repo, client, isPR: true }, finalLabel);
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
     }

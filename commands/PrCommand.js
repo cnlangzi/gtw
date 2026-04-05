@@ -2,7 +2,8 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getCurrentBranch, getDefaultBranch, tryCheckoutRemoteBranch, getCommitLogDiff } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
-import { getValidToken, apiRequest } from '../utils/api.js';
+import { getValidToken } from '../utils/api.js';
+import { GitHubClient } from '../utils/github.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
 
 const MAX_DIFF_LEN = 8000;
@@ -142,7 +143,8 @@ export class PrCommand extends Commander {
       let issue;
       try {
         const token = await getValidToken();
-        issue = await apiRequest('GET', `/repos/${wip.repo}/issues/${issueId}`, token);
+        const client = new GitHubClient(token);
+        issue = await client.request('GET', `/repos/${wip.repo}/issues/${issueId}`);
       } catch (e) {
         if (e.message.includes('404')) {
           throw new Error(`Issue #${issueId} not found in ${wip.repo}. Check the issue number.`);

@@ -17,7 +17,7 @@ const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 // Import after setting up config dir
-const { getValidToken, apiRequest, readJSON, writeJSON } = await import('../utils/api.js');
+const { getValidToken, readJSON, writeJSON } = await import('../utils/api.js');
 
 // Ensure config dir exists
 if (!existsSync(CONFIG_DIR)) {
