@@ -51,7 +51,7 @@ function injectLoginDirective(sessionKey, sessionFile, deviceCode) {
     `   b. Announce: ✅ GitHub login successful! User: @<username>`,
     `   c. Update ${POLLING_STATE_FILE}: {"status": "completed", "login": "<username>"}`,
     ``,
-    `6. Proxy: curl respects HTTP_PROXY / HTTPS_PROXY env vars automatically if set.`,
+    ``,
     ``,
     `===`,
     ``,
