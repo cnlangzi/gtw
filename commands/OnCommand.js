@@ -1,4 +1,5 @@
 import { Commander } from './Commander.js';
+import { injectPlanModeDirective } from '../utils/session.js';
 import { existsSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
@@ -9,7 +10,6 @@ export class OnCommand extends Commander {
   constructor(context) {
     super(context);
     this.sessionKey = context.sessionKey;
-    this.injectMessage = context.injectMessage;
   }
 
   async execute(args) {
@@ -31,9 +31,8 @@ export class OnCommand extends Commander {
     const repo = getRemoteRepo(absWorkdir);
     saveWip({ workdir: absWorkdir, repo, createdAt: new Date().toISOString() });
 
-    // Inject requirements phase directive so the agent knows to discuss before coding
-    const phaseText = `Workdir: ${absWorkdir}\nRepo: ${repo}\n\nYou are in REQUIREMENTS CLARIFICATION phase.\n\nYour ONLY task right now:\n- Read and understand the existing code\n- Identify what the current code does and how it works\n- Confirm your understanding by describing it back to User\n- Ask any clarifying questions\n\nYou MUST NOT:\n- Write any code\n- Modify any files\n- Refactor anything\n- Suggest fixes (unless asked)\n\nWhen User confirms your understanding is correct and explicitly says "可以开始了" (or "you can start"), THEN you may begin implementation.\n\nReply format:\n## 当前理解\n[用自己的话描述代码逻辑]\n## 疑问\n[有任何不确定的地方列出来]`;
-    this.injectMessage?.(this.sessionKey, phaseText);
+    // Inject PLAN MODE directive so the agent knows to discuss before coding
+    injectPlanModeDirective(this.sessionKey, absWorkdir, repo);
 
     return {
       ok: true,
