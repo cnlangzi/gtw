@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 
 // We need to test the actual exported function.
 // Import it — it uses the internal git() helper from git.js.
-import { tryCheckoutRemoteBranch, getCurrentBranch } from './git.js';
+import { tryCheckoutRemoteBranch, currentBranch as getCurrentBranch } from './git.js';
 
 function setupBareRepo(name) {
   const dir = mkdtempSync(join(tmpdir(), `gtw-test-${name}-`));
@@ -48,48 +48,48 @@ describe('tryCheckoutRemoteBranch', () => {
   });
 
   // Scenario: remote exists (simple — create remote branch, call checkout)
-  it('returns remote-synced when remote branch exists', () => {
+  it('returns remote-synced when remote branch exists', async () => {
     // Create a remote branch 'fix/test-issue' on origin
     execSync('git fetch origin', { cwd: localDir });
     execSync('git branch fix/test-issue origin/main', { cwd: localDir });
     execSync(`git push origin fix/test-issue`, { cwd: localDir });
 
-    const result = tryCheckoutRemoteBranch(localDir, 'fix/test-issue');
+    const result = await tryCheckoutRemoteBranch(localDir, 'fix/test-issue');
 
     assert.strictEqual(result.status, 'remote-synced', `expected remote-synced, got ${result.status}`);
     assert.strictEqual(result.branch, 'fix/test-issue');
     // Should be on the branch
-    assert.strictEqual(getCurrentBranch(localDir), 'fix/test-issue');
+    assert.strictEqual(await getCurrentBranch(localDir), 'fix/test-issue');
   });
 
-  it('returns local-only when remote branch missing but local exists', () => {
+  it('returns local-only when remote branch missing but local exists', async () => {
     // Create a local branch but don't push it
     execSync('git checkout -b fix/local-only', { cwd: localDir });
     writeFileSync(join(localDir, 'local.txt'), 'local change\n', 'utf8');
     execSync('git add .', { cwd: localDir });
     execSync('git commit -m "local commit"', { cwd: localDir });
 
-    const result = tryCheckoutRemoteBranch(localDir, 'fix/local-only');
+    const result = await tryCheckoutRemoteBranch(localDir, 'fix/local-only');
 
     assert.strictEqual(result.status, 'local-only', `expected local-only, got ${result.status}`);
     assert.strictEqual(result.branch, 'fix/local-only');
-    assert.strictEqual(getCurrentBranch(localDir), 'fix/local-only');
+    assert.strictEqual(await getCurrentBranch(localDir), 'fix/local-only');
   });
 
-  it('returns not-found when neither remote nor local branch exists', () => {
+  it('returns not-found when neither remote nor local branch exists', async () => {
     // Make sure we're on main before the call
     execSync('git checkout main', { cwd: localDir });
 
-    const beforeBranch = getCurrentBranch(localDir);
-    const result = tryCheckoutRemoteBranch(localDir, 'fix/does-not-exist');
+    const beforeBranch = await getCurrentBranch(localDir);
+    const result = await tryCheckoutRemoteBranch(localDir, 'fix/does-not-exist');
 
     assert.strictEqual(result.status, 'not-found', `expected not-found, got ${result.status}`);
     assert.strictEqual(result.branch, beforeBranch);
     // Should stay on current branch
-    assert.strictEqual(getCurrentBranch(localDir), beforeBranch);
+    assert.strictEqual(await getCurrentBranch(localDir), beforeBranch);
   });
 
-  it('hard-resets to remote when remote branch exists and local also exists (same name)', () => {
+  it('hard-resets to remote when remote branch exists and local also exists (same name)', async () => {
     // Create remote branch via local branch + push, then delete local (avoid tracking)
     execSync('git checkout -b fix/existing', { cwd: localDir });
     execSync('git push origin fix/existing', { cwd: localDir });
@@ -106,16 +106,16 @@ describe('tryCheckoutRemoteBranch', () => {
     const localCommit = execSync('git rev-parse HEAD', { cwd: localDir, encoding: 'utf8' }).trim();
 
     // Checkout via the function
-    const result = tryCheckoutRemoteBranch(localDir, 'fix/existing');
+    const result = await tryCheckoutRemoteBranch(localDir, 'fix/existing');
 
     assert.strictEqual(result.status, 'remote-synced');
-    assert.strictEqual(getCurrentBranch(localDir), 'fix/existing');
+    assert.strictEqual(await getCurrentBranch(localDir), 'fix/existing');
     // Should have reset to remote tip (no extra.txt)
     const headCommit = execSync('git rev-parse HEAD', { cwd: localDir, encoding: 'utf8' }).trim();
     assert.notStrictEqual(headCommit, localCommit, 'local commit should have been reset');
   });
 
-  it('stays on current branch when already checked out to the target branch (remote exists)', () => {
+  it('stays on current branch when already checked out to the target branch (remote exists)', async () => {
     // Create remote branch and switch to it
     execSync('git branch fix/currently-on origin/main', { cwd: localDir });
     execSync('git push origin fix/currently-on', { cwd: localDir });
@@ -124,25 +124,25 @@ describe('tryCheckoutRemoteBranch', () => {
     execSync('git add .', { cwd: localDir });
     execSync('git commit -m "on branch commit"', { cwd: localDir });
 
-    const result = tryCheckoutRemoteBranch(localDir, 'fix/currently-on');
+    const result = await tryCheckoutRemoteBranch(localDir, 'fix/currently-on');
 
     assert.strictEqual(result.status, 'remote-synced');
     assert.strictEqual(result.branch, 'fix/currently-on');
     // Should still be on the same branch
-    assert.strictEqual(getCurrentBranch(localDir), 'fix/currently-on');
+    assert.strictEqual(await getCurrentBranch(localDir), 'fix/currently-on');
   });
 });
 
 describe('tryCheckoutRemoteBranch — no-arg PR branch selection', () => {
   // This is implicitly tested by the PrCommand behavior:
-  // /gtw pr (no args) calls getCurrentBranch() directly — no wip.json access.
+  // /gtw pr (no args) calls currentBranch() directly — no wip.json access.
   // The fix verifies PrCommand.execute([]) uses current branch.
-  it('getCurrentBranch returns current branch name', () => {
+  it('getCurrentBranch returns current branch name', async () => {
     // This test validates the helper used by no-arg PR
     const bare = setupBareRepo('nobare');
     const local = setupLocalRepo('nolocal', bare);
     try {
-      const branch = getCurrentBranch(local);
+      const branch = await getCurrentBranch(local);
       assert.strictEqual(branch, 'main');
     } finally {
       try { rmSync(local, { recursive: true, force: true }); } catch {}
