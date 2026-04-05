@@ -91,22 +91,21 @@ async function prepareReviewClone(repo, prNum, cloneUrl) {
   if (!fs.existsSync(cloneRoot)) fs.mkdirSync(cloneRoot, { recursive: true });
 
   if (fs.existsSync(clonePath)) {
-    // Already cloned — remove existing branch if present, fetch + checkout latest
+    // Already cloned — just pull latest PR branch changes (reuse the existing clone)
     try {
-      try { execSync(`git branch -D ${branchName}`, { cwd: clonePath, stdio: 'pipe' }); } catch {}
       execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: clonePath, stdio: 'pipe' });
-      execSync(`git checkout -b ${branchName} FETCH_HEAD`, { cwd: clonePath, stdio: 'pipe' });
+      execSync(`git checkout ${branchName}`, { cwd: clonePath, stdio: 'pipe' });
+      execSync(`git reset --hard FETCH_HEAD`, { cwd: clonePath, stdio: 'pipe' });
     } catch {
-      // Failed — remove and re-clone next time
-      try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch {}
+      // Pull failed — remove and re-clone
+      fs.rmSync(clonePath, { recursive: true, force: true });
     }
   }
 
   if (!fs.existsSync(clonePath)) {
-    // Fresh clone — shallow clone, fetch PR branch, checkout (force if branch exists)
+    // Fresh clone — shallow clone, fetch PR branch, checkout
     execSync(`git clone --depth=1 "${cloneUrl}" "${clonePath}"`, { cwd: cloneRoot, stdio: 'pipe' });
     execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: clonePath, stdio: 'pipe' });
-    // Force checkout: delete existing branch if present, then create from FETCH_HEAD
     try { execSync(`git branch -D ${branchName}`, { cwd: clonePath, stdio: 'pipe' }); } catch {}
     execSync(`git checkout -b ${branchName} FETCH_HEAD`, { cwd: clonePath, stdio: 'pipe' });
   }
