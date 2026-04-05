@@ -4,14 +4,14 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { spawnSync } from 'child_process';
+import { spawnSync as _spawn } from 'child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Git command runner — array-style args avoid shell injection
 function git(args, cwd) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const result = _spawn('git', args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`Git ${args[0]} failed: ${result.stderr}`);
   }
