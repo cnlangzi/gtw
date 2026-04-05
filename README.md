@@ -13,10 +13,13 @@
 ## Installation
 
 ```bash
-openclaw plugins install -l /home/devin/code/plugins/gtw
+openclaw plugins install ~/code/plugins/gtw -l --dangerously-force-unsafe-install
+openclaw gateway restart
 ```
 
-This registers the `/gtw` slash command and enables the plugin. Gateway hot-reloads automatically.
+- `-l` (link mode): changes to the source directory take effect immediately without reinstalling.
+- `--dangerously-force-unsafe-install`: the dangerous-code scanner flags `child_process` calls used to invoke `git`/`gh` CLI. These are intentional — gtw is a GitHub workflow tool that wraps these CLIs. Use this flag to skip the false-positive scan result.
+- Gateway auto-reloads the plugin; `openclaw gateway restart` ensures a clean start.
 
 ## Usage
 
