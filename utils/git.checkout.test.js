@@ -4,10 +4,19 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+// Git command runner — array-style args avoid shell injection
+function git(args, cwd) {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`Git ${args[0]} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
 
 // We need to test the actual exported function.
 // Import it — it uses the internal git() helper from git.js.
@@ -15,21 +24,21 @@ import { tryCheckoutRemoteBranch, currentBranch as getCurrentBranch } from './gi
 
 function setupBareRepo(name) {
   const dir = mkdtempSync(join(tmpdir(), `gtw-test-${name}-`));
-  execSync('git init --bare', { cwd: dir });
+  git(['init', '--bare'], dir);
   return dir;
 }
 
 function setupLocalRepo(name, bareDir) {
   const dir = mkdtempSync(join(tmpdir(), `gtw-test-${name}-`));
-  execSync('git init --initial-branch=main', { cwd: dir });
-  execSync(`git remote add origin ${bareDir}`, { cwd: dir });
-  execSync('git config user.email "test@test.com"', { cwd: dir });
-  execSync('git config user.name "Test"', { cwd: dir });
+  git(['init', '--initial-branch=main'], dir);
+  git(['remote', 'add', 'origin', bareDir], dir);
+  git(['config', 'user.email', 'test@test.com'], dir);
+  git(['config', 'user.name', 'Test'], dir);
   // Create initial commit on main
   writeFileSync(join(dir, 'README.md'), '# test\n', 'utf8');
-  execSync('git add .', { cwd: dir });
-  execSync('git commit -m "initial"', { cwd: dir });
-  execSync('git push -u origin main', { cwd: dir });
+  git(['add', '.'], dir);
+  git(['commit', '-m', 'initial'], dir);
+  git(['push', '-u', 'origin', 'main'], dir);
   return dir;
 }
 
@@ -50,9 +59,9 @@ describe('tryCheckoutRemoteBranch', () => {
   // Scenario: remote exists (simple — create remote branch, call checkout)
   it('returns remote-synced when remote branch exists', async () => {
     // Create a remote branch 'fix/test-issue' on origin
-    execSync('git fetch origin', { cwd: localDir });
-    execSync('git branch fix/test-issue origin/main', { cwd: localDir });
-    execSync(`git push origin fix/test-issue`, { cwd: localDir });
+    git(['fetch', 'origin'], localDir);
+    git(['branch', 'fix/test-issue', 'origin/main'], localDir);
+    git(['push', 'origin', 'fix/test-issue'], localDir);
 
     const result = await tryCheckoutRemoteBranch(localDir, 'fix/test-issue');
 
@@ -64,10 +73,10 @@ describe('tryCheckoutRemoteBranch', () => {
 
   it('returns local-only when remote branch missing but local exists', async () => {
     // Create a local branch but don't push it
-    execSync('git checkout -b fix/local-only', { cwd: localDir });
+    git(['checkout', '-b', 'fix/local-only'], localDir);
     writeFileSync(join(localDir, 'local.txt'), 'local change\n', 'utf8');
-    execSync('git add .', { cwd: localDir });
-    execSync('git commit -m "local commit"', { cwd: localDir });
+    git(['add', '.'], localDir);
+    git(['commit', '-m', 'local commit'], localDir);
 
     const result = await tryCheckoutRemoteBranch(localDir, 'fix/local-only');
 
@@ -78,7 +87,7 @@ describe('tryCheckoutRemoteBranch', () => {
 
   it('returns not-found when neither remote nor local branch exists', async () => {
     // Make sure we're on main before the call
-    execSync('git checkout main', { cwd: localDir });
+    git(['checkout', 'main'], localDir);
 
     const beforeBranch = await getCurrentBranch(localDir);
     const result = await tryCheckoutRemoteBranch(localDir, 'fix/does-not-exist');
@@ -91,19 +100,19 @@ describe('tryCheckoutRemoteBranch', () => {
 
   it('hard-resets to remote when remote branch exists and local also exists (same name)', async () => {
     // Create remote branch via local branch + push, then delete local (avoid tracking)
-    execSync('git checkout -b fix/existing', { cwd: localDir });
-    execSync('git push origin fix/existing', { cwd: localDir });
-    const remoteHead = execSync('git rev-parse origin/fix/existing', { cwd: localDir, encoding: 'utf8' }).trim();
-    execSync('git checkout main', { cwd: localDir });
-    execSync('git branch -D fix/existing', { cwd: localDir });
+    git(['checkout', '-b', 'fix/existing'], localDir);
+    git(['push', 'origin', 'fix/existing'], localDir);
+    const remoteHead = git(['rev-parse', 'origin/fix/existing'], localDir);
+    git(['checkout', 'main'], localDir);
+    git(['branch', '-D', 'fix/existing'], localDir);
 
     // Create non-tracking local branch with same name but different content
-    execSync(`git branch --no-track fix/existing ${remoteHead}`, { cwd: localDir });
-    execSync('git checkout fix/existing', { cwd: localDir });
+    git(['branch', '--no-track', 'fix/existing', remoteHead], localDir);
+    git(['checkout', 'fix/existing'], localDir);
     writeFileSync(join(localDir, 'extra.txt'), 'extra\n', 'utf8');
-    execSync('git add .', { cwd: localDir });
-    execSync('git commit -m "extra file"', { cwd: localDir });
-    const localCommit = execSync('git rev-parse HEAD', { cwd: localDir, encoding: 'utf8' }).trim();
+    git(['add', '.'], localDir);
+    git(['commit', '-m', 'extra file'], localDir);
+    const localCommit = git(['rev-parse', 'HEAD'], localDir);
 
     // Checkout via the function
     const result = await tryCheckoutRemoteBranch(localDir, 'fix/existing');
@@ -111,18 +120,18 @@ describe('tryCheckoutRemoteBranch', () => {
     assert.strictEqual(result.status, 'remote-synced');
     assert.strictEqual(await getCurrentBranch(localDir), 'fix/existing');
     // Should have reset to remote tip (no extra.txt)
-    const headCommit = execSync('git rev-parse HEAD', { cwd: localDir, encoding: 'utf8' }).trim();
+    const headCommit = git(['rev-parse', 'HEAD'], localDir);
     assert.notStrictEqual(headCommit, localCommit, 'local commit should have been reset');
   });
 
   it('stays on current branch when already checked out to the target branch (remote exists)', async () => {
     // Create remote branch and switch to it
-    execSync('git branch fix/currently-on origin/main', { cwd: localDir });
-    execSync('git push origin fix/currently-on', { cwd: localDir });
-    execSync('git checkout fix/currently-on', { cwd: localDir });
+    git(['branch', 'fix/currently-on', 'origin/main'], localDir);
+    git(['push', 'origin', 'fix/currently-on'], localDir);
+    git(['checkout', 'fix/currently-on'], localDir);
     writeFileSync(join(localDir, 'newfile.txt'), 'on branch\n', 'utf8');
-    execSync('git add .', { cwd: localDir });
-    execSync('git commit -m "on branch commit"', { cwd: localDir });
+    git(['add', '.'], localDir);
+    git(['commit', '-m', 'on branch commit'], localDir);
 
     const result = await tryCheckoutRemoteBranch(localDir, 'fix/currently-on');
 
