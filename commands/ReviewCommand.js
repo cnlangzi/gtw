@@ -384,7 +384,7 @@ async function scanCodebase(worktreePath, changedFiles) {
  * Build enhanced user prompt with full codebase context.
  */
 function buildEnhancedUserPrompt({
-  linkedIssue,
+  linkedIssues,
   changedFilesFullContent,
   baseBranch,
   previousItems,
@@ -392,7 +392,22 @@ function buildEnhancedUserPrompt({
   duplicateModules,
   dependencyAnalysis,
 }) {
-  let prompt = `## Linked Issue\nTitle: ${linkedIssue.title || '(no title)'}\nBody: ${linkedIssue.body || '(no description)'}\nNumber: #${linkedIssue.number || 'unknown'}\n\n## Base Branch\n${baseBranch}\n\n## Changed Files — Full Content\n`;
+  // Primary linked issue (first one found)
+  const primary = linkedIssues && linkedIssues.length > 0 ? linkedIssues[0] : { title: '', body: '', number: null };
+  const extra = linkedIssues && linkedIssues.length > 1 ? linkedIssues.slice(1) : [];
+
+  let issueSection = `## Linked Issue\n`;
+  issueSection += `Title: ${primary.title || '(no title)'}\n`;
+  issueSection += `Body: ${primary.body || '(no description)'}\n`;
+  issueSection += `Number: #${primary.number || 'unknown'}\n`;
+  if (extra.length > 0) {
+    issueSection += `\n## Additional Linked Issues\n`;
+    for (const e of extra) {
+      issueSection += `- #${e.number}: ${e.title}\n`;
+    }
+  }
+
+  let prompt = issueSection + `\n## Base Branch\n${baseBranch}\n\n## Changed Files — Full Content\n`;
 
   for (const file of changedFilesFullContent) {
     prompt += `\n### FILE: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n`;
@@ -472,13 +487,13 @@ The following items were flagged in previous reviews. If they have been addresse
 /**
  * Render the review comment for human readers.
  */
-function renderReviewComment({ round, summary, verdict, items, previousRoundItems, linkedIssue, repo, prNum }) {
+function renderReviewComment({ round, summary, verdict, items, previousRoundItems, linkedIssues, repo, prNum }) {
   const maxRounds = getConfig().maxReviewRounds || DEFAULT_MAX_ROUNDS;
   const verdictIcon = verdict === 'approve' ? '✅' : '⚠️';
   const verdictText = verdict === 'approve' ? 'Approved' : 'Changes Needed';
 
   let comment = `## Review [Round ${round}/${maxRounds}] ${verdictIcon} ${verdictText}\n\n`;
-  comment += `**Linked Issue:** #${linkedIssue.number || '?'} — ${linkedIssue.title || 'none'}\n\n`;
+  comment += `**Linked Issues:** ${(linkedIssues || []).map(i => `#${i.number}: ${i.title || 'none'}`).join('\n- ')}\n\n`;
   comment += `### Summary\n${summary}\n\n`;
 
   if (items.length > 0) {
@@ -529,7 +544,76 @@ function stableItemId(file, location, title) {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch PR details including diff summary and linked issue.
+ * Find all linked issues for a PR using multiple strategies:
+ * 1. Regex match "Closes/Fixes/Resolves #N" from PR body
+ * 2. GitHub search: issues mentioning PR number in body or title
+ * 3. GitHub timeline: cross-reference events to/from the PR
+ * Returns array of { number, title, body }.
+ */
+async function findLinkedIssues(prNum, prBody, token, repo) {
+  const issuesMap = new Map();
+
+  // Strategy 1: parse "Closes #N" from PR body (existing behavior)
+  const bodyMatches = prBody?.matchAll(/(?:closes|fixes|resolves)\s+#(\d+)/gi) || [];
+  for (const match of bodyMatches) {
+    const num = parseInt(match[1]);
+    if (!issuesMap.has(num)) issuesMap.set(num, { source: 'body-keyword', numbers: [num] });
+    else if (!issuesMap.get(num).numbers.includes(num)) issuesMap.get(num).numbers.push(num);
+  }
+
+  // Strategy 2: GitHub search — issues that mention #{prNum} in body or title
+  try {
+    const queries = [
+      `is:issue repo:${repo} "#${prNum}" in:body`,
+      `is:issue repo:${repo} "#${prNum}" in:title`,
+    ];
+    for (const q of queries) {
+      try {
+        const result = await apiRequest('GET', `/search/issues?q=${encodeURIComponent(q)}&per_page=20`, token);
+        for (const item of (result.items || [])) {
+          const num = item.number;
+          if (!issuesMap.has(num)) {
+            issuesMap.set(num, { source: 'search-mention', numbers: [num], title: item.title, body: item.body || '' });
+          }
+        }
+      } catch (e) {
+        // search may fail on rate limits, skip silently
+      }
+    }
+  } catch (e) {}
+
+  // Strategy 3: Timeline events — cross-reference events linking to this PR
+  try {
+    const events = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/timeline?per_page=100`, token);
+    for (const event of (events || [])) {
+      if (event.event !== 'cross-reference') continue;
+      const src = event.source;
+      if (src?.type === 'issue') {
+        const num = src.issue?.number;
+        if (num && !issuesMap.has(num)) {
+          issuesMap.set(num, { source: 'timeline-cross-ref', numbers: [num], title: src.issue.title, body: src.issue.body || '' });
+        }
+      }
+    }
+  } catch (e) {}
+
+  // Fetch full issue details for all candidates
+  const linkedIssues = [];
+  for (const [num, meta] of issuesMap) {
+    try {
+      const issue = await apiRequest('GET', `/repos/${repo}/issues/${num}`, token);
+      if (issue.pull_request) continue; // skip if it's a PR, not an issue
+      linkedIssues.push({ number: issue.number, title: issue.title || '', body: issue.body || '', source: meta.source });
+    } catch (e) {
+      // inaccessible issue, skip
+    }
+  }
+
+  return linkedIssues;
+}
+
+/**
+ * Fetch PR details including diff summary and linked issues.
  */
 export async function fetchPrDetails(prNum, token, repo) {
   const [pr, files] = await Promise.all([
@@ -537,16 +621,7 @@ export async function fetchPrDetails(prNum, token, repo) {
     apiRequest('GET', `/repos/${repo}/pulls/${prNum}/files?per_page=100`, token),
   ]);
 
-  let linkedIssue = { number: null, title: '', body: '' };
-  const match = pr.body?.match(/(?:closes|fixes|resolves)\s+#(\d+)/i);
-  if (match) {
-    try {
-      const li = await apiRequest('GET', `/repos/${repo}/issues/${match[1]}`, token);
-      linkedIssue = { number: parseInt(match[1]), title: li.title || '', body: li.body || '' };
-    } catch (e) {
-      // Linked issue not accessible, that's ok
-    }
-  }
+  const linkedIssues = await findLinkedIssues(prNum, pr.body, token, repo);
 
   // Get base branch
   const baseBranch = pr.base?.ref || 'main';
@@ -568,7 +643,7 @@ export async function fetchPrDetails(prNum, token, repo) {
       deletions: f.deletions,
       patch: f.patch || '',
     })),
-    linkedIssue,
+    linkedIssues,
     baseBranch,
   };
 }
@@ -854,7 +929,7 @@ export class ReviewCommand extends Commander {
     }
 
     // Check for linked issue (required per spec)
-    if (!prData.linkedIssue.number) {
+    if (!prData.linkedIssues || prData.linkedIssues.length === 0) {
       return {
         ok: false,
         message: `⚠️ PR #${prNum} has no linked issue (no closes/fixes/resolves #N found in PR body). Linked issue is required for LLM-driven review.`,
@@ -972,7 +1047,7 @@ export class ReviewCommand extends Commander {
 
     // Build enhanced user prompt
     const userPrompt = buildEnhancedUserPrompt({
-      linkedIssue: prData.linkedIssue,
+      linkedIssues: prData.linkedIssues,
       changedFilesFullContent,
       baseBranch: prData.baseBranch,
       previousItems,
@@ -1032,7 +1107,7 @@ export class ReviewCommand extends Commander {
       verdict: llmResult.verdict,
       items: mergedItems,
       previousRoundItems: previousItems,
-      linkedIssue: prData.linkedIssue,
+      linkedIssues: prData.linkedIssues,
       repo,
       prNum,
     });
@@ -1088,10 +1163,10 @@ export class ReviewCommand extends Commander {
     const unresolvedItems = mergedItems.filter((i) => !i.resolved);
     const resolvedItems = mergedItems.filter((i) => i.resolved);
 
-    const linkedIssueLine =
-      prData.linkedIssue.number
-        ? `Linked Issue: #${prData.linkedIssue.number} — ${prData.linkedIssue.title || 'none'}`
-        : 'Linked Issue: none';
+    const linkedIssues = prData.linkedIssues || [];
+    const linkedIssueLine = linkedIssues.length > 0
+      ? linkedIssues.map(i => `#${i.number}: ${i.title || 'none'}`).join(', ')
+      : 'none';
 
     const filesSummary = prData.files
       .map((f) => `  - ${f.filename}: +${f.additions} -${f.deletions}`)
@@ -1140,7 +1215,7 @@ export class ReviewCommand extends Commander {
       claimed: true,
       repo,
       pr: prData.pr,
-      linkedIssue: prData.linkedIssue,
+      linkedIssues: prData.linkedIssues,
       files: prData.files,
       items: mergedItems,
       round,
