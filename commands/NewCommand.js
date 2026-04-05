@@ -156,15 +156,19 @@ export class NewCommand extends Commander {
     }
 
     // Resolve the current session's model from sessions.json
-    let modelProvider = 'minimax-portal';
-    let model = 'MiniMax-M2.7';
+    let model = null;
+    let modelProvider = null;
     try {
       const cfg = getConfig();
       const dmScope = cfg.session?.dmScope || 'main';
       const entry = getSessionEntry(realSessionKey, dmScope, cfg);
-      modelProvider = entry.modelProvider || modelProvider;
-      model = entry.model || model;
-    } catch {}
+      modelProvider = entry.modelProvider;
+      model = entry.model;
+    } catch (e) {
+      if (e.message.includes('Session not found')) throw e; // propagate — no session to read from
+      // Otherwise: modelProvider or model missing → throw the descriptive error from getSessionEntry
+      if (!modelProvider || !model) throw e;
+    }
 
     // gtw model override (set via /gtw model or /gtw config set model)
     // Resolve repo language: lang:<owner/repo> from config, default 'en'

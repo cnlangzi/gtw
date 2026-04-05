@@ -38,8 +38,6 @@ export class ModelCommand extends Commander {
     const cfg = getConfig();
     const dmScope = cfg.session?.dmScope || 'main';
     const entry = getSessionEntry(this.sessionKey, dmScope, cfg);
-    const provider = entry.modelProvider || 'minimax-portal';
-    const model = entry.model || 'MiniMax-M2.7';
-    return `${provider}/${model}`;
+    return `${entry.modelProvider}/${entry.model}`;
   }
 }

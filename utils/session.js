@@ -114,6 +114,8 @@ export function getSessionEntry(sessionKey, dmScope = 'main', cfg = {}) {
   const sessionsData = getSessionsData(agentId);
   const entry = sessionsData[realKey];
   if (!entry) throw new Error(`Session not found: ${realKey}`);
+  if (!entry.modelProvider) throw new Error(`Session ${realKey} has no modelProvider`);
+  if (!entry.model) throw new Error(`Session ${realKey} has no model`);
   return entry;
 }
 
