@@ -16,7 +16,6 @@ export function saveWip(data) {
 
 export function clearWip() {
   if (existsSync(WIP_FILE)) {
-    mkdirSync(BASE_DIR, { recursive: true });
     const wip = getWip();
     const { workdir, repo, createdAt } = wip;
     writeFileSync(WIP_FILE, JSON.stringify({ workdir, repo, createdAt }, null, 2), 'utf8');
