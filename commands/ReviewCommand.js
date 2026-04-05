@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { worktreeList, worktreeAdd, worktreeRemoveByPath, fetch as gitFetch } from '../utils/git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,48 +71,30 @@ IMPORTANT:
  * Returns worktree path on success, throws on failure.
  * Worktree name format: gtw-review-{prNum}
  */
+/**
+ * Create a git worktree for the PR branch using git.js helpers.
+ * Worktree path: ../gtw-review-{prNum} relative to plugin root.
+ */
 async function createReviewWorktree(repo, prNum, token) {
-  // Determine parent directory of this plugin (where worktrees will be created)
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const worktreeName = `gtw-review-${prNum}`;
   const worktreePath = path.resolve(pluginRoot, '..', worktreeName);
 
-  // Git commands must run in the plugin git repo
-  const gitDir = path.resolve(pluginRoot, '.git');
-  const runGit = (args) => {
-    return new Promise((resolve, reject) => {
-      try {
-        const result = execSync(`git ${args.join(' ')}`, {
-          cwd: pluginRoot,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          timeout: 30000,
-        });
-        resolve(result.toString());
-      } catch (e) {
-        reject(new Error(e.stderr ? e.stderr.toString() : e.message));
-      }
-    });
-  };
-
   // Step 1: Fetch the PR branch ref
-  await runGit(['fetch', 'origin', `refs/pull/${prNum}/head:pr-${prNum}`]);
+  await gitFetch(pluginRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:pr-${prNum}` });
 
-  // Step 2: Remove existing worktree if it exists
-  const existingWt = await runGit(['worktree', 'list', '--json'])
-    .then(JSON.parse)
-    .catch(() => []);
-  const existing = Array.isArray(existingWt)
-    ? existingWt.find((w) => w.path === worktreePath || w.path.endsWith(worktreeName))
-    : null;
+  // Step 2: Remove existing worktree if it exists (by path)
+  const existing = worktreeList(pluginRoot).find(
+    (w) => w.path === worktreePath || w.path.endsWith(worktreeName)
+  );
   if (existing) {
-    await runGit(['worktree', 'remove', '--force', worktreePath]).catch(() => {});
+    try { worktreeRemoveByPath(worktreePath); } catch {}
   } else if (fs.existsSync(worktreePath)) {
-    // Fallback: just remove the directory if git doesn't know about it
     fs.rmSync(worktreePath, { recursive: true, force: true });
   }
 
   // Step 3: Create new worktree
-  await runGit(['worktree', 'add', worktreePath, `pr-${prNum}`]);
+  worktreeAdd(pluginRoot, worktreeName, worktreePath);
 
   return worktreePath;
 }
@@ -120,19 +102,14 @@ async function createReviewWorktree(repo, prNum, token) {
 /**
  * Remove a git worktree. Silently ignores errors.
  */
-async function removeReviewWorktree(worktreePath) {
+function removeReviewWorktree(worktreePath) {
   if (!worktreePath || !fs.existsSync(worktreePath)) return;
   try {
-    execSync(`git worktree remove --force "${worktreePath}"`, {
-      cwd: path.dirname(worktreePath),
-      stdio: 'pipe',
-      timeout: 10000,
-    });
-  } catch (e) {
-    // Silently ignore — worktree may not be tracked by git
-    try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-    } catch {}
+    worktreeRemoveByPath(worktreePath);
+  } catch {}
+  // Fallback: remove directory if git doesn't know about it
+  if (worktreePath && fs.existsSync(worktreePath)) {
+    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
   }
 }
 
