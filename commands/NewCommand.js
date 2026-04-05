@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages } from '../utils/session.js';
-import { getConfig } from '../utils/config.js';
+import { getConfig, getLangLabel } from '../utils/config.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
@@ -186,7 +186,7 @@ export class NewCommand extends Commander {
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
     // Language-aware prompt — English template with dynamic language instruction
-    const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
+    const langLabel = getLangLabel(lang);
     const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
 Generate the issue title and body in ${langLabel}.
 
@@ -199,7 +199,7 @@ JSON:`;
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
+    const langLabel = getLangLabel(lang);
     const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
 Generate the issue title and body in ${langLabel}.
 

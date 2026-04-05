@@ -65,3 +65,22 @@ export function listConfig() {
   const c = getConfig();
   return Object.entries(c).map(([key, value]) => ({ key, value: String(value) }));
 }
+
+const LANG_LABELS = {
+  zh: 'Chinese',
+  fr: 'French',
+  de: 'German',
+  es: 'Spanish',
+  ja: 'Japanese',
+  ko: 'Korean',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  ar: 'Arabic',
+  en: 'English',
+};
+
+function getLangLabel(lang) {
+  return LANG_LABELS[lang] || lang;
+}
+
+export { LANG_LABELS, getLangLabel };
