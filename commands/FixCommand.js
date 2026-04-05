@@ -211,10 +211,12 @@ export class FixCommand extends Commander {
     const workdir = wip.workdir;
     const repo = wip.repo;
 
+    // Get token once and reuse throughout the command
+    const token = await getValidToken();
+
     // Step 3: Fetch issue from GitHub
     let issue;
     try {
-      const token = await getValidToken();
       issue = await fetchIssue(issueId, token, repo);
     } catch (e) {
       if (e.message.includes('404')) {
@@ -231,7 +233,6 @@ export class FixCommand extends Commander {
 
     // Step 4: Claim the issue (add gtw/wip label) before any work
     try {
-      const token = await getValidToken();
       const claimResult = await claimIssue(issueId, token, repo);
       if (!claimResult.ok) {
         return {
@@ -262,6 +263,13 @@ export class FixCommand extends Commander {
       branchName = ensureUniqueBranch(workdir, baseBranchName);
       git(`git checkout -b ${branchName}`, workdir);
     } catch (e) {
+      // Best-effort attempt to remove the gtw/wip label before returning the failure.
+      // Errors from unclaimIssue() are logged but do not mask the original git error.
+      try {
+        await unclaimIssue(issueId, token, repo);
+      } catch (unclaimErr) {
+        console.error('[FixCommand] Warning: unclaimIssue() failed during git error recovery', unclaimErr);
+      }
       return { ok: false, message: `⚠️ Git branch creation failed: ${e.message}` };
     }
 
