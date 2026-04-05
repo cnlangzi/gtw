@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages } from '../utils/session.js';
+import { getConfig } from '../utils/config.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
@@ -170,19 +171,30 @@ export class NewCommand extends Commander {
       }
     } catch {}
 
-    // gtw model override (set via /gtw model)
+    // gtw model override (set via /gtw model or /gtw config set model)
+    // Resolve repo language: lang:<owner/repo> from config, default 'en'
+    const repo = wip?.repo || null;
+    const langKey = repo ? `lang:${repo}` : null;
+    let lang = 'en';
     try {
-      const gtwConfigPath = join(homedir(), '.openclaw', 'gtw', 'config.json');
-      if (existsSync(gtwConfigPath)) {
-        const gtwConfig = JSON.parse(readFileSync(gtwConfigPath, 'utf8'));
-        if (gtwConfig.model) model = gtwConfig.model;
-      }
+      const gtwConfig = getConfig();
+      if (gtwConfig.model) model = gtwConfig.model;
+      if (langKey) lang = gtwConfig[langKey] || 'en';
     } catch {}
 
     // Clean messages: strip role prefixes and any JSON-like metadata from discussion
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-    const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
+    // Language-aware prompts
+    const isZh = lang === 'zh';
+    const prompt = isZh
+      ? `根据以下讨论写一个 GitHub issue。仅输出有效 JSON，不要其他内容。
+
+讨论：
+${cleanMessages}
+
+JSON：`
+      : `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
 
 Discussion:
 ${cleanMessages}
@@ -193,7 +205,12 @@ JSON:`;
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
+    const systemPrompt = isZh
+      ? `你根据讨论内容撰写 GitHub issue。你只输出有效 JSON。不要 markdown。不要解释。不要在 JSON 对象之外输出任何内容。
+
+JSON 格式：
+{"title":"fix: 简短描述","body":"## 背景\\n\\n## 修改内容\\n\\n## 验收标准\\n"}`
+      : `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
 
 JSON format:
 {"title":"fix: short description","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
