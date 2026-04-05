@@ -1,42 +1,55 @@
-import { execSync } from 'child_process';
+/**
+ * git.js — Git operations via native git CLI.
+ *
+ * All git operations are wrappers around the `git` CLI.
+ * Uses execGit (spawnSync) internally — no isomorphic-git dependency.
+ */
+import { execSync as _exec } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import { join, resolve, dirname } from 'path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
 
-export function git(cmd, cwd) {
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function findGitRoot(workdir) {
+  let dir = resolve(workdir);
+  while (dir !== dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    dir = dirname(dir);
+  }
+  return workdir;
+}
+
+/**
+ * Execute a git command and return stdout.
+ * Throws on non-zero exit.
+ */
+function execGit(cmd, cwd) {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return _exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch (e) {
     throw new Error(`Git error: ${e.message}`);
   }
 }
 
-/**
- * Parse a "remote  url (fetch/push)" line and extract "owner/repo".
- * Handles: SSH (git@host:owner/repo), HTTPS (https://host/owner/repo),
- * SSH with explicit protocol (ssh://git@host/owner/repo), optional .git suffix,
- * and optional (fetch)/(push) labels.
- *
- * @param {string} line - e.g. "origin  git@github.com:cnlangzi/gfwproxy (fetch)"
- * @returns {{ owner: string, repo: string }} - e.g. { owner: "cnlangzi", repo: "gfwproxy" }
- * @throws {Error} if the line cannot be parsed
- */
+// ---------------------------------------------------------------------------
+// parseRemoteLine — unchanged
+// ---------------------------------------------------------------------------
+
 export function parseRemoteLine(line) {
   if (!line || typeof line !== 'string') {
     throw new Error('Invalid remote line: empty or not a string');
   }
-
-  // 1. Strip trailing "(fetch)" / "(push)" labels
   const clean = line.replace(/\s+\([^)]+\)$/, '').trim();
-
-  // 2. Remove leading "remote-name  " prefix (everything before the URL)
   const url = clean.replace(/^[^\s]+\s+/, '').trim();
-
   let owner, repo;
-
-  // SSH: git@host:owner/repo[.git]
   const sshMatch = url.match(/^git@[^:]+:([^/]+)\/(.+?)(?:\.git)?$/);
   if (sshMatch) {
     [owner, repo] = [sshMatch[1], sshMatch[2]];
   } else {
-    // HTTPS / SSH with explicit protocol: [protocol://][user@]host/owner/repo[.git]
     const httpsMatch = url.match(/^(?:https?|ssh):\/\/[^\/]+\/([^/]+)\/(.+?)(?:\.git)?$/);
     if (httpsMatch) {
       [owner, repo] = [httpsMatch[1], httpsMatch[2]];
@@ -44,115 +57,322 @@ export function parseRemoteLine(line) {
       throw new Error(`Cannot parse remote URL from line: "${line}" → "${url}"`);
     }
   }
-
   if (!owner || !repo) {
     throw new Error(`Invalid remote: owner="${owner}" repo="${repo}" from "${line}"`);
   }
-
   return { owner, repo };
 }
 
 export function getRemoteRepo(workdir) {
-  const remotes = git('git remote -v', workdir).split('\n');
+  const remotes = execGit('git remote -v', workdir).split('\n');
   const match = remotes.find((l) => l.includes('origin'));
   if (!match) throw new Error('No origin remote found');
   const { owner, repo } = parseRemoteLine(match);
   return `${owner}/${repo}`;
 }
 
-export function getCurrentBranch(cwd) {
-  return git('git branch --show-current', cwd);
+// ---------------------------------------------------------------------------
+// currentBranch — async via git CLI
+// ---------------------------------------------------------------------------
+
+export async function currentBranch(workdir) {
+  return execGit('git branch --show-current', workdir);
 }
 
-export function getDefaultBranch(cwd) {
+export { currentBranch as getCurrentBranch };
+
+// ---------------------------------------------------------------------------
+// defaultBranch — symbolic-ref or packed-refs
+// ---------------------------------------------------------------------------
+
+export function getDefaultBranch(workdir) {
   try {
-    return execSync('git symbolic-ref refs/remotes/origin/HEAD', { encoding: 'utf8' })
-      .trim()
-      .split('/')
-      .pop();
+    const packedRefs = join(findGitRoot(workdir), '.git', 'packed-refs');
+    if (existsSync(packedRefs)) {
+      const content = readFileSync(packedRefs, 'utf8');
+      const m = content.match(/^ref: refs\/remotes\/origin\/HEAD\s+([a-f0-9]+)/);
+      if (m) {
+        const refsDir = join(findGitRoot(workdir), '.git', 'refs', 'remotes', 'origin');
+        const headFile = join(refsDir, 'HEAD');
+        if (existsSync(headFile)) {
+          const line = readFileSync(headFile, 'utf8').trim();
+          const parts = line.split('/');
+          return parts[parts.length - 1];
+        }
+      }
+    }
+    const symRef = _exec('git symbolic-ref refs/remotes/origin/HEAD', {
+      cwd: workdir,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    return symRef.split('/').pop();
   } catch (e) {}
   return 'main';
 }
 
+export { getDefaultBranch as defaultBranch, getDefaultBranch as getDefaultBranchSync };
+
 // ---------------------------------------------------------------------------
-// Robust branch checkout for PR preparation
+// fetch
 // ---------------------------------------------------------------------------
 
-/**
- * Robust branch checkout for PR preparation.
- *
- * Returns a status object describing what happened:
- *   - { status: 'remote-synced', branch: <branchName> }
- *       Remote exists: fetched + checked out + hard-reset to origin/<branchName>.
- *   - { status: 'local-only', branch: <branchName> }
- *       Remote missing but local branch exists: checked out local branch.
- *       Caller should warn user to run /gtw push.
- *   - { status: 'not-found', branch: <currentBranch> }
- *       Neither remote nor local branch exists: stayed on current branch.
- *       Caller should proceed with current branch.
- */
-export function tryCheckoutRemoteBranch(workdir, branchName) {
-  const current = getCurrentBranch(workdir);
+export async function fetch(workdir, { remote = 'origin', ref, depth, tags = true } = {}) {
+  let cmd = `git fetch ${remote}`;
+  if (ref) cmd += ` ${ref}`;
+  if (depth) cmd += ` --depth=${depth}`;
+  if (!tags) cmd += ` --no-tags`;
+  execGit(cmd, workdir);
+  return true;
+}
 
-  // Fetch to get accurate remote ref info
+// ---------------------------------------------------------------------------
+// push
+// ---------------------------------------------------------------------------
+
+export async function push(workdir, { remote = 'origin', ref, force = false } = {}) {
+  const branch = typeof ref === 'string' ? ref : ref?.ref || await currentBranch(workdir);
+  const forceStr = force ? ' -f' : '';
+  execGit(`git push${forceStr} ${remote} ${branch}`, workdir);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// checkout — async via git CLI
+// ---------------------------------------------------------------------------
+
+export async function checkout(workdir, ref, { force = false, remote = 'origin' } = {}) {
+  const exists = await existsRef(workdir, ref);
+  if (!exists) {
+    const trackingRef = `${remote}/${ref}`;
+    const trackingExists = await existsRef(workdir, trackingRef);
+    if (trackingExists) {
+      execGit(`git checkout -b ${ref} -t ${trackingRef}`, workdir);
+      return true;
+    }
+  }
+  const forceStr = force ? ' -f' : '';
+  execGit(`git checkout${forceStr} ${ref}`, workdir);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// branchExists — sync check using rev-parse (fast)
+// ---------------------------------------------------------------------------
+
+export function branchExists(workdir, branchName) {
   try {
-    git('git fetch origin', workdir);
+    execGit(`git rev-parse --verify ${branchName}`, workdir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export { branchExists as localBranchExists };
+
+// ---------------------------------------------------------------------------
+// existsRef — async check if a ref exists
+// ---------------------------------------------------------------------------
+
+export async function existsRef(workdir, ref) {
+  try {
+    execGit(`git rev-parse --verify ${ref}`, workdir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// resetHard — sync reset to a ref via execGit
+// ---------------------------------------------------------------------------
+
+export async function resetHard(workdir, ref = 'HEAD') {
+  execGit(`git reset --hard ${ref}`, workdir);
+}
+
+// ---------------------------------------------------------------------------
+// log — async commit log
+// ---------------------------------------------------------------------------
+
+export async function log(workdir, { ref, depth = 100, since } = {}) {
+  let cmd = `git log --oneline -n ${depth}`;
+  if (ref) cmd += ` ${ref}`;
+  if (since) cmd += ` --since="${since}"`;
+  return execGit(cmd, workdir);
+}
+
+// ---------------------------------------------------------------------------
+// getCommitLogDiff — base..head formatted output (used by PrCommand)
+// ---------------------------------------------------------------------------
+
+export function getCommitLogDiff(workdir, headBranch, baseBranch) {
+  try {
+    return execGit(`git log ${baseBranch}..${headBranch} --oneline --format="%h %s"`, workdir);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tryCheckoutRemoteBranch — async reimplementation using primitives above
+// ---------------------------------------------------------------------------
+
+export async function tryCheckoutRemoteBranch(workdir, branchName) {
+  const current = await currentBranch(workdir);
+
+  try {
+    await fetch(workdir, { remote: 'origin' });
   } catch {
     return { status: 'not-found', branch: current };
   }
 
   const remoteRef = `origin/${branchName}`;
-  let remoteExists = false;
-  try {
-    git(`git rev-parse --verify ${remoteRef}`, workdir);
-    remoteExists = true;
-  } catch {
-    remoteExists = false;
-  }
+  const remoteExists = await existsRef(workdir, remoteRef);
 
   if (remoteExists) {
-    // Remote exists — sync to it
     if (current === branchName) {
-      // Already on this branch — hard-reset to remote
-      git(`git reset --hard ${remoteRef}`, workdir);
+      await resetHard(workdir, remoteRef);
     } else {
-      // Check if local branch already exists
-      let localExists = false;
-      try {
-        git(`git rev-parse --verify ${branchName}`, workdir);
-        localExists = true;
-      } catch {
-        localExists = false;
-      }
-
+      const localExists = branchExists(workdir, branchName);
       if (localExists) {
-        // Local exists with same name — checkout and reset
-        git(`git checkout ${branchName}`, workdir);
-        git(`git reset --hard ${remoteRef}`, workdir);
+        await checkout(workdir, branchName, { force: true });
+        await resetHard(workdir, remoteRef);
       } else {
-        // No local branch — create tracking branch from remote
-        git(`git checkout -b ${branchName} ${remoteRef}`, workdir);
+        await checkout(workdir, branchName, { remote: remoteRef });
       }
     }
     return { status: 'remote-synced', branch: branchName };
   }
 
-  // Remote does not exist — check if local branch exists
-  let localExists = false;
-  try {
-    git(`git rev-parse --verify ${branchName}`, workdir);
-    localExists = true;
-  } catch {
-    localExists = false;
-  }
-
+  const localExists = branchExists(workdir, branchName);
   if (localExists) {
-    // Local exists but remote is missing — checkout and let user push
-    git(`git checkout ${branchName}`, workdir);
+    await checkout(workdir, branchName);
     return { status: 'local-only', branch: branchName };
   }
 
-  // Neither remote nor local — stay on current branch
   return { status: 'not-found', branch: current };
 }
 
+// ---------------------------------------------------------------------------
+// addAll — stage all changes
+// ---------------------------------------------------------------------------
+
+export async function addAll(workdir) {
+  execGit('git add .', workdir);
+}
+
+// ---------------------------------------------------------------------------
+// getStagedFiles — returns list of staged file paths
+// ---------------------------------------------------------------------------
+
+export function getStagedFiles(workdir) {
+  try {
+    const output = execGit('git diff --cached --name-only', workdir);
+    return output ? output.split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// diffStaged — staged diff output
+// ---------------------------------------------------------------------------
+
+export function diffStaged(workdir) {
+  try {
+    return execGit('git diff --cached', workdir);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getStagedDiff — unified diff for staged changes
+// ---------------------------------------------------------------------------
+
+export function getStagedDiff(workdir) {
+  return diffStaged(workdir);
+}
+
+// ---------------------------------------------------------------------------
+// getStagedStats — stat summary of staged changes
+// ---------------------------------------------------------------------------
+
+export function getStagedStats(workdir) {
+  try {
+    return execGit('git diff --cached --stat', workdir);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getStagedNumstat — machine-readable staged stats
+// ---------------------------------------------------------------------------
+
+export function getStagedNumstat(workdir) {
+  try {
+    return execGit('git diff --cached --numstat', workdir);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Worktree operations — .git/worktrees filesystem manipulation
+// ---------------------------------------------------------------------------
+
+function worktreeDir(workdir) {
+  return join(findGitRoot(workdir), '.git', 'worktrees');
+}
+
+function validateWorktreeName(name) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+    throw new Error(`Invalid worktree name: "${name}". Use only alphanumeric, dots, underscores, hyphens.`);
+  }
+  if (name === 'main' || name === 'master') {
+    throw new Error(`Reserved worktree name: "${name}"`);
+  }
+}
+
+export function worktreeList(workdir) {
+  const wtDir = worktreeDir(workdir);
+  if (!existsSync(wtDir)) return [];
+  const entries = readdirSync(wtDir).filter(n => n !== 'maint');
+  const result = [];
+  for (const name of entries) {
+    const wtPathFile = join(wtDir, name, 'gitdir');
+    const wtCommitsFile = join(wtDir, name, 'commits');
+    let path = null;
+    try {
+      const link = readFileSync(wtPathFile, 'utf8').trim();
+      path = dirname(link.replace(/\/\.git$/, ''));
+    } catch {}
+    const head = existsSync(wtCommitsFile)
+      ? readFileSync(wtCommitsFile, 'utf8').trim().split('\n')[0]?.split(' ')[1] || null
+      : null;
+    result.push({ name, path, head });
+  }
+  return result;
+}
+
+export function worktreeAdd(workdir, name, path) {
+  validateWorktreeName(name);
+  const wtDir = worktreeDir(workdir);
+  if (!existsSync(wtDir)) mkdirSync(wtDir, { recursive: true });
+  const wtPath = join(wtDir, name);
+  if (existsSync(wtPath)) {
+    throw new Error(`Worktree "${name}" already exists`);
+  }
+  mkdirSync(wtPath, { recursive: true });
+  writeFileSync(join(wtPath, 'gitdir'), join(path, '.git') + '\n');
+  writeFileSync(join(wtPath, 'commits'), `1 ${execGit('git rev-parse HEAD', workdir)}\n`);
+  execGit(`git worktree add "${path}" "${name}"`, workdir);
+}
+
+export function worktreeRemove(workdir, name) {
+  validateWorktreeName(name);
+  execGit(`git worktree remove "${name}"`, workdir);
+}

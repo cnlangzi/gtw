@@ -36,8 +36,6 @@ gtw/
     git.js                  ← Git operations (git(), getRemoteRepo(), etc.)
     config.js               ← Config read/write (config.json)
     session.js              ← Parent session JSONL read/write
-  scripts/
-    index.cjs               ← (Legacy CLI entry, keep for compatibility)
   tests/
     *.test.js
 ```
@@ -192,7 +190,7 @@ The two-step pattern (`pendingCommit` → `/gtw confirm`) and the two-step PR fl
 - **Read this file first** when working on gtw
 - Commands are isolated: modify only the specific `XxxCommand.js` file
 - Do not add business logic to `index.js` — route it through the factory
-- The legacy `scripts/index.cjs` is kept for CLI compatibility but is not used by the plugin
+
 
 ## Phase Directive
 

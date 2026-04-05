@@ -1,11 +1,10 @@
-import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { Commander } from './Commander.js';
 import { getSessionFile } from '../utils/session.js';
 import { getWip, saveWip } from '../utils/wip.js';
-import { git, getDefaultBranch, getRemoteRepo } from '../utils/git.js';
+import { git, getDefaultBranch, getRemoteRepo, fetch, checkout, branchExists } from '../utils/git.js';
 import { apiRequest, getValidToken } from '../utils/api.js';
 import { resolveModel } from '../utils/ai.js';
 import https from 'https';
@@ -28,16 +27,9 @@ function formatBranchName(title) {
 function ensureUniqueBranch(workdir, baseName) {
   let name = `fix/${baseName}`;
   let suffix = 0;
-  while (true) {
-    try {
-      execSync(`git rev-parse --verify ${name}`, { cwd: workdir, stdio: 'pipe' });
-      // branch exists
-      suffix++;
-      name = `fix/${baseName}-${suffix}`;
-    } catch {
-      // branch does not exist, we're good
-      break;
-    }
+  while (branchExists(workdir, name)) {
+    suffix++;
+    name = `fix/${baseName}-${suffix}`;
   }
   return name;
 }
@@ -256,12 +248,12 @@ export class FixCommand extends Commander {
     // Step 6: Git setup — fetch, checkout default branch, pull, create branch
     let branchName;
     try {
-      git('git fetch origin', workdir);
+      await fetch(workdir, { remote: 'origin' });
       const defaultBranch = getDefaultBranch(workdir);
-      git(`git checkout ${defaultBranch}`, workdir);
+      await checkout(workdir, defaultBranch);
       git(`git pull --rebase origin ${defaultBranch}`, workdir);
       branchName = ensureUniqueBranch(workdir, baseBranchName);
-      git(`git checkout -b ${branchName}`, workdir);
+      await checkout(workdir, branchName, { force: true });
     } catch (e) {
       // Best-effort attempt to remove the gtw/wip label before returning the failure.
       // Errors from unclaimIssue() are logged but do not mask the original git error.
