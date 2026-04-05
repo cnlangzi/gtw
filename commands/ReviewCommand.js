@@ -554,7 +554,8 @@ async function findLinkedIssues(prNum, prBody, token, repo) {
   const issuesMap = new Map();
 
   // Strategy 1: parse "Closes #N" from PR body (existing behavior)
-  const bodyMatches = prBody?.matchAll(/(?:closes|fixes|resolves)\s+#(\d+)/gi) || [];
+  // Matches: Closes #N, Closes: #N, Fix #N, Fixes: #N, etc.
+  const bodyMatches = prBody?.matchAll(/(?:closes?|fixes?|resolves?)\s*:?\s*#(\d+)/gi) || [];
   for (const match of bodyMatches) {
     const num = parseInt(match[1]);
     if (!issuesMap.has(num)) issuesMap.set(num, { source: 'body-keyword', numbers: [num] });
@@ -932,7 +933,7 @@ export class ReviewCommand extends Commander {
     if (!prData.linkedIssues || prData.linkedIssues.length === 0) {
       return {
         ok: false,
-        message: `⚠️ PR #${prNum} has no linked issue (no closes/fixes/resolves #N found in PR body). Linked issue is required for LLM-driven review.`,
+        message: `⚠️ PR #${prNum} has no linked issue (Linked issue must use keywords like Fixes: #N or Closes #N in the PR body). Linked issue is required for LLM-driven review.`,
         display: `⚠️ No linked issue found\n\nPR #${prNum} must have a linked issue (e.g., "Closes #123") in its body to be reviewed.\n\nAdd a linked issue to the PR body and try again.`,
       };
     }
