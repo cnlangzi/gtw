@@ -72,8 +72,6 @@ Output format:
     userPrompt = `Generate a PR title and body for this pull request.
 Generate the PR title and body in ${langLabel}.
 
-Fixes: #${issueId}
-
 Issue: #${issueId} — ${issueTitle}
 ${issueBody ? `Issue Description:\n${issueBody}\n` : ''}
 Head Branch: ${branch}
