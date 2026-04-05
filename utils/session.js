@@ -89,6 +89,35 @@ export function resolveRealSessionKey(sessionKey, dmScope, cfg = {}) {
 }
 
 /**
+ * Read the sessions.json data for a given agent.
+ * @param {string} agentId - e.g. "main"
+ * @returns {object} parsed sessions.json
+ * @throws if sessions.json does not exist or is malformed
+ */
+export function getSessionsData(agentId) {
+  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+  if (!existsSync(sessionsPath)) throw new Error(`Session store not found: ${sessionsPath}`);
+  return JSON.parse(readFileSync(sessionsPath, 'utf8'));
+}
+
+/**
+ * Resolve the session entry for a given session key, using dmScope.
+ * Throws if the sessions store or the resolved session entry does not exist.
+ * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
+ * @param {string} dmScope - from openclaw.json session.dmScope
+ * @param {object} cfg - openclaw.json config (optional, for identityLinks/mainKey)
+ * @returns {object} session entry from sessions.json
+ */
+export function getSessionEntry(sessionKey, dmScope = 'main', cfg = {}) {
+  const agentId = sessionKey?.split(':')[1] || 'main';
+  const realKey = resolveRealSessionKey(sessionKey, dmScope, cfg);
+  const sessionsData = getSessionsData(agentId);
+  const entry = sessionsData[realKey];
+  if (!entry) throw new Error(`Session not found: ${realKey}`);
+  return entry;
+}
+
+/**
  * Get the session JSONL file path for a given session key.
  * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
  * @returns {string|null}
