@@ -1,7 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
-import { getValidToken } from '../utils/api.js';
+import { getValidToken, CONFIG_DIR } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { worktreeAdd, worktreeRemoveByPath, fetch as gitFetch } from '../utils/git.js';
+import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,52 +73,51 @@ IMPORTANT:
  * Worktree name format: gtw-review-{prNum}
  */
 /**
- * Create a git worktree for the PR branch using git.js helpers.
- * @param {string} workdir - Absolute path to the git repository (e.g. /home/devin/code/plugins/gtw)
+/**
+ * Prepare a shallow clone of the PR branch for review.
+ * Path: {CONFIG_DIR}/reviews/{owner}/{repo}/review-pr-{prNum}
+ * If directory exists, runs git pull to update. Otherwise clones fresh.
+ * @param {string} repo - "owner/repo" string
  * @param {string} prNum - PR number
- * Worktree path: sibling to workdir, e.g. /home/devin/code/plugins/gtw-review-{prNum}
+ * @returns {Promise<string>} - Absolute path to the cloned review directory
  */
-async function createReviewWorktree(workdir, prNum) {
-  const gitRoot = workdir; // the git repo root
-  const worktreeName = `gtw-review-${prNum}`;
-  // Place worktree as {workdir}/gtw-reviews/{name} (subdirectory of the git repo)
-  const worktreePath = path.resolve(workdir, 'gtw-reviews', worktreeName);
-  const parentDir = path.dirname(worktreePath);
+async function prepareReviewClone(repo, prNum, cloneUrl) {
+  const cloneRoot = path.resolve(CONFIG_DIR, 'reviews', repo);
+  const cloneName = `review-pr-${prNum}`;
+  const clonePath = path.resolve(cloneRoot, cloneName);
+  const branchName = cloneName; // local branch name
 
-  // Step 1: Fetch the PR branch ref, using worktreeName as local branch name
-  await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:${worktreeName}` });
+  // Ensure parent directory exists
+  if (!fs.existsSync(cloneRoot)) fs.mkdirSync(cloneRoot, { recursive: true });
 
-  // Step 2: Remove any existing worktree with the same branch name (regardless of path).
-  try { worktreeRemoveByPath(worktreeName, gitRoot); } catch {}
-  // Also remove by path if directory still exists (handles orphaned worktrees)
-  if (fs.existsSync(worktreePath)) {
-    try { worktreeRemoveByPath(worktreePath, gitRoot); } catch {
-      try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  if (fs.existsSync(clonePath)) {
+    // Already cloned — git fetch + checkout to get latest PR changes
+    try {
+      execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: clonePath, stdio: 'pipe' });
+      execSync(`git checkout ${branchName}`, { cwd: clonePath, stdio: 'pipe' });
+      execSync(`git reset --hard origin/${branchName}`, { cwd: clonePath, stdio: 'pipe' });
+    } catch {
+      // Fetch/checkout failed — remove and re-clone
+      fs.rmSync(clonePath, { recursive: true, force: true });
     }
   }
 
-  // Ensure parent gtw-reviews directory exists
-  if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+  if (!fs.existsSync(clonePath)) {
+    // Fresh clone — shallow clone of default branch, then fetch + checkout PR branch
+    execSync(`git clone --depth=1 "${cloneUrl}" "${clonePath}"`, { cwd: cloneRoot, stdio: 'pipe' });
+    execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: clonePath, stdio: 'pipe' });
+    execSync(`git checkout -b ${branchName} FETCH_HEAD`, { cwd: clonePath, stdio: 'pipe' });
+  }
 
-  // Step 3: Create new worktree (branch name = worktreeName = gtw-review-{prNum})
-  worktreeAdd(gitRoot, worktreeName, worktreePath);
-
-  return worktreePath;
+  return clonePath;
 }
 
 /**
- * Remove a git worktree. Silently ignores errors.
+ * Remove a review clone directory. Silently ignores errors.
  */
-function removeReviewWorktree(worktreePath, gitRoot) {
-  if (!worktreePath) return;
-  // Try git worktree remove with full path first (git cleans up registry + dir)
-  try { worktreeRemoveByPath(worktreePath, gitRoot); } catch {}
-
-  // Fallback: if path still exists, try git prune to clean orphaned registry entries
-  if (fs.existsSync(worktreePath)) {
-    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
-  }
-
+function removeReviewClone(clonePath) {
+  if (!clonePath || !fs.existsSync(clonePath)) return;
+  try { fs.rmSync(clonePath, { recursive: true, force: true }); } catch {}
 }
 
 // ---------------------------------------------------------------------------
@@ -611,6 +610,7 @@ export async function fetchPrDetails(prNum, client, repo) {
       updatedAt: pr.updated_at,
       state: pr.state,
       labels: pr.labels || [],
+      cloneUrl: pr.clone_url || `https://github.com/${repo}.git`,
     },
     files: files.map((f) => ({
       filename: f.filename,
@@ -974,7 +974,7 @@ export class ReviewCommand extends Commander {
     // NEW: Create worktree for PR branch
     let worktreePath = null;
     try {
-      worktreePath = await createReviewWorktree(wip.workdir, prNum);
+      worktreePath = await prepareReviewClone(repo, prNum, prData.pr.cloneUrl);
     } catch (e) {
       // Rollback label on worktree failure
       try {
@@ -1051,7 +1051,7 @@ export class ReviewCommand extends Commander {
     } finally {
       // Always cleanup worktree
       if (worktreePath) {
-        await removeReviewWorktree(worktreePath, wip.workdir);
+        removeReviewClone(worktreePath);
       }
     }
 

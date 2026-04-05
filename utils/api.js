@@ -4,7 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { GitHubClient } from './github.js';
 
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
+export const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
 function ensureDir() {
