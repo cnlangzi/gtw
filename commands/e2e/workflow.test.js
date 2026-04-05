@@ -25,8 +25,9 @@ const DEFAULT_MAX_ROUNDS = 5;
 // File helpers (shared across workflow tests)
 // ---------------------------------------------------------------------------
 
-// Use GTW_CONFIG_DIR env var if set (for CI isolation), otherwise ~/.openclaw/gtw/
-const CONFIG_DIR = process.env.GTW_CONFIG_DIR || join(homedir(), '.openclaw', 'gtw');
+// File helpers (shared across workflow tests)
+// CI isolation: tests use a fixed temp directory to avoid polluting real ~/.openclaw/gtw/
+const CONFIG_DIR = '/tmp/gtw-test';
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const WIP_FILE = join(CONFIG_DIR, 'wip.json');
 
