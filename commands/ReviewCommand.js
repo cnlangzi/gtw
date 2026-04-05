@@ -1,7 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
-import { getValidToken } from '../utils/api.js';
+import { getValidToken, CONFIG_DIR } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
@@ -82,17 +82,35 @@ IMPORTANT:
  * @param {string} branchName - The PR's actual branch name (pr.head.ref)
  * @returns {Promise<string>} - Absolute path to the worktree directory
  */
-async function prepareReviewWorktree(workdir, prNum, branchName) {
-  const worktreeRoot = path.resolve(workdir, '..', 'gtw-reviews');
+/**
+ * Prepare a worktree for PR review in the dedicated reviews directory.
+ * Structure: {CONFIG_DIR}/reviews/{owner}/{repo}/gtw_reviews/{branchName}/
+ * - Base clone at {CONFIG_DIR}/reviews/{owner}/{repo}/ (on default branch, shared for all PRs)
+ * - Worktree at {CONFIG_DIR}/reviews/{owner}/{repo}/gtw_reviews/{branchName}/
+ *
+ * @param {string} repo - "owner/repo" string
+ * @param {string} prNum - PR number
+ * @param {string} branchName - PR's branch name (pr.head.ref)
+ * @param {string} baseBranch - Default branch name (e.g. "main")
+ * @param {string} cloneUrl - Git clone URL
+ */
+async function prepareReviewWorktree(repo, prNum, branchName, baseBranch, cloneUrl) {
+  const reviewRoot = path.resolve(CONFIG_DIR, 'reviews', repo);
+  const worktreeRoot = path.resolve(reviewRoot, 'gtw_reviews');
   const worktreePath = path.resolve(worktreeRoot, branchName);
 
-  // Ensure parent directory exists
-  if (!fs.existsSync(worktreeRoot)) fs.mkdirSync(worktreeRoot, { recursive: true });
+  // Step 1: ensure base clone exists
+  if (!fs.existsSync(reviewRoot)) {
+    fs.mkdirSync(reviewRoot, { recursive: true });
+    execSync(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`, { stdio: 'pipe' });
+  }
 
+  // Step 2: ensure worktree exists
   if (fs.existsSync(worktreePath)) {
-    // Worktree exists — git pull to get latest changes
+    // Worktree exists — git pull with rebase to get latest changes
     try {
       execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath, stdio: 'pipe' });
+      execSync(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
       execSync(`git reset --hard FETCH_HEAD`, { cwd: worktreePath, stdio: 'pipe' });
     } catch {
       // Pull failed — remove and recreate next time
@@ -101,24 +119,33 @@ async function prepareReviewWorktree(workdir, prNum, branchName) {
   }
 
   if (!fs.existsSync(worktreePath)) {
-    // Ensure the branch ref exists locally (fetch from GitHub PR ref)
+    // Fetch the PR branch ref into the base clone
     try {
-      execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: workdir, stdio: 'pipe' });
+      execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot, stdio: 'pipe' });
     } catch {}
-    // Create worktree at the path using the branch name
-    execSync(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: workdir, stdio: 'pipe' });
+    // Create worktree at the path using the PR's branch name
+    fs.mkdirSync(worktreeRoot, { recursive: true });
+    execSync(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot, stdio: 'pipe' });
+    // Enable rebase for future pulls
+    execSync(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
   }
 
   return worktreePath;
 }
 
 /**
- * Remove a review worktree directory. Silently ignores errors.
- * Note: does NOT clean up git worktree registry — caller should run git worktree prune.
+ * Remove a review worktree directory and clean up git registry.
  */
 function removeReviewWorktreeDir(worktreePath) {
-  if (!worktreePath || !fs.existsSync(worktreePath)) return;
-  try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  if (!worktreePath) return;
+  // Step 1: git worktree remove to clean up registry (runs from worktree's parent dir)
+  try {
+    execSync(`git worktree remove "${worktreePath}" --force`, { cwd: path.dirname(worktreePath), stdio: 'pipe' });
+  } catch {}
+  // Step 2: remove directory
+  if (fs.existsSync(worktreePath)) {
+    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -976,7 +1003,7 @@ export class ReviewCommand extends Commander {
     // NEW: Create worktree for PR branch
     let worktreePath = null;
     try {
-      worktreePath = await prepareReviewWorktree(wip.workdir, prNum, prData.pr.headRef);
+      worktreePath = await prepareReviewWorktree(repo, prNum, prData.pr.headRef, prData.baseBranch, prData.pr.cloneUrl);
     } catch (e) {
       // Rollback label on worktree failure
       try {
