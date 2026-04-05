@@ -160,40 +160,12 @@ export class LoginCommand extends Commander {
       }
     }
 
-    const envToken = process.env.GITHUB_TOKEN;
-    if (envToken) {
-      console.log('GITHUB_TOKEN detected, validating...');
-      client.setToken(envToken);
-      const isValid = await client.validateToken();
-      if (isValid) {
-        this.saveToken({
-          source: 'github_token',
-          access_token: envToken,
-          cached_at: Date.now(),
-        });
-        const user = await client.getCurrentUser();
-        return {
-          ok: true,
-          message: '✅ Login successful! PAT (GITHUB_TOKEN) validated and cached',
-          user: { login: user.login, name: user.name, id: user.id },
-          token: { source: 'github_token', cached_at: Date.now() },
-          display: this.createLoginSuccessDisplay(user, 'github_token'),
-        };
-      } else {
-        return {
-          ok: false,
-          message: '❌ GITHUB_TOKEN is invalid',
-        };
-      }
-    }
-
     return {
       ok: false,
       message: `❌ No PAT provided
 
 Usage:
   /gtw login --pat <your_token>      # Provide token directly
-  export GITHUB_TOKEN=xxx            # Or use environment variable
   /gtw login                         # Or use OAuth device flow
 
 Generate a token: https://github.com/settings/tokens (requires repo and workflow scopes)`,
