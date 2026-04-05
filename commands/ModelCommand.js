@@ -37,7 +37,7 @@ export class ModelCommand extends Commander {
       const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
       if (!existsSync(sessionsPath)) return 'minimax-portal/MiniMax-M2.7';
       const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-      const cfg = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+      const cfg = getConfig();
       const dmScope = cfg.session?.dmScope || 'main';
       const realKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
       const mainSession = sessionsData[realKey];
