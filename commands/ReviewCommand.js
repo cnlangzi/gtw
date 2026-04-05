@@ -3,9 +3,151 @@ import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
 import { setPrLabel } from '../utils/labels.js';
+import { resolveModel, callAI } from '../utils/ai.js';
+import crypto from 'crypto';
 
 const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
 const DEFAULT_MAX_ROUNDS = 5;
+const MAX_ITEMS_PER_ROUND = 10;
+
+// ---------------------------------------------------------------------------
+// LLM Prompt Templates
+// ---------------------------------------------------------------------------
+
+const SYSTEM_PROMPT = `You are an expert code reviewer. Your primary duty is SCOPE CONTAINMENT — verify that the PR changes only address the linked issue and nothing more. Unplanned or out-of-scope changes must be flagged.
+
+Review the PR against the following dimensions (in priority order):
+1. **Scope Containment** (HIGHEST PRIORITY) — Does the PR only address the linked issue? Are there unrelated changes?
+2. **Correctness** — Are there logical bugs, off-by-one errors, or incorrect implementations?
+3. **Security** — Are there injection risks, exposed secrets, or improper input validation?
+4. **Performance** — Are there N+1 queries, missing indexes, or inefficient algorithms?
+5. **Architecture** — Is the code structure appropriate for the codebase? Are SOLID principles followed?
+6. **Testing** — Is there adequate test coverage? Are edge cases handled?
+7. **Error Handling** — Are errors caught and handled gracefully? Are fallbacks provided?
+8. **Breaking Changes** — Does this PR introduce breaking changes to APIs, data schemas, or CLI interfaces?
+
+Output ONLY valid JSON matching this schema:
+{
+  "summary": "string (brief summary of review findings)",
+  "verdict": "approve" | "request_changes",
+  "items": [
+    {
+      "id": "string (stable deterministic hash of file+location+title, e.g. 'r1', 'r2')",
+      "category": "scope|correctness|security|performance|architecture|testing|error_handling|breaking_change",
+      "severity": "critical|high|medium|low",
+      "file": "string (filename, empty if general)",
+      "location": "string (function name, line range, or empty)",
+      "title": "string (short title for the issue)",
+      "body": "string (detailed description of the issue)",
+      "resolved": false
+    }
+  ]
+}
+
+IMPORTANT:
+- Output ONLY the JSON object, no markdown fences, no additional text.
+- resolved is always false in the LLM output (resolved marking is done by comparing previous items).
+- Limit to top ${MAX_ITEMS_PER_ROUND} highest-severity items.
+- For ID, use a short stable identifier like "r1", "r2" (sequential, not hash) — the reviewer will stabilize across rounds.
+- Categories must be one of: scope, correctness, security, performance, architecture, testing, error_handling, breaking_change
+- severity must be one of: critical, high, medium, low`;
+
+/**
+ * Build the user prompt for LLM review.
+ */
+function buildUserPrompt({ linkedIssue, diff, baseBranch, previousItems }) {
+  let prompt = `## Linked Issue
+Title: ${linkedIssue.title || '(no title)'}
+Body: ${linkedIssue.body || '(no description)'}
+Number: #${linkedIssue.number || 'unknown'}
+
+## Base Branch
+${baseBranch}
+
+## PR Changes (diff summary)
+`;
+
+  for (const file of diff) {
+    prompt += `\n### ${file.filename} (+${file.additions} -${file.deletions})\n`;
+    if (file.patch) {
+      prompt += `${file.patch}\n`;
+    }
+  }
+
+  if (previousItems && previousItems.length > 0) {
+    prompt += `\n## Previous Review Items (from prior rounds)
+The following items were flagged in previous reviews. If they have been addressed in the current diff, mark them resolved in your analysis.
+`;
+    for (const item of previousItems) {
+      prompt += `- [${item.id}] [${item.severity}] [${item.category}] ${item.file ? `${item.file}@${item.location || 'N/A'}` : 'General'}: ${item.title}\n  ${item.body}\n`;
+    }
+  } else {
+    prompt += `\n## Previous Review Items
+None (this is the first review round).
+`;
+  }
+
+  return prompt;
+}
+
+/**
+ * Render the review comment for human readers.
+ */
+function renderReviewComment({ round, summary, verdict, items, previousRoundItems, linkedIssue, repo, prNum }) {
+  const maxRounds = getConfig().maxReviewRounds || DEFAULT_MAX_ROUNDS;
+  const verdictIcon = verdict === 'approve' ? '✅' : '⚠️';
+  const verdictText = verdict === 'approve' ? 'Approved' : 'Changes Needed';
+
+  let comment = `## Review [Round ${round}/${maxRounds}] ${verdictIcon} ${verdictText}\n\n`;
+  comment += `**Linked Issue:** #${linkedIssue.number || '?'} — ${linkedIssue.title || 'none'}\n\n`;
+  comment += `### Summary\n${summary}\n\n`;
+
+  if (items.length > 0) {
+    comment += `### Review Items (${items.length})\n\n`;
+    comment += `| # | Severity | Category | Location | Title |\n`;
+    comment += `|---|----------|----------|----------|-------|\n`;
+    for (const item of items) {
+      const resolvedPrefix = item.resolved ? '✅ ' : '';
+      const location = item.file ? `${item.file}${item.location ? ` @ ${item.location}` : ''}` : '—';
+      comment += `| ${item.id} | ${item.severity} | ${item.category} | ${location} | ${resolvedPrefix}${item.title} |\n`;
+    }
+    comment += `\n`;
+    for (const item of items) {
+      comment += `#### ${item.id}: ${item.title} \n`;
+      comment += `**Severity:** ${item.severity} | **Category:** ${item.category}\n`;
+      if (item.file) comment += `**File:** ${item.file}`;
+      if (item.location) comment += ` @ ${item.location}`;
+      comment += `\n\n`;
+      if (item.resolved) {
+        comment += `✅ *[Resolved in this commit]*\n\n`;
+      }
+      comment += `${item.body}\n\n`;
+    }
+  }
+
+  if (previousRoundItems && previousRoundItems.length > 0) {
+    const stillUnresolved = items.filter(i => !i.resolved);
+    if (stillUnresolved.length > 0) {
+      comment += `---\n*Previous rounds: ${previousRoundItems.length} item(s) flagged, ${items.filter(i => i.resolved).length} resolved in current diff.*\n`;
+    }
+  }
+
+  comment += `\n---\n*Review generated by AI. JSON data:\n\`\`\`json\n${JSON.stringify({ summary, verdict, items }, null, 2)}\n\`\`\`*`;
+
+  return comment;
+}
+
+/**
+ * Generate a stable item ID based on file+location+title.
+ */
+function stableItemId(file, location, title) {
+  const raw = `${file || ''}:${location || ''}:${title || ''}`;
+  return crypto.createHash('sha1').update(raw).digest('hex').substring(0, 8);
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Data Fetching
+// ---------------------------------------------------------------------------
 
 /**
  * Fetch PR details including diff summary and linked issue.
@@ -27,6 +169,9 @@ export async function fetchPrDetails(prNum, token, repo) {
     }
   }
 
+  // Get base branch
+  const baseBranch = pr.base?.ref || 'main';
+
   return {
     pr: {
       number: pr.number,
@@ -45,14 +190,15 @@ export async function fetchPrDetails(prNum, token, repo) {
       patch: f.patch || '',
     })),
     linkedIssue,
+    baseBranch,
   };
 }
 
 /**
- * Find existing checklist comment by this agent on a PR.
+ * Find existing review comment by this agent on a PR.
  * Returns the comment object or null.
  */
-export async function findChecklistComment(prNum, token, repo, myLogin) {
+export async function findReviewComment(prNum, token, repo, myLogin) {
   const comments = await apiRequest('GET', `/repos/${repo}/issues/${prNum}/comments`, token);
   return (
     comments.find(
@@ -63,34 +209,124 @@ export async function findChecklistComment(prNum, token, repo, myLogin) {
 }
 
 /**
- * Extract checked/unchecked state from existing checklist comment.
- * Returns array of { text, checked }.
+ * Delete a comment by ID. Silently ignores 404s.
  */
-export function parseChecklistFromComment(body) {
-  const result = [];
-  for (const line of body.split('\n')) {
-    const m = line.match(/^\s*-\s*\[([ x])\]\s*(.+)/);
-    if (m) {
-      result.push({ text: m[2].trim(), checked: m[1] === 'x' });
+async function deleteComment(commentId, prNum, repo, token) {
+  try {
+    await apiRequest('DELETE', `/repos/${repo}/issues/comments/${commentId}`, token);
+  } catch (e) {
+    if (!e.message.includes('404')) {
+      console.error(`[ReviewCommand] Failed to delete comment ${commentId}: ${e.message}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// LLM Interaction
+// ---------------------------------------------------------------------------
+
+/**
+ * Call LLM with retry on JSON parse failure.
+ */
+async function callReviewLLM(prompt, sessionKey) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { model } = await resolveModel(sessionKey);
+      const response = await callAI(model, SYSTEM_PROMPT, prompt, 'main');
+      const trimmed = response.trim();
+      // Strip markdown fences if present
+      const jsonStr = trimmed.replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
+      const parsed = JSON.parse(jsonStr);
+      // Validate schema
+      if (typeof parsed.summary !== 'string' ||
+          !['approve', 'request_changes'].includes(parsed.verdict) ||
+          !Array.isArray(parsed.items)) {
+        throw new Error('Invalid schema from LLM');
+      }
+      return parsed;
+    } catch (e) {
+      lastError = e;
+      console.error(`[ReviewCommand] LLM attempt ${attempt} failed: ${e.message}`);
+    }
+  }
+  throw new Error(`LLM failed after 2 attempts: ${lastError.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// Item State Management
+// ---------------------------------------------------------------------------
+
+/**
+ * Compare previous items against current diff to determine resolved items.
+ * An item is resolved if its described issue is no longer present in the diff.
+ * This is a simple heuristic: if the file that had an issue no longer has the
+ * problematic pattern in its patch, we consider it resolved.
+ *
+ * Returns items with resolved=true/false set appropriately.
+ */
+function mergeItemState(previousItems, currentItems) {
+  if (!previousItems || previousItems.length === 0) {
+    return currentItems.map(item => ({ ...item, resolved: false }));
+  }
+
+  const resolvedIds = new Set();
+
+  // Mark items as resolved if they're no longer present in current items
+  for (const prev of previousItems) {
+    const stillPresent = currentItems.find(
+      (curr) => curr.file === prev.file &&
+               curr.title === prev.title &&
+               curr.location === prev.location
+    );
+    if (!stillPresent) {
+      resolvedIds.add(prev.id);
+    }
+  }
+
+  // Also check if a previous item's exact id is in current items (same logical issue)
+  // If it is, carry over the ID and mark as unresolved
+  const result = [];
+  for (const curr of currentItems) {
+    const prevMatch = previousItems.find(
+      (p) => p.file === curr.file &&
+            p.title === curr.title &&
+            (p.location === curr.location || (!p.location && !curr.location))
+    );
+    result.push({
+      ...curr,
+      id: prevMatch ? prevMatch.id : curr.id,
+      resolved: false,
+    });
+  }
+
+  // Add previous items that are now resolved but weren't in currentItems
+  // (they've been addressed in the code)
+  for (const prev of previousItems) {
+    if (resolvedIds.has(prev.id)) {
+      result.push({
+        ...prev,
+        resolved: true,
+        body: `✅ [Resolved in this commit] ${prev.body}`,
+      });
+    }
+  }
+
   return result;
 }
 
 /**
- * Filter previous checklist items: keep only unresolved ones (unchecked).
- * Resolved items (checked) are removed from the list per spec:
- * "compare PR diff to checklist; remove checkboxes that are resolved; keep unresolved ones"
+ * Parse JSON from previous review comment to extract items.
  */
-export function mergeChecklistState(prevItems, canonicalItems) {
-  // Only include canonical items that are NOT resolved (not checked in prev).
-  // Resolved = checked in previous comment = removed from new comment.
-  return canonicalItems
-    .filter((text) => {
-      const prev = prevItems.find((p) => p.text === text);
-      return !prev || !prev.checked;
-    })
-    .map((text) => ({ text, checked: false }));
+function parseItemsFromComment(body) {
+  try {
+    const match = body.match(/```json\n([\s\S]*?)\n```/);
+    if (match) {
+      const parsed = JSON.parse(match[1]);
+      return Array.isArray(parsed.items) ? parsed.items : [];
+    }
+  } catch {}
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +336,7 @@ export function mergeChecklistState(prevItems, canonicalItems) {
 export class ReviewCommand extends Commander {
   constructor(context) {
     super(context);
+    this.sessionKey = context.sessionKey;
   }
 
   /**
@@ -218,21 +455,13 @@ export class ReviewCommand extends Commander {
   }
 
   /**
-   * Core logic: claim PR (set gtw/wip), create/update checklist, track round in wip.
-   * If checklist is empty (all items resolved), delete checklist, post approved comment, set gtw/lgtm.
-   * If round exceeds max, set gtw/stuck.
+   * Core logic: claim PR (set gtw/wip), call LLM, update review comment, track round.
    */
   async _claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData = null) {
     // Fetch fresh PR data if not provided
     if (!prData) {
       prData = await fetchPrDetails(prNum, token, repo);
     }
-
-    // Read current wip state for this PR (if any)
-    const currentWip = getWip();
-    const reviewState = currentWip.reviewState || {};
-    const thisPrKey = `${repo}#${prNum}`;
-    const existingState = reviewState[thisPrKey] || {};
 
     // Check if already stuck — do not re-review
     const labels = prData.pr.labels || [];
@@ -244,41 +473,32 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Atomically claim the PR: remove other gtw labels, set gtw/wip.
-    // setPrLabel handles concurrency safety: re-checks labels and rolls back
-    // to gtw/ready if gtw/ready is still present (another runner won the race).
-    let preempted = false;
-    try {
-      const result = await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/wip');
-      preempted = result.preempted;
-    } catch (e) {
-      return { ok: false, message: `⚠️ ${e.message}` };
-    }
-    if (preempted) {
+    // Check for linked issue (required per spec)
+    if (!prData.linkedIssue.number) {
       return {
         ok: false,
-        message: `⚠️ PR #${prNum} was claimed by another runner (preemption detected). Aborting.`,
+        message: `⚠️ PR #${prNum} has no linked issue (no closes/fixes/resolves #N found in PR body). Linked issue is required for LLM-driven review.`,
+        display: `⚠️ No linked issue found\n\nPR #${prNum} must have a linked issue (e.g., "Closes #123") in its body to be reviewed.\n\nAdd a linked issue to the PR body and try again.`,
       };
     }
 
-    // Find existing checklist comment
-    const existingComment = await findChecklistComment(prNum, token, repo, myLogin);
+    // Read current review state for this PR from wip
+    const thisPrKey = `${repo}#${prNum}`;
+    const existingReviewState = wip.reviewState?.[thisPrKey] || {};
+    const previousCommentId = existingReviewState.commentId || null;
+    const previousItems = existingReviewState.items || [];
+
+    // Find existing review comment
+    const existingComment = await findReviewComment(prNum, token, repo, myLogin);
 
     let round = 1;
-    let checklistItems = CHECKLIST_ITEMS.map((text) => ({ text, checked: false }));
-    let commentId = null;
-
     if (existingComment) {
-      // Parse round from title "## Review [Round N]"
-      const roundMatch = existingComment.body.match(/## Review \[Round (\d+)\]/);
+      // Parse round from title "## Review [Round N]" or new format "## ⚠️ Changes Needed — Round N"
+      const roundMatch = existingComment.body.match(/Round\s+(\d+)/i);
       round = roundMatch ? parseInt(roundMatch[1]) + 1 : 2;
-
-      // Parse previous checklist state
-      const prevItems = parseChecklistFromComment(existingComment.body);
-
-      // Merge: keep unresolved items, drop resolved ones
-      checklistItems = mergeChecklistState(prevItems, CHECKLIST_ITEMS);
-      commentId = existingComment.id;
+    } else if (previousCommentId) {
+      // We have a commentId in wip but no comment found — new round 1
+      round = 1;
     }
 
     // Check if max rounds exceeded
@@ -289,12 +509,8 @@ export class ReviewCommand extends Commander {
         return { ok: false, message: `⚠️ ${e.message}` };
       }
 
-      // Update wip: clear this PR's review state
-      const updatedWip = { ...currentWip };
-      const newReviewState = { ...(updatedWip.reviewState || {}) };
-      delete newReviewState[thisPrKey];
-      updatedWip.reviewState = newReviewState;
-      updatedWip.updatedAt = new Date().toISOString();
+      // Clear review state
+      const updatedWip = clearReviewState(wip, thisPrKey);
       saveWip(updatedWip);
 
       return {
@@ -309,82 +525,184 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // All resolved = checklist is empty (resolved items are removed per spec)
-    const allResolved = checklistItems.length === 0;
-    if (allResolved && existingComment) {
-      // Delete checklist comment
-      try {
-        await apiRequest('DELETE', `/repos/${repo}/issues/comments/${existingComment.id}`, token);
-      } catch (e) {
-        console.error(`[ReviewCommand] Failed to delete checklist comment: ${e.message}`);
-      }
-
-      // Post approved comment
-      await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
-        body: `✅ **Approved** — all checklist items resolved.\n\nReviewed by @${myLogin}`,
-      });
-
-      // Set gtw/lgtm
-      try {
-        await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/lgtm');
-      } catch (e) {
-        return { ok: false, message: `⚠️ ${e.message}` };
-      }
-
-      // Clear wip review state for this PR
-      const updatedWip = { ...currentWip };
-      const newReviewState = { ...(updatedWip.reviewState || {}) };
-      delete newReviewState[thisPrKey];
-      updatedWip.reviewState = newReviewState;
-      updatedWip.updatedAt = new Date().toISOString();
-      saveWip(updatedWip);
-
+    // Atomically claim the PR: remove other gtw labels, set gtw/wip.
+    let preempted = false;
+    try {
+      const result = await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/wip');
+      preempted = result.preempted;
+    } catch (e) {
+      return { ok: false, message: `⚠️ ${e.message}` };
+    }
+    if (preempted) {
       return {
-        ok: true,
-        approved: true,
-        repo,
-        pr: prData.pr,
-        round,
-        message: `✅ PR #${prNum} approved — all checklist items resolved`,
-        display: `✅ PR #${prNum} approved\n\n${prData.pr.title}\n\nAll checklist items resolved. Ready to merge.`,
+        ok: false,
+        message: `⚠️ PR #${prNum} was claimed by another runner (preemption detected). Aborting.`,
       };
     }
 
-    // Unresolved items remain → changes needed.
-    // Set gtw/revise (replaces gtw/wip). Keep checklist comment intact
-    // so round continues to increment when developer re-submits after fixes.
-    // PR stays with gtw/revise until developer addresses issues.
+    // Build diff text for LLM
+    const diffText = prData.files
+      .map((f) => `${f.filename}\n${f.patch || '(no diff)'}`)
+      .join('\n\n');
 
-    // Apply gtw/revise (replaces gtw/wip) — this is the final state
+    // Build user prompt
+    const userPrompt = buildUserPrompt({
+      linkedIssue: prData.linkedIssue,
+      diff: prData.files,
+      baseBranch: prData.baseBranch,
+      previousItems,
+    });
+
+    // Call LLM
+    let llmResult;
     try {
-      await setPrLabel({ prNum, repo, token, isPR: true }, 'gtw/revise');
+      llmResult = await callReviewLLM(userPrompt, this.sessionKey);
+    } catch (e) {
+      // LLM failed — rollback to previous label
+      try {
+        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+      } catch (rollbackErr) {
+        console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
+      }
+      return {
+        ok: false,
+        message: `⚠️ LLM review failed: ${e.message}. PR claim has been rolled back.`,
+        display: `⚠️ LLM Review Failed\n\n${e.message}\n\nThe PR has not been claimed. Please try again or check your model configuration.`,
+      };
+    }
+
+    // Merge previous items to track resolved items across rounds
+    const mergedItems = mergeItemState(previousItems, llmResult.items);
+
+    // Assign stable IDs to new items (items without a previous matching item get a new ID)
+    const existingIds = new Set(previousItems.map((p) => p.id));
+    let nextIdNum = previousItems.length + 1;
+    for (const item of mergedItems) {
+      if (!item.id || existingIds.has(item.id)) {
+        // Find next available r{N} id
+        while (existingIds.has(`r${nextIdNum}`)) nextIdNum++;
+        item.id = `r${nextIdNum}`;
+        existingIds.add(item.id);
+        nextIdNum++;
+      }
+    }
+
+    // Delete existing comment if present
+    if (previousCommentId) {
+      await deleteComment(previousCommentId, prNum, repo, token);
+    }
+
+    // Render and post new review comment
+    const commentBody = renderReviewComment({
+      round,
+      summary: llmResult.summary,
+      verdict: llmResult.verdict,
+      items: mergedItems,
+      previousRoundItems: previousItems,
+      linkedIssue: prData.linkedIssue,
+      repo,
+      prNum,
+    });
+
+    let newCommentId;
+    try {
+      const commentResp = await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
+        body: commentBody,
+      });
+      newCommentId = commentResp.id;
+    } catch (e) {
+      // Failed to post comment — rollback label
+      try {
+        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+      } catch (rollbackErr) {
+        console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
+      }
+      return {
+        ok: false,
+        message: `⚠️ Failed to post review comment: ${e.message}. PR claim has been rolled back.`,
+      };
+    }
+
+    // Determine final label
+    const finalLabel = llmResult.verdict === 'approve' ? 'gtw/lgtm' : 'gtw/revise';
+
+    // Apply final label
+    try {
+      await setPrLabel({ prNum, repo, token, isPR: true }, finalLabel);
     } catch (e) {
       return { ok: false, message: `⚠️ ${e.message}` };
     }
 
-    // Post a "changes needed" comment
-    const unresolvedList = checklistItems.map((i) => `  - [ ] ${i.text}`).join('\n');
-    await apiRequest('POST', `/repos/${repo}/issues/${prNum}/comments`, token, {
-      body: `⚠️ **Changes needed** (Round ${round}/${maxRounds})\n\n${unresolvedList}\n\n_Please address the above items and resubmit for review._`,
-    });
+    // Save review state to wip (keep commentId, clear reviewState, save items)
+    const newReviewState = {
+      ...(wip.reviewState || {}),
+      [thisPrKey]: {
+        commentId: newCommentId,
+        items: mergedItems,
+        previousLabel: finalLabel,
+        round,
+      },
+    };
 
-    // Clear wip review state — this review session is done
-    const updatedWip = { ...currentWip };
-    const newReviewState = { ...(updatedWip.reviewState || {}) };
-    delete newReviewState[thisPrKey];
-    updatedWip.reviewState = newReviewState;
-    updatedWip.updatedAt = new Date().toISOString();
+    const updatedWip = {
+      ...wip,
+      reviewState: newReviewState,
+      updatedAt: new Date().toISOString(),
+    };
+    // Per spec: clear reviewState at end but keep commentId while needed
+    // We keep items for next round's comparison
     saveWip(updatedWip);
 
-    // Build diff summary
-    const filesSummary = prData.files
-      .map((f) => `  - ${f.filename}: +${f.additions} -${f.deletions}`)
-      .join('\n');
+    // Build display response
+    const unresolvedItems = mergedItems.filter((i) => !i.resolved);
+    const resolvedItems = mergedItems.filter((i) => i.resolved);
 
     const linkedIssueLine =
       prData.linkedIssue.number
         ? `Linked Issue: #${prData.linkedIssue.number} — ${prData.linkedIssue.title || 'none'}`
         : 'Linked Issue: none';
+
+    const filesSummary = prData.files
+      .map((f) => `  - ${f.filename}: +${f.additions} -${f.deletions}`)
+      .join('\n');
+
+    const verdictEmoji = llmResult.verdict === 'approve' ? '✅' : '⚠️';
+    const verdictText = llmResult.verdict === 'approve' ? 'APPROVED' : 'CHANGES NEEDED';
+
+    let displayItems = '';
+    if (unresolvedItems.length > 0) {
+      displayItems = unresolvedItems
+        .map((i) => `  - [${i.severity}] [${i.category}] ${i.title}${i.file ? ` (${i.file})` : ''}`)
+        .join('\n');
+    }
+
+    const summaryLines = [
+      `${verdictEmoji} PR #${prNum} ${verdictText} (Round ${round}/${maxRounds})`,
+      ``,
+      `${prData.pr.title}`,
+      ``,
+      linkedIssueLine,
+      ``,
+      `Files changed (${prData.files.length}):`,
+      filesSummary || '(none)',
+      ``,
+      `LLM Summary: ${llmResult.summary}`,
+      ``,
+    ];
+
+    if (resolvedItems.length > 0) {
+      summaryLines.push(`Resolved in this commit (${resolvedItems.length}):`);
+      summaryLines.push(resolvedItems.map((i) => `  ✅ ${i.title}`).join('\n'));
+      summaryLines.push('');
+    }
+
+    if (unresolvedItems.length > 0) {
+      summaryLines.push(`Unresolved issues (${unresolvedItems.length}):`);
+      summaryLines.push(displayItems);
+      summaryLines.push('');
+    }
+
+    summaryLines.push(`${finalLabel === 'gtw/lgtm' ? 'gtw/lgtm' : 'gtw/revise'} set.`);
 
     return {
       ok: true,
@@ -393,25 +711,62 @@ export class ReviewCommand extends Commander {
       pr: prData.pr,
       linkedIssue: prData.linkedIssue,
       files: prData.files,
-      checklist: checklistItems,
+      items: mergedItems,
       round,
       maxRounds,
-      message: `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})\n\n${prData.pr.title}\n\n${linkedIssueLine}\n\nFiles changed (${prData.files.length}):\n${filesSummary}\n\nUnresolved items (${checklistItems.length}):\n${checklistItems.map((i) => '  - ' + i.text).join('\n')}\n\ngtw/revise set. Review round preserved for next invocation.`,
-      display: [
-        `⚠️ PR #${prNum} needs changes (Round ${round}/${maxRounds})`,
-        ``,
-        `${prData.pr.title}`,
-        ``,
-        linkedIssueLine,
-        ``,
-        `Files changed (${prData.files.length}):`,
-        filesSummary || '(none)',
-        ``,
-        `Unresolved (${checklistItems.length}):`,
-        ...checklistItems.map((i) => `  - [ ] ${i.text}`),
-        ``,
-        `gtw/revise set. PR stays in gtw/revise until developer addresses issues.`,
-      ].join('\n'),
+      verdict: llmResult.verdict,
+      commentId: newCommentId,
+      message: summaryLines.join('\n'),
+      display: summaryLines.join('\n'),
     };
   }
 }
+
+/**
+ * Clear review state for a specific PR from wip.
+ */
+function clearReviewState(wip, prKey) {
+  const newReviewState = { ...(wip.reviewState || {}) };
+  delete newReviewState[prKey];
+  return {
+    ...wip,
+    reviewState: newReviewState,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible exports for existing tests
+// These functions are no longer used by the LLM-driven review flow.
+// ----------------------------------------------------------------------------
+
+/**
+ * @deprecated Use parseItemsFromComment instead (for LLM-driven review)
+ * Parse checklist items from old-format comment body.
+ * Returns array of { text, checked }.
+ */
+export function parseChecklistFromComment(body) {
+  const result = [];
+  for (const line of body.split('\n')) {
+    const m = line.match(/^\s*-\s*\[([ x])\]\s*(.+)/);
+    if (m) {
+      result.push({ text: m[2].trim(), checked: m[1] === 'x' });
+    }
+  }
+  return result;
+}
+
+/**
+ * @deprecated Use mergeItemState instead (for LLM-driven review)
+ * Filter previous checklist items: keep only unresolved ones (unchecked).
+ */
+export function mergeChecklistState(prevItems, canonicalItems) {
+  return canonicalItems
+    .filter((text) => {
+      const prev = prevItems.find((p) => p.text === text);
+      return !prev || !prev.checked;
+    })
+    .map((text) => ({ text, checked: false }));
+}
+
+export { CHECKLIST_ITEMS };
