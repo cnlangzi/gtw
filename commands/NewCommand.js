@@ -3,7 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
-import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
+import { extractMessages, resolveRealSessionKey, getSessionEntry } from '../utils/session.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
 
 /**
@@ -159,15 +159,11 @@ export class NewCommand extends Commander {
     let modelProvider = 'minimax-portal';
     let model = 'MiniMax-M2.7';
     try {
-      const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-      if (existsSync(sessionsPath)) {
-        const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-        const mainSession = sessionsData[realSessionKey];
-        if (mainSession) {
-          modelProvider = mainSession.modelProvider || modelProvider;
-          model = mainSession.model || model;
-        }
-      }
+      const cfg = getConfig();
+      const dmScope = cfg.session?.dmScope || 'main';
+      const entry = getSessionEntry(realSessionKey, dmScope, cfg);
+      modelProvider = entry.modelProvider || modelProvider;
+      model = entry.model || model;
     } catch {}
 
     // gtw model override (set via /gtw model or /gtw config set model)
