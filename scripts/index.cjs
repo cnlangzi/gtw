@@ -45,24 +45,10 @@ function apiRequest(method, endpoint, token, body = null) {
 function readJSON(file) { try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch (e) { return null; } }
 function writeJSON(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8'); fs.chmodSync(file, '0600'); }
 
-function getGhToken() {
-  try {
-    return execSync('gh auth token', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-  } catch (e) {
-    throw new Error('Not authenticated with gh CLI. Run: gh auth login');
-  }
-}
-
 async function getValidToken() {
-  try {
-    const token = getGhToken();
-    saveToken({ source: 'gh', access_token: token, cached_at: Date.now() });
-    return token;
-  } catch (e) {
-    const t = readJSON(TOKEN_FILE);
-    if (!t?.access_token) throw new Error('Not authenticated. Run: gh auth login');
-    return t.access_token;
-  }
+  const t = readJSON(TOKEN_FILE);
+  if (!t?.access_token) throw new Error('Not authenticated. Run /gtw login');
+  return t.access_token;
 }
 function saveToken(t) { writeJSON(TOKEN_FILE, t); }
 
@@ -70,13 +56,14 @@ function saveToken(t) { writeJSON(TOKEN_FILE, t); }
 
 async function cmdAuth(args) {
   try {
-    const token = getGhToken();
-    const user = await apiRequest('GET', '/user', token);
+    const t = readJSON(TOKEN_FILE);
+    if (!t?.access_token) throw new Error('Not authenticated. Run /gtw login');
+    const user = await apiRequest('GET', '/user', t.access_token);
     return {
       ok: true,
       user: { login: user.login, name: user.name },
-      token_source: 'gh-cli',
-      display: `✅ Authenticated as @${user.login}${user.name ? ` (${user.name})` : ''}\n\nToken source: gh CLI`,
+      token_source: t.source || 'oauth',
+      display: `✅ Authenticated as @${user.login}${user.name ? ` (${user.name})` : ''}\n\nToken source: ${t.source || 'oauth'}`,
     };
   } catch (e) {
     throw new Error(`Auth check failed: ${e.message}`);
