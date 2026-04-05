@@ -1,6 +1,6 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
-import { git, getCurrentBranch } from '../utils/git.js';
+import { git, getCurrentBranch, addAll, getStagedDiff, getStagedStats, getStagedNumstat } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 
 const MAX_DIFF_LEN = 8000;
@@ -91,16 +91,16 @@ export class PushCommand extends Commander {
     const workdir = wip.workdir;
     const branch = getCurrentBranch(workdir);
 
-    git('git add -A', workdir);
+    await addAll(workdir);
 
-    const stats = git('git diff --cached --stat', workdir);
+    const stats = getStagedStats(workdir);
     if (!stats) {
       return { ok: true, branch, message: 'No changes to commit', display: `✅ No changes to commit\n\nBranch: ${branch}` };
     }
 
-    const diff = git('git diff --cached', workdir);
+    const diff = getStagedDiff(workdir);
     const files = git('git diff --cached --name-only', workdir).split('\n').filter(Boolean);
-    const shortStats = git('git diff --cached --numstat', workdir);
+    const shortStats = getStagedNumstat(workdir);
     let totalAdd = 0, totalDel = 0;
     for (const l of shortStats.split('\n').filter(Boolean)) {
       const parts = l.split('\t');

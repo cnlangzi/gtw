@@ -1,7 +1,6 @@
-import { execSync } from 'child_process';
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
-import { getCurrentBranch, getDefaultBranch, tryCheckoutRemoteBranch } from '../utils/git.js';
+import { getCurrentBranch, getDefaultBranch, tryCheckoutRemoteBranch, getCommitLogDiff } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
@@ -103,20 +102,7 @@ Output ONLY valid JSON.`;
 }
 
 // ---------------------------------------------------------------------------
-// Get commit log diff between two branches
-// ---------------------------------------------------------------------------
 
-function getCommitLogDiff(workdir, headBranch, baseBranch) {
-  try {
-    return execSync(`git log ${baseBranch}..${headBranch} --oneline --format="%h %s"`, {
-      cwd: workdir,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {
-    return '';
-  }
-}
 
 // ---------------------------------------------------------------------------
 // PrCommand

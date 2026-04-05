@@ -5,7 +5,9 @@
   "type": "module",
   "main": "index.js",
   "openclaw": {
-    "extensions": ["./index.js"]
+    "extensions": [
+      "./index.js"
+    ]
   },
   "scripts": {
     "test": "node --test test/*.test.js",
@@ -13,5 +15,8 @@
   },
   "devDependencies": {
     "https-proxy-agent": "^9.0.0"
+  },
+  "dependencies": {
+    "isomorphic-git": "^1.37.4"
   }
 }

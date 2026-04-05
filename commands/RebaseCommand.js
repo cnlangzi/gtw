@@ -1,6 +1,6 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { git, getCurrentBranch } from '../utils/git.js';
+import { git, currentBranch as getCurrentBranch, fetch, checkout, existsRef, branchExists } from '../utils/git.js';
 
 /**
  * RebaseCommand — sync a branch with its remote counterpart via rebase.
@@ -32,66 +32,58 @@ export class RebaseCommand extends Commander {
    * 2. checkout (create tracking branch from origin/<branch> if local missing)
    * 3. rebase origin/<branch>
    */
-  rebaseSpecificBranch(workdir, branch) {
+  async rebaseSpecificBranch(workdir, branch) {
     let currentBranch;
 
     // Step 1: fetch
     try {
-      git('git fetch origin', workdir);
+      await fetch(workdir, { remote: 'origin' });
     } catch (e) {
       return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
     }
 
     // Step 2: checkout (reuse tryCheckoutRemoteBranch logic inline)
     try {
-      currentBranch = getCurrentBranch(workdir);
+      currentBranch = await getCurrentBranch(workdir);
     } catch (e) {
       return { ok: false, message: `⚠️ Could not determine current branch:\n${e.message}` };
     }
 
     if (currentBranch === branch) {
       // Already on this branch — nothing to checkout, just verify remote tracking
-      try {
-        git(`git rev-parse --verify origin/${branch}`, workdir);
-      } catch {
+      const remoteExists = await existsRef(workdir, `origin/${branch}`);
+      if (!remoteExists) {
         return { ok: false, message: `⚠️ Remote branch origin/${branch} does not exist.\n` };
       }
     } else {
       // Different branch — check if local exists
-      let localExists = false;
-      try {
-        git(`git rev-parse --verify ${branch}`, workdir);
-        localExists = true;
-      } catch {
-        localExists = false;
-      }
+      const localExists = branchExists(workdir, branch);
 
       if (localExists) {
         // Local exists — just checkout
         try {
-          git(`git checkout ${branch}`, workdir);
+          await checkout(workdir, branch);
         } catch (e) {
           return { ok: false, message: `⚠️ Checkout failed:\n${e.message}` };
         }
       } else {
         // Local missing — check if origin/<branch> exists and create tracking branch
-        try {
-          git(`git rev-parse --verify origin/${branch}`, workdir);
-        } catch {
+        const remoteExists = await existsRef(workdir, `origin/${branch}`);
+        if (!remoteExists) {
           return { ok: false, message: `⚠️ Branch "${branch}" does not exist locally or on origin.\n` };
         }
         try {
-          git(`git checkout -b ${branch} origin/${branch}`, workdir);
+          await checkout(workdir, branch);
         } catch (e) {
           return { ok: false, message: `⚠️ Failed to create tracking branch:\n${e.message}` };
         }
       }
     }
 
-    // Step 3: rebase
+    // Step 3: rebase (use execSync for pull --rebase since isomorphic-git doesn't support it directly)
     try {
       const result = git(`git rebase origin/${branch}`, workdir);
-      const finalBranch = getCurrentBranch(workdir);
+      const finalBranch = await getCurrentBranch(workdir);
       return {
         ok: true,
         branch: finalBranch,
@@ -99,7 +91,6 @@ export class RebaseCommand extends Commander {
         display: `✅ Rebased onto origin/${branch}${result ? '\n' + result : ''}`,
       };
     } catch (e) {
-      // Detect conflict signal in output
       const msg = e.message;
       if (msg.includes('CONFLICT') || msg.includes('conflict')) {
         return {
@@ -116,10 +107,10 @@ export class RebaseCommand extends Commander {
    * 1. Determine current branch
    * 2. pull --rebase origin <current-branch>
    */
-  rebaseCurrentBranch(workdir) {
+  async rebaseCurrentBranch(workdir) {
     let currentBranch;
     try {
-      currentBranch = getCurrentBranch(workdir);
+      currentBranch = await getCurrentBranch(workdir);
     } catch (e) {
       return { ok: false, message: `⚠️ Could not determine current branch:\n${e.message}` };
     }
