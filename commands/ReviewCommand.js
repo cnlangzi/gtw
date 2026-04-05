@@ -74,18 +74,21 @@ IMPORTANT:
  */
 /**
  * Create a git worktree for the PR branch using git.js helpers.
- * Worktree path: ../gtw-review-{prNum} relative to plugin root.
+ * @param {string} workdir - Absolute path to the git repository (e.g. /home/devin/code/plugins/gtw)
+ * @param {string} prNum - PR number
+ * Worktree path: sibling to workdir, e.g. /home/devin/code/plugins/gtw-review-{prNum}
  */
-async function createReviewWorktree(repo, prNum) {
-  const pluginRoot = path.resolve(__dirname, '..', '..');
+async function createReviewWorktree(workdir, prNum) {
+  const gitRoot = workdir; // the git repo root
   const worktreeName = `gtw-review-${prNum}`;
-  const worktreePath = path.resolve(pluginRoot, '..', worktreeName);
+  // Place worktree as sibling to the git repo directory
+  const worktreePath = path.resolve(path.dirname(workdir), worktreeName);
 
   // Step 1: Fetch the PR branch ref
-  await gitFetch(pluginRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:pr-${prNum}` });
+  await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:pr-${prNum}` });
 
   // Step 2: Remove existing worktree if it exists (by path)
-  const existing = worktreeList(pluginRoot).find(
+  const existing = worktreeList(gitRoot).find(
     (w) => w.path === worktreePath || w.path.endsWith(worktreeName)
   );
   if (existing) {
@@ -95,7 +98,7 @@ async function createReviewWorktree(repo, prNum) {
   }
 
   // Step 3: Create new worktree
-  worktreeAdd(pluginRoot, worktreeName, worktreePath);
+  worktreeAdd(gitRoot, worktreeName, worktreePath);
 
   return worktreePath;
 }
@@ -967,7 +970,7 @@ export class ReviewCommand extends Commander {
     // NEW: Create worktree for PR branch
     let worktreePath = null;
     try {
-      worktreePath = await createReviewWorktree(repo, prNum);
+      worktreePath = await createReviewWorktree(wip.workdir, prNum);
     } catch (e) {
       // Rollback label on worktree failure
       try {
