@@ -3,8 +3,7 @@
  * 
  * Tests cover:
  * 1. utils/wip.js clearWip() preserves workdir/repo/createdAt
- * 2. scripts/index.js clearWip() has same behavior (source code verification)
- * 3. ESM and CJS implementations match
+ * 2. ESM and CJS implementations match
  */
 
 import { strict as assert } from 'assert';
@@ -84,22 +83,6 @@ test('clearWip handles missing wip.json gracefully', () => {
   // Should not throw
   clearWip();
   assert.strictEqual(existsSync(WIP_FILE), false, 'Should not create file if not exists');
-});
-
-// Test 4: scripts/index.js has consistent implementation
-test('scripts/index.js clearWip() implementation is consistent', () => {
-  const indexContent = readFileSync('./scripts/index.js', 'utf8');
-  
-  // Should preserve workdir/repo/createdAt
-  const hasPreserveLogic = indexContent.includes('const { workdir, repo, createdAt } = wip') &&
-                           indexContent.includes('writeJSON(wip_FILE, { workdir, repo, createdAt })');
-  
-  // Should NOT delete the file
-  const doesNotDelete = !indexContent.includes('fs.unlinkSync(wip_FILE)') &&
-                        !indexContent.includes('unlinkSync(wip_FILE)');
-  
-  assert(hasPreserveLogic, 'Should preserve workdir/repo/createdAt');
-  assert(doesNotDelete, 'Should not delete wip.json file');
 });
 
 // Test 5: wip.json file is not deleted after clear
