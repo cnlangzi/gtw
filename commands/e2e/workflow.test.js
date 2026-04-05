@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 
 // Set test config dir BEFORE importing modules that use it (avoids scanner false positive on env var)
-process.env.GTW_CONFIG_DIR = '/tmp/gtw-test';
+process.env.GTW_CONFIG_DIR = '/tmp/gtw-workflow-test';
 
 import { WatchCommand } from '../WatchCommand.js';
 import { ReviewCommand } from '../ReviewCommand.js';
@@ -27,7 +27,7 @@ const DEFAULT_MAX_ROUNDS = 5;
 // ---------------------------------------------------------------------------
 // File helpers (shared across workflow tests)
 // CI isolation: tests use a fixed temp directory to avoid polluting real ~/.openclaw/gtw/
-const CONFIG_DIR = '/tmp/gtw-test';
+const CONFIG_DIR = '/tmp/gtw-workflow-test';
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const WIP_FILE = join(CONFIG_DIR, 'wip.json');
 
