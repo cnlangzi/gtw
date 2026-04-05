@@ -4,7 +4,7 @@ import { getWip, saveWip } from '../utils/wip.js';
 import { getCurrentBranch, getDefaultBranch, tryCheckoutRemoteBranch } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken, apiRequest } from '../utils/api.js';
-import { getConfig } from '../utils/config.js';
+import { getConfig, getLangLabel } from '../utils/config.js';
 
 const MAX_DIFF_LEN = 8000;
 
@@ -59,7 +59,7 @@ function parsePrResponse(rawText) {
 async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang }) {
   const { model } = await resolveModel();
 
-  const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
+  const langLabel = getLangLabel(lang);
 
   const systemPrompt = `You are a senior software engineer writing professional pull request descriptions.
 You output ONLY valid JSON. No markdown. No explanation. No text outside the JSON object.
