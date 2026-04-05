@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { homedir } from 'os';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { readJSON, writeJSON } from './api.js';
 
 /**
@@ -17,5 +18,50 @@ export function getConfig() {
 }
 
 export function saveConfig(c) {
+  // Ensure directory exists
+  mkdirSync(BASE_DIR, { recursive: true });
   writeJSON(CONFIG_FILE, c);
+}
+
+/**
+ * Get a single config key.
+ * @param {string} key
+ * @returns {string|null}
+ */
+export function getConfigKey(key) {
+  const c = getConfig();
+  return c[key] ?? null;
+}
+
+/**
+ * Set a single config key.
+ * @param {string} key
+ * @param {string} value
+ */
+export function setConfigKey(key, value) {
+  const c = getConfig();
+  c[key] = value;
+  saveConfig(c);
+}
+
+/**
+ * Delete a config key.
+ * @param {string} key
+ * @returns {boolean} true if key existed
+ */
+export function deleteConfigKey(key) {
+  const c = getConfig();
+  if (!(key in c)) return false;
+  delete c[key];
+  saveConfig(c);
+  return true;
+}
+
+/**
+ * List all config key-value pairs.
+ * @returns {{ key: string, value: string }[]}
+ */
+export function listConfig() {
+  const c = getConfig();
+  return Object.entries(c).map(([key, value]) => ({ key, value: String(value) }));
 }

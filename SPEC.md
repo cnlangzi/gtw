@@ -115,9 +115,52 @@ gtw/ready ──(claim)──> gtw/wip
 
 ---
 
+## Config Command
+
+Global key-value config stored at `~/.openclaw/gtw/config.json`. Backed by a flat JSON map of `key → value` strings.
+
+| Command | Description |
+|---------|-------------|
+| `/gtw config list` | List all config keys |
+| `/gtw config get <key>` | Get a config value |
+| `/gtw config set <key> <value>` | Set a config value |
+| `/gtw config delete <key>` | Delete a config key |
+
+### Key Naming Conventions
+
+| Key | Value | Description |
+|-----|-------|-------------|
+| `model` | `provider/model-id` | AI model override (e.g. `github/gpt-5-mini`) |
+| `lang:<owner/repo>` | `zh` or `en` | Language for issue/PR generation in a repo |
+| `watchList` | JSON array string | Serialized watch list (managed via `/gtw watch`) |
+
+### Examples
+
+```
+/gtw config set lang:cnlangzi/gtw zh
+/gtw config set lang:octocat/repo en
+/gtw config set model github/gpt-5-mini
+/gtw config list
+/gtw config get lang:cnlangzi/gtw
+/gtw config delete model
+```
+
+Internally stored as:
+```json
+{
+  "lang:cnlangzi/gtw": "zh",
+  "model": "github/gpt-5-mini",
+  "watchList": ["cnlangzi/gtw", "octocat/repo"]
+}
+```
+
 ## Command Reference
 
 ```
+/gtw config list              — list all config keys
+/gtw config get <key>          — get a config value
+/gtw config set <key> <value> — set a config value
+/gtw config delete <key>      — delete a config key
 /gtw review           — claim earliest gtw/ready PR from watch list
 /gtw review <pr>     — review specific PR in current repo
 /gtw watch add <owner>/<repo>  — add repo to watch list
