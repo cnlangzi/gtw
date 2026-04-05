@@ -5,10 +5,16 @@ import { getValidToken, apiRequest } from '../utils/api.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
 const DEFAULT_MAX_ROUNDS = 5;
 const MAX_ITEMS_PER_ROUND = 10;
+const SCAN_TIMEOUT_MS = 30000;
 
 // ---------------------------------------------------------------------------
 // LLM Prompt Templates
@@ -25,6 +31,9 @@ Review the PR against the following dimensions (in priority order):
 6. **Testing** — Is there adequate test coverage? Are edge cases handled?
 7. **Error Handling** — Are errors caught and handled gracefully? Are fallbacks provided?
 8. **Breaking Changes** — Does this PR introduce breaking changes to APIs, data schemas, or CLI interfaces?
+9. **Concurrency** — Race conditions, shared resource locks, idempotency, thread safety
+10. **Resource Cleanup** — Timers, memory, connections, event listeners
+11. **Duplicate Detection** — Is new code duplicating existing functionality?
 
 Output ONLY valid JSON matching this schema:
 {
@@ -33,7 +42,7 @@ Output ONLY valid JSON matching this schema:
   "items": [
     {
       "id": "string (stable deterministic hash of file+location+title, e.g. 'r1', 'r2')",
-      "category": "scope|correctness|security|performance|architecture|testing|error_handling|breaking_change",
+      "category": "scope|correctness|security|performance|architecture|testing|error_handling|breaking_change|concurrency|duplicate",
       "severity": "critical|high|medium|low",
       "file": "string (filename, empty if general)",
       "location": "string (function name, line range, or empty)",
@@ -49,23 +58,395 @@ IMPORTANT:
 - resolved is always false in the LLM output (resolved marking is done by comparing previous items).
 - Limit to top ${MAX_ITEMS_PER_ROUND} highest-severity items.
 - For ID, use a short stable identifier like "r1", "r2" (sequential, not hash) — the reviewer will stabilize across rounds.
-- Categories must be one of: scope, correctness, security, performance, architecture, testing, error_handling, breaking_change
+- Categories must be one of: scope, correctness, security, performance, architecture, testing, error_handling, breaking_change, concurrency, duplicate
 - severity must be one of: critical, high, medium, low`;
 
+// ---------------------------------------------------------------------------
+// Worktree Management
+// ---------------------------------------------------------------------------
+
 /**
- * Build the user prompt for LLM review.
+ * Create a git worktree for the PR branch.
+ * Returns worktree path on success, throws on failure.
+ * Worktree name format: gtw-review-{prNum}
+ */
+async function createReviewWorktree(repo, prNum, token) {
+  // Determine parent directory of this plugin (where worktrees will be created)
+  const pluginRoot = path.resolve(__dirname, '..', '..');
+  const worktreeName = `gtw-review-${prNum}`;
+  const worktreePath = path.resolve(pluginRoot, '..', worktreeName);
+
+  // Git commands must run in the plugin git repo
+  const gitDir = path.resolve(pluginRoot, '.git');
+  const runGit = (args) => {
+    return new Promise((resolve, reject) => {
+      const { execSync } = require('child_process');
+      try {
+        const result = execSync(`git ${args.join(' ')}`, {
+          cwd: pluginRoot,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 30000,
+        });
+        resolve(result.toString());
+      } catch (e) {
+        reject(new Error(e.stderr ? e.stderr.toString() : e.message));
+      }
+    });
+  };
+
+  // Step 1: Fetch the PR branch ref
+  await runGit(['fetch', 'origin', `refs/pull/${prNum}/head:pr-${prNum}`]);
+
+  // Step 2: Remove existing worktree if it exists
+  const existingWt = await runGit(['worktree', 'list', '--json'])
+    .then(JSON.parse)
+    .catch(() => []);
+  const existing = Array.isArray(existingWt)
+    ? existingWt.find((w) => w.path === worktreePath || w.path.endsWith(worktreeName))
+    : null;
+  if (existing) {
+    await runGit(['worktree', 'remove', '--force', worktreePath]).catch(() => {});
+  } else if (fs.existsSync(worktreePath)) {
+    // Fallback: just remove the directory if git doesn't know about it
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+  }
+
+  // Step 3: Create new worktree
+  await runGit(['worktree', 'add', worktreePath, `pr-${prNum}`]);
+
+  return worktreePath;
+}
+
+/**
+ * Remove a git worktree. Silently ignores errors.
+ */
+async function removeReviewWorktree(worktreePath) {
+  if (!worktreePath || !fs.existsSync(worktreePath)) return;
+  try {
+    const { execSync } = require('child_process');
+    execSync(`git worktree remove --force "${worktreePath}"`, {
+      cwd: path.dirname(worktreePath),
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+  } catch (e) {
+    // Silently ignore — worktree may not be tracked by git
+    try {
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Codebase Scanning
+// ---------------------------------------------------------------------------
+
+const INCLUDED_EXTS = new Set([
+  'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs',
+  'go', 'py', 'java', 'rb', 'rs', 'cs', 'cpp', 'c', 'h', 'hpp',
+  'md', 'json', 'yaml', 'yml', 'toml', 'sh', 'bash',
+]);
+
+const EXCLUDED_DIRS = new Set([
+  'node_modules', 'dist', 'build', '.git', 'coverage',
+  '.next', '.nuxt', 'vendor', '__pycache__', '.pytest_cache',
+  'target', 'bin', 'obj', '.cache', '.tmp',
+]);
+
+/**
+ * Extract imports from a file content string based on file extension.
+ */
+function extractImports(filePath, content) {
+  const ext = filePath.split('.').pop().toLowerCase();
+  const imports = [];
+
+  if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+    // ES modules: import X from '...'
+    for (const m of content.matchAll(/import\s+(?:{[^}]+}|\w+|\* as \w+)\s+from\s+['"]([^'"]+)['"]/g)) {
+      imports.push(m[1]);
+    }
+    // CommonJS: require('...')
+    for (const m of content.matchAll(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      imports.push(m[1]);
+    }
+    // Dynamic import: import('...')
+    for (const m of content.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+      imports.push(m[1]);
+    }
+  } else if (ext === 'go') {
+    // Go imports
+    for (const m of content.matchAll(/import\s+(?:\(\s*)?(?:[^)]+)\s+"?([^"\n]+)"?/g)) {
+      imports.push(m[1]);
+    }
+    // Simple Go import detection
+    const goImportBlock = content.match(/import\s+\(([\s\S]*?)\)/);
+    if (goImportBlock) {
+      for (const m of goImportBlock[1].matchAll(/"([^"]+)"/g)) {
+        imports.push(m[1]);
+      }
+    }
+  } else if (ext === 'py') {
+    // Python imports
+    for (const m of content.matchAll(/^(?:from\s+([^\s]+)\s+)?import\s+([^\s]+)/gm)) {
+      imports.push(m[1] ? `${m[1]}.${m[2]}` : m[2]);
+    }
+  } else if (ext === 'java') {
+    for (const m of content.matchAll(/import\s+([\w.]+)/g)) {
+      imports.push(m[1]);
+    }
+  } else if (ext === 'rb') {
+    for (const m of content.matchAll(/require\s+['"]([^'"]+)['"]/g)) {
+      imports.push(m[1]);
+    }
+    for (const m of content.matchAll(/require_relative\s+['"]([^'"]+)['"]/g)) {
+      imports.push(m[1]);
+    }
+  }
+
+  return [...new Set(imports)];
+}
+
+/**
+ * Extract exports from a file content.
+ * Returns array of exported names (functions, classes, constants).
+ */
+function extractExports(filePath, content) {
+  const ext = filePath.split('.').pop().toLowerCase();
+  const exports = [];
+
+  if (['js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs'].includes(ext)) {
+    // ES module exports: export default X, export const X, export function X
+    for (const m of content.matchAll(/export\s+(?:default\s+)?(?:const|let|var|function|class|async\s+function)\s+(\w+)/g)) {
+      exports.push(m[1]);
+    }
+    for (const m of content.matchAll(/export\s+default\s+(\w+)/g)) {
+      exports.push(m[1]);
+    }
+    // Named exports: export { X }
+    for (const m of content.matchAll(/export\s+{\s*([^}]+)\s*}/g)) {
+      for (const name of m[1].split(',')) {
+        const n = name.trim().split(' as ').pop().trim();
+        if (n) exports.push(n);
+      }
+    }
+    // CommonJS: module.exports = X
+    for (const m of content.matchAll(/module\.exports\s*[=:]\s*(?:(\w+)|\{([^}]+)\})/g)) {
+      if (m[1]) exports.push(m[1]);
+      if (m[2]) {
+        for (const name of m[2].split(',')) {
+          const n = name.trim().split(' as ').pop().trim();
+          if (n) exports.push(n);
+        }
+      }
+    }
+  } else if (ext === 'go') {
+    // Go exports: func (T) Name or func Name
+    for (const m of content.matchAll(/^func\s+(?:\([^)]+\)\s+)?([A-Z]\w*)/gm)) {
+      exports.push(m[1]);
+    }
+  } else if (ext === 'py') {
+    // Python: def X or class X at module level
+    for (const m of content.matchAll(/^def\s+(\w+)/gm)) {
+      exports.push(m[1]);
+    }
+    for (const m of content.matchAll(/^class\s+(\w+)/gm)) {
+      exports.push(m[1]);
+    }
+  } else if (ext === 'java') {
+    for (const m of content.matchAll(/(?:public|protected)\s+(?:static\s+)?(?:final\s+)?(?:class|interface|enum)\s+(\w+)/g)) {
+      exports.push(m[1]);
+    }
+  }
+
+  return [...new Set(exports)];
+}
+
+/**
+ * Recursively collect all source files in a directory.
+ */
+function collectFiles(dir, baseDir = dir) {
+  const files = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (EXCLUDED_DIRS.has(entry.name)) continue;
+      files.push(...collectFiles(fullPath, baseDir));
+    } else if (entry.isFile()) {
+      const ext = entry.name.split('.').pop().toLowerCase();
+      if (!INCLUDED_EXTS.has(ext)) continue;
+      try {
+        const stat = fs.statSync(fullPath);
+        const relPath = path.relative(baseDir, fullPath);
+        files.push({ path: relPath, fullPath, type: ext, size: stat.size });
+      } catch {}
+    }
+  }
+  return files;
+}
+
+/**
+ * Scan entire codebase in worktree and build review context.
+ * Returns:
+ * {
+ *   allFiles: [{path, content, type, size}],
+ *   imports: {file: [importedModules]},
+ *   exports: {file: [exportedNames]},
+ *   duplicateModules: [{name, files: [paths]}],
+ *   dependencyGraph: {file: {imports: [], importedBy: []}}
+ * }
+ */
+async function scanCodebase(worktreePath, changedFiles) {
+  const timeout = SCAN_TIMEOUT_MS;
+  const startTime = Date.now();
+
+  // Collect all source files
+  const allFiles = collectFiles(worktreePath);
+
+  const imports = {};
+  const exports = {};
+  const exportMap = {}; // name -> [files]
+
+  for (const f of allFiles) {
+    if (Date.now() - startTime > timeout) break;
+    try {
+      const content = fs.readFileSync(f.fullPath, 'utf8');
+      f.content = content;
+
+      const fileImports = extractImports(f.path, content);
+      imports[f.path] = fileImports;
+
+      const fileExports = extractExports(f.path, content);
+      exports[f.path] = fileExports;
+
+      // Build export map for duplicate detection
+      for (const name of fileExports) {
+        if (!exportMap[name]) exportMap[name] = [];
+        exportMap[name].push(f.path);
+      }
+    } catch {}
+  }
+
+  // Find duplicate modules
+  const duplicateModules = Object.entries(exportMap)
+    .filter(([, files]) => files.length > 1)
+    .map(([name, files]) => ({ name, files }));
+
+  // Build dependency graph
+  const dependencyGraph = {};
+  for (const f of allFiles) {
+    if (!dependencyGraph[f.path]) {
+      dependencyGraph[f.path] = { imports: imports[f.path] || [], importedBy: [] };
+    } else {
+      dependencyGraph[f.path].imports = imports[f.path] || [];
+    }
+  }
+
+  // Build reverse dependency map
+  for (const [file, fileImports] of Object.entries(imports)) {
+    for (const imp of fileImports) {
+      // Try to resolve import to a file path
+      const normalizedImp = imp.replace(/^\.\/+/, '').replace(/^\.\.\/+/, '');
+      for (const f of allFiles) {
+        const matches = f.path === normalizedImp ||
+                        f.path.endsWith(normalizedImp + '.' + f.type) ||
+                        f.path.endsWith('/' + normalizedImp) ||
+                        f.path === normalizedImp + '.' + f.type;
+        if (matches) {
+          if (!dependencyGraph[f.path]) {
+            dependencyGraph[f.path] = { imports: [], importedBy: [] };
+          }
+          if (!dependencyGraph[f.path].importedBy.includes(file)) {
+            dependencyGraph[f.path].importedBy.push(file);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    allFiles,
+    imports,
+    exports,
+    duplicateModules,
+    dependencyGraph,
+  };
+}
+
+/**
+ * Build enhanced user prompt with full codebase context.
+ */
+function buildEnhancedUserPrompt({
+  linkedIssue,
+  changedFilesFullContent,
+  baseBranch,
+  previousItems,
+  allFilesIndex,
+  duplicateModules,
+  dependencyAnalysis,
+}) {
+  let prompt = `## Linked Issue\nTitle: ${linkedIssue.title || '(no title)'}\nBody: ${linkedIssue.body || '(no description)'}\nNumber: #${linkedIssue.number || 'unknown'}\n\n## Base Branch\n${baseBranch}\n\n## Changed Files — Full Content\n`;
+
+  for (const file of changedFilesFullContent) {
+    prompt += `\n### FILE: ${file.path}\n\`\`\`\n${file.content}\n\`\`\`\n`;
+  }
+
+  if (duplicateModules && duplicateModules.length > 0) {
+    prompt += `\n## Potential Duplicate Modules Detected\n`;
+    for (const dup of duplicateModules) {
+      prompt += `- **${dup.name}** appears in: ${dup.files.join(', ')}\n`;
+    }
+    prompt += `\n`;
+  }
+
+  if (dependencyAnalysis) {
+    prompt += `\n## Dependency Impact Analysis\n`;
+    for (const [file, deps] of Object.entries(dependencyAnalysis)) {
+      if (deps.importedBy && deps.importedBy.length > 0) {
+        prompt += `- **${file}** is imported by: ${deps.importedBy.join(', ')}\n`;
+      }
+    }
+    prompt += `\n`;
+  }
+
+  // Full codebase file index (just filenames + size, not full content — too large)
+  if (allFilesIndex && allFilesIndex.length > 0) {
+    prompt += `\n## Full Codebase File Index (${allFilesIndex.length} files)\n`;
+    for (const f of allFilesIndex) {
+      prompt += `- ${f.path} (${f.type}, ${f.size}b)\n`;
+    }
+    prompt += `\n`;
+  }
+
+  if (previousItems && previousItems.length > 0) {
+    prompt += `\n## Previous Review Items\n`;
+    for (const item of previousItems) {
+      prompt += `- [${item.id}] [${item.severity}] [${item.category}] ${item.file ? `${item.file}@${item.location || 'N/A'}` : 'General'}: ${item.title}\n  ${item.body}\n`;
+    }
+  }
+
+  return prompt;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy prompt builder (deprecated, kept for backward compatibility)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the user prompt for LLM review (legacy diff-only version).
+ * @deprecated Use buildEnhancedUserPrompt instead
  */
 function buildUserPrompt({ linkedIssue, diff, baseBranch, previousItems }) {
   let prompt = `## Linked Issue
-Title: ${linkedIssue.title || '(no title)'}
-Body: ${linkedIssue.body || '(no description)'}
-Number: #${linkedIssue.number || 'unknown'}
-
-## Base Branch
-${baseBranch}
-
-## PR Changes (diff summary)
-`;
+Title: ${linkedIssue.title || '(no title)'}\nBody: ${linkedIssue.body || '(no description)'}
+Number: #${linkedIssue.number || 'unknown'}\n\n## Base Branch\n${baseBranch}\n\n## PR Changes (diff summary)\n`;
 
   for (const file of diff) {
     prompt += `\n### ${file.filename} (+${file.additions} -${file.deletions})\n`;
@@ -82,9 +463,7 @@ The following items were flagged in previous reviews. If they have been addresse
       prompt += `- [${item.id}] [${item.severity}] [${item.category}] ${item.file ? `${item.file}@${item.location || 'N/A'}` : 'General'}: ${item.title}\n  ${item.body}\n`;
     }
   } else {
-    prompt += `\n## Previous Review Items
-None (this is the first review round).
-`;
+    prompt += `\n## Previous Review Items\nNone (this is the first review round).\n`;
   }
 
   return prompt;
@@ -456,6 +835,7 @@ export class ReviewCommand extends Commander {
 
   /**
    * Core logic: claim PR (set gtw/wip), call LLM, update review comment, track round.
+   * Enhanced to use git worktree + full codebase scanning.
    */
   async _claimAndReviewPr(repo, prNum, token, myLogin, wip, maxRounds, prData = null) {
     // Fetch fresh PR data if not provided
@@ -540,17 +920,65 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Build diff text for LLM
-    const diffText = prData.files
-      .map((f) => `${f.filename}\n${f.patch || '(no diff)'}`)
-      .join('\n\n');
+    // NEW: Create worktree for PR branch
+    let worktreePath = null;
+    try {
+      worktreePath = await createReviewWorktree(repo, prNum, token);
+    } catch (e) {
+      // Rollback label on worktree failure
+      try {
+        await setPrLabel({ prNum, repo, token, isPR: true }, existingReviewState.previousLabel || 'gtw/ready');
+      } catch (rollbackErr) {
+        console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
+      }
+      return {
+        ok: false,
+        message: `⚠️ Failed to create worktree: ${e.message}`,
+        display: `⚠️ Worktree Creation Failed\n\n${e.message}\n\nCould not create a git worktree for PR #${prNum}. Check that git is available and the PR branch is accessible.`,
+      };
+    }
 
-    // Build user prompt
-    const userPrompt = buildUserPrompt({
+    // Scan full codebase in worktree
+    let allFiles = [];
+    let duplicateModules = [];
+    let dependencyGraph = {};
+    let changedFilesFullContent = [];
+
+    try {
+      const scanResult = await scanCodebase(worktreePath, prData.files.map(f => f.filename));
+      allFiles = scanResult.allFiles;
+      duplicateModules = scanResult.duplicateModules;
+      dependencyGraph = scanResult.dependencyGraph;
+
+      // Get full content of changed files from worktree
+      for (const file of prData.files) {
+        const fullPath = path.join(worktreePath, file.filename);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          changedFilesFullContent.push({ path: file.filename, content });
+        } catch {
+          // File may have been deleted in PR
+          changedFilesFullContent.push({ path: file.filename, content: `(file not found: ${file.filename})` });
+        }
+      }
+    } catch (e) {
+      console.error(`[ReviewCommand] Codebase scan failed, falling back to diff-only: ${e.message}`);
+      // Fall back to diff-only content
+      changedFilesFullContent = prData.files.map(f => ({
+        path: f.filename,
+        content: f.patch || '(no diff)',
+      }));
+    }
+
+    // Build enhanced user prompt
+    const userPrompt = buildEnhancedUserPrompt({
       linkedIssue: prData.linkedIssue,
-      diff: prData.files,
+      changedFilesFullContent,
       baseBranch: prData.baseBranch,
       previousItems,
+      allFilesIndex: allFiles.map(f => ({ path: f.path, type: f.type, size: f.size })),
+      duplicateModules,
+      dependencyAnalysis: dependencyGraph,
     });
 
     // Call LLM
@@ -569,6 +997,11 @@ export class ReviewCommand extends Commander {
         message: `⚠️ LLM review failed: ${e.message}. PR claim has been rolled back.`,
         display: `⚠️ LLM Review Failed\n\n${e.message}\n\nThe PR has not been claimed. Please try again or check your model configuration.`,
       };
+    } finally {
+      // Always cleanup worktree
+      if (worktreePath) {
+        await removeReviewWorktree(worktreePath);
+      }
     }
 
     // Merge previous items to track resolved items across rounds
@@ -649,8 +1082,6 @@ export class ReviewCommand extends Commander {
       reviewState: newReviewState,
       updatedAt: new Date().toISOString(),
     };
-    // Per spec: clear reviewState at end but keep commentId while needed
-    // We keep items for next round's comparison
     saveWip(updatedWip);
 
     // Build display response
