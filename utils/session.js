@@ -235,7 +235,8 @@ export function injectPlanModeDirective(sessionKey, workdir, repo) {
     });
     appendFileSync(sessionFile, entry + '\n');
     return true;
-  } catch {
+  } catch (err) {
+    console.warn(`[injectPlanModeDirective] Failed to append directive for session ${sessionKey}: ${err?.message ?? err}`);
     return false;
   }
 }

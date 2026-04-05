@@ -32,7 +32,12 @@ export class OnCommand extends Commander {
     saveWip({ workdir: absWorkdir, repo, createdAt: new Date().toISOString() });
 
     // Inject PLAN MODE directive so the agent knows to discuss before coding
-    injectPlanModeDirective(this.sessionKey, absWorkdir, repo);
+    const injected = injectPlanModeDirective(this.sessionKey, absWorkdir, repo);
+    if (!injected) {
+      console.warn(
+        `[OnCommand] Failed to inject PLAN MODE directive for session ${this.sessionKey} (workdir: ${absWorkdir}, repo: ${repo ?? 'unknown'})`
+      );
+    }
 
     return {
       ok: true,
