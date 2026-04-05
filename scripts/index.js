@@ -17,8 +17,6 @@ const wip_FILE = path.join(CONFIG_DIR, 'wip.json');
 [CONFIG_DIR].forEach(d => { if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); fs.chmodSync(d, '0700'); } });
 
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
-const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
-const ACCESS_TOKEN = process.env.GITHUB_ACCESS_TOKEN || '';
 
 function apiRequest(method, endpoint, token, body = null) {
   return new Promise((resolve, reject) => {
@@ -52,9 +50,8 @@ function readJSON(file) { try { return fs.existsSync(file) ? JSON.parse(fs.readF
 function writeJSON(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8'); fs.chmodSync(file, '0600'); }
 
 function getToken() {
-  if (ACCESS_TOKEN) return ACCESS_TOKEN;
   const t = readJSON(TOKEN_FILE);
-  if (!t?.access_token) throw new Error('Not authenticated. Run /gtw auth or set GITHUB_ACCESS_TOKEN');
+  if (!t?.access_token) throw new Error('Not authenticated. Run /gtw auth');
   return t.access_token;
 }
 function saveToken(t) { writeJSON(TOKEN_FILE, t); }

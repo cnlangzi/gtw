@@ -16,8 +16,6 @@ const wip_FILE = path.join(CONFIG_DIR, 'wip.json');
 
 [CONFIG_DIR].forEach(d => { if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); fs.chmodSync(d, '0700'); } });
 
-const ACCESS_TOKEN = process.env.GITHUB_ACCESS_TOKEN || '';
-
 function apiRequest(method, endpoint, token, body = null) {
   return new Promise((resolve, reject) => {
     const url = `https://api.github.com${endpoint}`;
@@ -56,7 +54,6 @@ function getGhToken() {
 }
 
 async function getValidToken() {
-  if (ACCESS_TOKEN) return ACCESS_TOKEN;
   try {
     const token = getGhToken();
     saveToken({ source: 'gh', access_token: token, cached_at: Date.now() });
