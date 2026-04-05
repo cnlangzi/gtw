@@ -133,21 +133,6 @@ async function prepareReviewWorktree(repo, prNum, branchName, baseBranch, cloneU
   return worktreePath;
 }
 
-/**
- * Remove a review worktree directory and clean up git registry.
- */
-function removeReviewWorktreeDir(worktreePath) {
-  if (!worktreePath) return;
-  // Step 1: git worktree remove to clean up registry (runs from worktree's parent dir)
-  try {
-    execSync(`git worktree remove "${worktreePath}" --force`, { cwd: path.dirname(worktreePath), stdio: 'pipe' });
-  } catch {}
-  // Step 2: remove directory
-  if (fs.existsSync(worktreePath)) {
-    try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Codebase Scanning
 // ---------------------------------------------------------------------------
@@ -1077,11 +1062,6 @@ export class ReviewCommand extends Commander {
         message: `⚠️ LLM review failed: ${e.message}. PR claim has been rolled back.`,
         display: `⚠️ LLM Review Failed\n\n${e.message}\n\nThe PR has not been claimed. Please try again or check your model configuration.`,
       };
-    } finally {
-      // Always cleanup worktree
-      if (worktreePath) {
-        removeReviewWorktreeDir(worktreePath);
-      }
     }
 
     // Merge previous items to track resolved items across rounds
