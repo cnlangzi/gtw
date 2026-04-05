@@ -81,32 +81,23 @@ IMPORTANT:
 async function createReviewWorktree(workdir, prNum) {
   const gitRoot = workdir; // the git repo root
   const worktreeName = `gtw-review-${prNum}`;
-  // Place all review gtw-reviews under ../gtw-reviews/{name} for easy management
-  const worktreePath = path.resolve(path.dirname(workdir), 'gtw-reviews', worktreeName);
+  // Place worktree as {workdir}/gtw-reviews/{name} (subdirectory of the git repo)
+  const worktreePath = path.resolve(workdir, 'gtw-reviews', worktreeName);
+  const parentDir = path.dirname(worktreePath);
 
   // Step 1: Fetch the PR branch ref, using worktreeName as local branch name
   await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:${worktreeName}` });
 
   // Step 2: Remove any existing worktree with the same branch name (regardless of path).
-  // Try removing by branch name first (most reliable), then by path.
-  try { worktreeRemoveByPath(worktreeName); } catch {
-    // Branch name removal failed — try by path if it exists
-    if (fs.existsSync(worktreePath)) {
-      try { worktreeRemoveByPath(worktreePath); } catch {
-        try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
-      }
-    }
-    // Also check old-style sibling path
-    const oldStylePath = path.resolve(path.dirname(workdir), worktreeName);
-    if (fs.existsSync(oldStylePath)) {
-      try { worktreeRemoveByPath(oldStylePath); } catch {
-        try { fs.rmSync(oldStylePath, { recursive: true, force: true }); } catch {}
-      }
+  try { worktreeRemoveByPath(worktreeName, gitRoot); } catch {}
+  // Also remove by path if directory still exists (handles orphaned worktrees)
+  if (fs.existsSync(worktreePath)) {
+    try { worktreeRemoveByPath(worktreePath, gitRoot); } catch {
+      try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
     }
   }
 
   // Ensure parent gtw-reviews directory exists
-  const parentDir = path.dirname(worktreePath);
   if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
 
   // Step 3: Create new worktree (branch name = worktreeName = gtw-review-{prNum})
@@ -128,11 +119,6 @@ function removeReviewWorktree(worktreePath, gitRoot) {
     try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
   }
 
-  // Also clean old-style sibling path if it exists (legacy worktrees before worktrees/ subdir)
-  const oldStylePath = path.resolve(path.dirname(gitRoot), path.basename(worktreePath));
-  if (oldStylePath !== worktreePath && fs.existsSync(oldStylePath)) {
-    try { fs.rmSync(oldStylePath, { recursive: true, force: true }); } catch {}
-  }
 }
 
 // ---------------------------------------------------------------------------
