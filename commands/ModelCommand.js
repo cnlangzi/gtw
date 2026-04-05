@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { readFileSync, existsSync } from 'fs';
 import { getConfig, saveConfig } from '../utils/config.js';
+import { resolveRealSessionKey } from '../utils/session.js';
 
 export class ModelCommand extends Commander {
   async execute(args) {
@@ -36,7 +37,10 @@ export class ModelCommand extends Commander {
       const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
       if (!existsSync(sessionsPath)) return 'minimax-portal/MiniMax-M2.7';
       const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-      const mainSession = sessionsData['agent:main:main'];
+      const cfg = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+      const dmScope = cfg.session?.dmScope || 'main';
+      const realKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
+      const mainSession = sessionsData[realKey];
       if (!mainSession) return 'minimax-portal/MiniMax-M2.7';
       const provider = mainSession.modelProvider || 'minimax-portal';
       const model = mainSession.model || 'MiniMax-M2.7';

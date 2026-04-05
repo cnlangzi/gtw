@@ -3,7 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
-import { extractMessages } from '../utils/session.js';
+import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
 
 /**
@@ -133,7 +133,6 @@ export class NewCommand extends Commander {
     this.api = context.api;
     this.config = context.config;
     this.sessionKey = context.sessionKey;
-    this.extractMessages = context.extractMessages;
   }
 
   async execute(args) {
@@ -146,8 +145,8 @@ export class NewCommand extends Commander {
     } catch {}
 
     const dmScope = cfg.session?.dmScope || 'main';
-    const MAIN_AGENT_SESSION = 'agent:main:main';
-    const { allMessages } = (this.extractMessages || extractMessages)(MAIN_AGENT_SESSION);
+    const realSessionKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
+    const { allMessages } = extractMessages(realSessionKey);
 
     if (!allMessages.length) {
       return {
@@ -163,7 +162,7 @@ export class NewCommand extends Commander {
       const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
       if (existsSync(sessionsPath)) {
         const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-        const mainSession = sessionsData[MAIN_AGENT_SESSION];
+        const mainSession = sessionsData[realSessionKey];
         if (mainSession) {
           modelProvider = mainSession.modelProvider || modelProvider;
           model = mainSession.model || model;
@@ -199,7 +198,6 @@ JSON:`;
     const tmpDir = join(homedir(), '.openclaw', 'gtw');
     mkdirSync(tmpDir, { recursive: true });
 
-    const langLabel = getLangLabel(lang);
     const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
 Generate the issue title and body in ${langLabel}.
 
