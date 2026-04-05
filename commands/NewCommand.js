@@ -3,126 +3,9 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
-import { extractMessages, resolveRealSessionKey, getSessionEntry } from '../utils/session.js';
+import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
-
-/**
- * Find the provider config for a given model from OpenClaw's models.json.
- * Supports "model-id" (searches all providers) or "provider/model-id" (direct lookup).
- * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
- * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
- */
-function findModelProviderConfig(model) {
-  const modelsPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json');
-  if (!existsSync(modelsPath)) return null;
-  try {
-    const data = JSON.parse(readFileSync(modelsPath, 'utf8'));
-
-    // Direct lookup: "provider/model-id"
-    if (model.includes('/')) {
-      const [provider, modelId] = model.split('/');
-      const conf = data.providers?.[provider];
-      if (conf?.models?.some((m) => m.id === modelId)) {
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
-      return null;
-    }
-
-    // Fallback: search all providers for model id
-    for (const [provider, conf] of Object.entries(data.providers || {})) {
-      const hasModel = conf.models?.some((m) => m.id === model);
-      if (hasModel) {
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
-    }
-  } catch {}
-  return null;
-}
-
-/**
- * Make an AI API call using OpenClaw's model + auth configuration.
- * Supports both Anthropic and OpenAI message formats.
- * @param {string} model - Model id
- * @param {string} systemPrompt
- * @param {string} userPrompt
- * @returns {Promise<string>} - Response text
- */
-async function callAI(model, systemPrompt, userPrompt) {
-  // 1. Find provider config from models.json
-  const providerConfig = findModelProviderConfig(model);
-  if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
-
-  const { provider, baseUrl, authHeader } = providerConfig;
-  // Strip provider prefix for the actual API call (provider/model → model)
-  const modelId = model.includes('/') ? model.split('/')[1] : model;
-  const authKey = `${provider}:default`;
-
-  // 2. Get token from auth-profiles.json (optional — some local providers need no token)
-  const headers = { 'Content-Type': 'application/json' };
-  try {
-    const authPath = join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
-    const authData = JSON.parse(readFileSync(authPath, 'utf8'));
-    const token = authData.profiles?.[authKey]?.access;
-    if (token) {
-      if (authHeader) {
-        headers['Authorization'] = `Bearer ${token}`;
-      } else {
-        headers['x-api-key'] = token;
-      }
-    }
-  } catch { /* no auth needed */ }
-
-  // 4. Determine API format from models.json api field
-  const api = providerConfig.api || 'openai-chat';
-  let endpoint;
-  let body;
-
-  if (api === 'anthropic-messages') {
-    headers['anthropic-version'] = '2023-06-01';
-    const fullEndpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
-    const modelConf = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'agents', 'main', 'agent', 'models.json'), 'utf8'));
-    const maxTokens = (
-      (modelConf.providers?.[provider]?.models || [])
-        .find((m) => m.id === modelId)
-    )?.maxTokens || 1024;
-
-    body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
-    if (systemPrompt) body.system = systemPrompt;
-
-    console.error('[gtw DEBUG] POST', fullEndpoint);
-    console.error('[gtw DEBUG] token prefix:', token.slice(0, 8));
-    console.error('[gtw DEBUG] body keys:', Object.keys(body));
-
-    const res = await fetch(fullEndpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-    const text = await res.text();
-    console.error('[gtw DEBUG] status:', res.status, 'body prefix:', text.slice(0, 200));
-    if (!res.ok) throw new Error(`API ${res.status}: ${text}`);
-    const data = JSON.parse(text);
-    return (data.content || []).map((b) => (b.type === 'text' ? b.text : '')).join('');
-
-  } else {
-    // Default: OpenAI chat completions
-    endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
-    body = { model: modelId, messages: [] };
-    if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
-    body.messages.push({ role: 'user', content: userPrompt });
-
-    const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-    const data = await res.json();
-    return (data.choices || []).map((c) => c.message?.content || '').join('');
-  }
-}
+import { callAI, resolveModel } from '../utils/ai.js';
 
 export class NewCommand extends Commander {
   /**
@@ -155,20 +38,8 @@ export class NewCommand extends Commander {
       };
     }
 
-    // Resolve the current session's model from sessions.json
-    let model = null;
-    let modelProvider = null;
-    try {
-      const cfg = getConfig();
-      const dmScope = cfg.session?.dmScope || 'main';
-      const entry = getSessionEntry(realSessionKey, dmScope, cfg);
-      modelProvider = entry.modelProvider;
-      model = entry.model;
-    } catch (e) {
-      if (e.message.includes('Session not found')) throw e; // propagate — no session to read from
-      // Otherwise: modelProvider or model missing → throw the descriptive error from getSessionEntry
-      if (!modelProvider || !model) throw e;
-    }
+    // Resolve model from session (throws if missing) + gtw/config.json override
+    const { model, modelProvider } = await resolveModel(realSessionKey);
 
     // gtw model override (set via /gtw model or /gtw config set model)
     // Resolve repo language: lang:<owner/repo> from config, default 'en'
@@ -206,9 +77,10 @@ Generate the issue title and body in ${langLabel}.
 JSON format:
 {"title":"fix: short description","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
 
+    const agentId = realSessionKey?.split(':')[1] || 'main';
     let rawText;
     try {
-      rawText = await callAI(model, systemPrompt, prompt);
+      rawText = await callAI(model, systemPrompt, prompt, agentId);
       console.error('[gtw DEBUG] rawText length:', rawText.length, 'first 300:', JSON.stringify(rawText.slice(0, 300)));
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
