@@ -81,8 +81,8 @@ IMPORTANT:
 async function createReviewWorktree(workdir, prNum) {
   const gitRoot = workdir; // the git repo root
   const worktreeName = `gtw-review-${prNum}`;
-  // Place all review worktrees under ../worktrees/{name} for easy management
-  const worktreePath = path.resolve(path.dirname(workdir), 'worktrees', worktreeName);
+  // Place all review gtw-reviews under ../gtw-reviews/{name} for easy management
+  const worktreePath = path.resolve(path.dirname(workdir), 'gtw-reviews', worktreeName);
 
   // Step 1: Fetch the PR branch ref, using worktreeName as local branch name
   await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:${worktreeName}` });
@@ -97,7 +97,7 @@ async function createReviewWorktree(workdir, prNum) {
     fs.rmSync(worktreePath, { recursive: true, force: true });
   }
 
-  // Ensure parent worktrees directory exists
+  // Ensure parent gtw-reviews directory exists
   const parentDir = path.dirname(worktreePath);
   if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
 
