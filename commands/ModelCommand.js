@@ -6,6 +6,11 @@ import { getConfig, saveConfig } from '../utils/config.js';
 import { resolveRealSessionKey } from '../utils/session.js';
 
 export class ModelCommand extends Commander {
+  constructor(context) {
+    super(context);
+    this.sessionKey = context.sessionKey;
+  }
+
   async execute(args) {
     const cfg = getConfig();
 
@@ -33,20 +38,17 @@ export class ModelCommand extends Commander {
   }
 
   _resolveSessionDefault() {
-    try {
-      const sessionsPath = join(homedir(), '.openclaw', 'agents', 'main', 'sessions', 'sessions.json');
-      if (!existsSync(sessionsPath)) return 'minimax-portal/MiniMax-M2.7';
-      const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
-      const cfg = getConfig();
-      const dmScope = cfg.session?.dmScope || 'main';
-      const realKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
-      const mainSession = sessionsData[realKey];
-      if (!mainSession) return 'minimax-portal/MiniMax-M2.7';
-      const provider = mainSession.modelProvider || 'minimax-portal';
-      const model = mainSession.model || 'MiniMax-M2.7';
-      return `${provider}/${model}`;
-    } catch {
-      return 'minimax-portal/MiniMax-M2.7';
-    }
+    const agentId = this.sessionKey?.split(':')[1] || 'main';
+    const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+    if (!existsSync(sessionsPath)) throw new Error(`Session store not found: ${sessionsPath}`);
+    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    const cfg = getConfig();
+    const dmScope = cfg.session?.dmScope || 'main';
+    const realKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
+    const mainSession = sessionsData[realKey];
+    if (!mainSession) throw new Error(`Session not found: ${realKey}`);
+    const provider = mainSession.modelProvider || 'minimax-portal';
+    const model = mainSession.model || 'MiniMax-M2.7';
+    return `${provider}/${model}`;
   }
 }
