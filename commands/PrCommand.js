@@ -58,35 +58,20 @@ function parsePrResponse(rawText) {
 
 async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang }) {
   const { model } = await resolveModel();
-  const isZh = lang === 'zh';
 
-  const systemPrompt = isZh
-    ? `你是一位资深软件工程师，撰写专业的 Pull Request 描述。
-你只输出有效 JSON。不要 markdown。不要解释。不要在 JSON 对象之外输出任何内容。
+  const langLabel = lang === 'zh' ? 'Chinese' : lang === 'fr' ? 'French' : lang === 'de' ? 'German' : lang === 'es' ? 'Spanish' : lang === 'ja' ? 'Japanese' : lang === 'ko' ? 'Korean' : lang === 'pt' ? 'Portuguese' : lang === 'ru' ? 'Russian' : lang === 'ar' ? 'Arabic' : 'English';
 
-输出格式：
-{"title":"简短的 PR 标题（50-72 字符）","body":"PR 描述：包含修改了什么、为什么改、如何测试。简洁且信息丰富。"}`
-    : `You are a senior software engineer writing professional pull request descriptions.
+  const systemPrompt = `You are a senior software engineer writing professional pull request descriptions.
 You output ONLY valid JSON. No markdown. No explanation. No text outside the JSON object.
+Generate the PR title and body in ${langLabel}.
 
 Output format:
 {"title":"Brief PR title (50-72 chars)","body":"PR body with: What changed, Why it changed, How to test. Be concise and informative."}`;
 
   let userPrompt;
   if (issueId) {
-    userPrompt = isZh
-      ? `为此 Pull Request 生成标题和描述。
-
-关联 Issue: #${issueId} — ${issueTitle}
-${issueBody ? `Issue 描述：\n${issueBody}\n` : ''}
-Head Branch: ${branch}
-Base Branch: ${baseBranch}
-
-${branch} vs ${baseBranch} 的最近提交：
-${diff}
-
-仅输出有效 JSON。`
-      : `Generate a PR title and body for this pull request.
+    userPrompt = `Generate a PR title and body for this pull request.
+Generate the PR title and body in ${langLabel}.
 
 Fixes: #${issueId}
 
@@ -100,17 +85,8 @@ ${diff}
 
 Output ONLY valid JSON.`;
   } else {
-    userPrompt = isZh
-      ? `为此 Pull Request 生成标题和描述。
-
-Head Branch: ${branch}
-Base Branch: ${baseBranch}
-
-${branch} vs ${baseBranch} 的最近提交：
-${diff}
-
-仅输出有效 JSON。`
-      : `Generate a PR title and body for this pull request.
+    userPrompt = `Generate a PR title and body for this pull request.
+Generate the PR title and body in ${langLabel}.
 
 Head Branch: ${branch}
 Base Branch: ${baseBranch}
