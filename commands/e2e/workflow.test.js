@@ -245,10 +245,10 @@ describe('WF3: Round tracking and stuck detection', () => {
 // when WatchCommand.test.js runs in the same process (cleanupFiles writes {})
 // and the file-write flush timing in CI differs from local.
 describe('WF4: Watch list + review integration', () => {
-  it('WatchCommand: add → config persists', () => {
+  it('WatchCommand: add → config persists', async () => {
     cleanupFiles(); // ensure clean slate
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
-    cmd.execute(['add', 'cnlangzi/gtw']);
+    await cmd.execute(['add', 'cnlangzi/gtw']);
 
     const config = readConfig();
     assert.ok(config.watchList.includes('cnlangzi/gtw'));
