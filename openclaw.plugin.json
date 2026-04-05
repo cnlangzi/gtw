@@ -1,15 +1,16 @@
 {
   "id": "gtw",
-  "name": "GitHub Team Workflow",
-  "description": "GitHub team collaboration workflow. Session-based: drafts go to wip.json, confirm before executing. Commands: on, new, update, confirm, fix, pr, push, review, issue, show, poll, config. /gtw push generates LLM-driven conventional commit messages from git diffs (dry-run preview by default).",
+  "name": "gtw",
+  "description": "GitHub team workflow — slash commands for issues, PRs, reviews, and commits",
+  "version": "1.0.0",
   "configSchema": {
     "type": "object",
+    "additionalProperties": false,
     "properties": {
       "model": {
         "type": "string",
-        "description": "Model ID to use for generating issue drafts (e.g. MiniMax-M2.7, gpt-4o). Defaults to the current session's model if not set. Must be a model configured in openclaw.json."
+        "description": "LLM model to use for generating commit messages and review comments"
       }
-    },
-    "additionalProperties": false
+    }
   }
 }
