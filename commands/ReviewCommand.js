@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { worktreeList, worktreeAdd, worktreeRemoveByPath, fetch as gitFetch } from '../utils/git.js';
+import { worktreeAdd, worktreeRemoveByPath, fetch as gitFetch } from '../utils/git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -87,13 +87,21 @@ async function createReviewWorktree(workdir, prNum) {
   // Step 1: Fetch the PR branch ref, using worktreeName as local branch name
   await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:${worktreeName}` });
 
-  // Step 2: Remove existing worktree if it exists (directory check is reliable even if git list fails)
-  if (fs.existsSync(worktreePath)) {
-    try {
-      worktreeRemoveByPath(worktreePath);
-    } catch {
-      // If git worktree remove fails (e.g. detached HEAD), fall back to manual cleanup
-      fs.rmSync(worktreePath, { recursive: true, force: true });
+  // Step 2: Remove any existing worktree with the same branch name (regardless of path).
+  // Try removing by branch name first (most reliable), then by path.
+  try { worktreeRemoveByPath(worktreeName); } catch {
+    // Branch name removal failed — try by path if it exists
+    if (fs.existsSync(worktreePath)) {
+      try { worktreeRemoveByPath(worktreePath); } catch {
+        try { fs.rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+      }
+    }
+    // Also check old-style sibling path
+    const oldStylePath = path.resolve(path.dirname(workdir), worktreeName);
+    if (fs.existsSync(oldStylePath)) {
+      try { worktreeRemoveByPath(oldStylePath); } catch {
+        try { fs.rmSync(oldStylePath, { recursive: true, force: true }); } catch {}
+      }
     }
   }
 
@@ -110,10 +118,10 @@ async function createReviewWorktree(workdir, prNum) {
 /**
  * Remove a git worktree. Silently ignores errors.
  */
-function removeReviewWorktree(worktreePath) {
+function removeReviewWorktree(worktreePath, gitRoot) {
   if (!worktreePath || !fs.existsSync(worktreePath)) return;
   try {
-    worktreeRemoveByPath(worktreePath);
+    worktreeRemoveByPath(worktreePath, gitRoot);
   } catch {}
   // Fallback: remove directory if git doesn't know about it
   if (worktreePath && fs.existsSync(worktreePath)) {
@@ -1051,7 +1059,7 @@ export class ReviewCommand extends Commander {
     } finally {
       // Always cleanup worktree
       if (worktreePath) {
-        await removeReviewWorktree(worktreePath);
+        await removeReviewWorktree(worktreePath, wip.workdir);
       }
     }
 

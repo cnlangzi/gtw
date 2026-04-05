@@ -374,14 +374,14 @@ export function worktreeAdd(workdir, name, path) {
 
 export function worktreeRemove(workdir, name) {
   validateWorktreeName(name);
-  execGit(`git worktree remove "${name}"`, workdir);
+  execGit(`git worktree remove --force "${name}"`, workdir);
 }
 
 /**
  * Remove a worktree given its filesystem path (not its .worktrees/ name).
  * Uses git worktree remove --force with the path.
  */
-export function worktreeRemoveByPath(worktreePath) {
+export function worktreeRemoveByPath(worktreePath, gitRoot) {
   if (!worktreePath) return;
-  execGit(`git worktree remove --force "${worktreePath}"`, dirname(worktreePath));
+  execGit(`git worktree remove --force "${worktreePath}"`, gitRoot);
 }
