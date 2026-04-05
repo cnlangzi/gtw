@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,7 +81,6 @@ async function createReviewWorktree(repo, prNum, token) {
   const gitDir = path.resolve(pluginRoot, '.git');
   const runGit = (args) => {
     return new Promise((resolve, reject) => {
-      const { execSync } = require('child_process');
       try {
         const result = execSync(`git ${args.join(' ')}`, {
           cwd: pluginRoot,
@@ -123,7 +123,6 @@ async function createReviewWorktree(repo, prNum, token) {
 async function removeReviewWorktree(worktreePath) {
   if (!worktreePath || !fs.existsSync(worktreePath)) return;
   try {
-    const { execSync } = require('child_process');
     execSync(`git worktree remove --force "${worktreePath}"`, {
       cwd: path.dirname(worktreePath),
       stdio: 'pipe',
