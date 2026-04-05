@@ -190,3 +190,52 @@ export function injectMessage(sessionKey, text) {
     return false;
   }
 }
+
+/**
+ * Inject a PLAN MODE directive into the session JSONL for requirements clarification.
+ * @param {string} sessionKey
+ * @param {string} workdir
+ * @param {string} repo
+ * @returns {boolean} success
+ */
+export function injectPlanModeDirective(sessionKey, workdir, repo) {
+  const sessionFile = getSessionFile(sessionKey);
+  if (!sessionFile) return false;
+
+  const directive = [
+    `🚨 [gtw] PLAN MODE — Requirements Clarification`,
+    ``,
+    `Workdir: ${workdir}`,
+    `Repo: ${repo}`,
+    ``,
+    `You are now in PLAN MODE for requirements clarification.`,
+    ``,
+    `RULES:`,
+    `1. Do NOT read code files proactively. Wait for the user to ask questions.`,
+    `2. When the user asks a question, read only the relevant files they mention or ask about.`,
+    `3. After reading, respond with a structured reply:`,
+    `   ## 当前理解`,
+    `   [Describe what you understood from the code for the asked scope]`,
+    `   ## 疑问`,
+    `   [List any clarifying questions]`,
+    `4. Do NOT write, modify, or refactor any code.`,
+    `5. Do NOT propose fixes or implementation suggestions.`,
+    `6. Wait for the user to explicitly say "可以开始了" (or "you can start") before beginning implementation.`,
+  ].join('\n');
+
+  try {
+    const entry = JSON.stringify({
+      type: 'message',
+      id: `inj-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: directive }],
+      },
+    });
+    appendFileSync(sessionFile, entry + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
