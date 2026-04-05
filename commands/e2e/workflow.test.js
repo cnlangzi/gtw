@@ -13,9 +13,6 @@ import { join } from 'path';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 
-// Set test config dir BEFORE importing modules that use it (avoids scanner false positive on env var)
-process.env.GTW_CONFIG_DIR = '/tmp/gtw-workflow-test';
-
 import { WatchCommand } from '../WatchCommand.js';
 import { ReviewCommand } from '../ReviewCommand.js';
 import { mergeChecklistState } from '../ReviewCommand.js';
