@@ -4,6 +4,10 @@
   "description": "GitHub team workflow - slash command plugin for OpenClaw",
   "type": "module",
   "main": "index.js",
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "hooks": []
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js"
