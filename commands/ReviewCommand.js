@@ -87,14 +87,14 @@ async function createReviewWorktree(workdir, prNum) {
   // Step 1: Fetch the PR branch ref, using worktreeName as local branch name
   await gitFetch(gitRoot, { remote: 'origin', ref: `refs/pull/${prNum}/head:${worktreeName}` });
 
-  // Step 2: Remove existing worktree if it exists (by path)
-  const existing = worktreeList(gitRoot).find(
-    (w) => w.path === worktreePath || w.path.endsWith(worktreeName)
-  );
-  if (existing) {
-    try { worktreeRemoveByPath(worktreePath); } catch {}
-  } else if (fs.existsSync(worktreePath)) {
-    fs.rmSync(worktreePath, { recursive: true, force: true });
+  // Step 2: Remove existing worktree if it exists (directory check is reliable even if git list fails)
+  if (fs.existsSync(worktreePath)) {
+    try {
+      worktreeRemoveByPath(worktreePath);
+    } catch {
+      // If git worktree remove fails (e.g. detached HEAD), fall back to manual cleanup
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+    }
   }
 
   // Ensure parent gtw-reviews directory exists
