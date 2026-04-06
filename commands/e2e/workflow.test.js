@@ -17,6 +17,7 @@ import { WatchCommand } from '../WatchCommand.js';
 import { ReviewCommand } from '../ReviewCommand.js';
 import { mergeChecklistState } from '../ReviewCommand.js';
 import { setPrLabel } from '../../utils/labels.js';
+import { httpsRequest as originalHttpsRequest, setHttpsRequest } from '../../utils/github.js';
 
 const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
 const DEFAULT_MAX_ROUNDS = 5;
@@ -58,6 +59,34 @@ function cleanupFiles() {
   ensureDir();
   writeConfig({});
   writeWip({});
+}
+
+// ---------------------------------------------------------------------------
+// Mock httpsRequest for WF5 (GitHub label API)
+// ---------------------------------------------------------------------------
+
+/** @type {Array<function>} */
+let wf5HandlerQueue = [];
+
+async function mockHttpsRequest(method, url, headers, body) {
+  if (url.startsWith('https://api.github.com/')) {
+    if (wf5HandlerQueue.length === 0) {
+      throw new Error(`No mock handler left for ${method} ${url}`);
+    }
+    const handlerResult = await wf5HandlerQueue.shift()(method, url, headers, body);
+    return { status: 200, data: handlerResult };
+  }
+  return originalHttpsRequest(method, url, headers, body);
+}
+
+function installMock(handlers) {
+  wf5HandlerQueue = [...handlers];
+  setHttpsRequest(mockHttpsRequest);
+}
+
+function uninstallMock() {
+  wf5HandlerQueue = [];
+  setHttpsRequest(originalHttpsRequest);
 }
 
 function makeMockApi(handlers) {
@@ -277,6 +306,8 @@ describe('WF4: Watch list + review integration', () => {
 // ---------------------------------------------------------------------------
 
 describe('WF5: Label transitions across modules', () => {
+  afterEach(() => uninstallMock());
+
   // Verify the 5-label mutual exclusion contract holds across all transitions
   const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
 
@@ -295,10 +326,11 @@ describe('WF5: Label transitions across modules', () => {
           ...(needsRecheck ? [async () => { ops.push('RECHECK'); return [{ name: to }]; }] : []),
         ];
 
+        installMock(handlers);
+
         const result = await setPrLabel(
           { prNum: 1, repo: 'o/r', token: 't', isPR: true },
           to,
-          makeMockApi(handlers),
         );
 
         assert.strictEqual(result.ok, true);

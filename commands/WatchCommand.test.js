@@ -2,7 +2,7 @@
  * Unit tests for WatchCommand (AC6).
  * Run: node --test commands/WatchCommand.test.js
  */
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { homedir } from 'os';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 
@@ -17,7 +17,7 @@ import { getConfig, saveConfig, CONFIG_FILE } from '../utils/config.js';
 const makeContext = () => ({ api: {}, config: {}, sessionKey: 'test' });
 
 function writeConfig(data) {
-  mkdirSync(require('path').dirname(CONFIG_FILE), { recursive: true });
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 function readConfig() {

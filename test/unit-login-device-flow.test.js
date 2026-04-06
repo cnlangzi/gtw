@@ -133,4 +133,6 @@ console.log('\n' + '='.repeat(60));
 console.log(`Tests completed: ${passed + failed} total, ${passed} passed, ${failed} failed`);
 console.log('='.repeat(60));
 
+// Restore original httpsRequest before exit
+restoreMock();
 process.exit(failed > 0 ? 1 : 0);
