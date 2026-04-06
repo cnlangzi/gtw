@@ -1,10 +1,8 @@
 import { Commander } from './Commander.js';
-import { join } from 'path';
-import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
-import { getConfig, getLangLabel } from '../utils/config.js';
+import { getConfig, getLangLabel, BASE_DIR } from '../utils/config.js';
 import { callAI, resolveModel } from '../utils/ai.js';
 
 export class NewCommand extends Commander {
@@ -67,9 +65,8 @@ ${cleanMessages}
 
 JSON:`;
 
-    // Ensure tmp dir exists for session file
-    const tmpDir = join(homedir(), '.openclaw', 'gtw');
-    mkdirSync(tmpDir, { recursive: true });
+    // Ensure base dir exists for session file
+    mkdirSync(BASE_DIR, { recursive: true });
 
     const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
 Generate the issue title and body in ${langLabel}.

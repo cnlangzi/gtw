@@ -1,17 +1,8 @@
 import https from 'https';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { dirname } from 'path';
 import { GitHubClient } from './github.js';
-
-export const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
-
-function ensureDir() {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
+import { TOKEN_FILE } from './config.js';
 
 export function readJSON(file) {
   try {
@@ -22,7 +13,7 @@ export function readJSON(file) {
 }
 
 export function writeJSON(file, data) {
-  ensureDir();
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
 }
 

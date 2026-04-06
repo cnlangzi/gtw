@@ -1,13 +1,8 @@
-import { homedir } from 'os';
-import { join } from 'path';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { Commander } from './Commander.js';
 import { getSessionFile } from '../utils/session.js';
 import { GitHubClient } from '../utils/github.js';
-
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
-const POLLING_STATE_FILE = join(CONFIG_DIR, 'polling_state.json');
+import { BASE_DIR, TOKEN_FILE, POLLING_STATE_FILE } from '../utils/config.js';
 
 // ---------------------------------------------------------------------------
 // Inject login polling directive into main session
@@ -82,7 +77,7 @@ function injectLoginDirective(sessionKey, sessionFile, deviceCode) {
 
 function savePollingState(deviceCode) {
   try {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(BASE_DIR, { recursive: true });
     const state = {
       device_code: deviceCode.device_code,
       user_code: deviceCode.user_code,
@@ -361,7 +356,7 @@ You can now start using gtw commands!`;
 
   saveToken(tokenData) {
     try {
-      mkdirSync(CONFIG_DIR, { recursive: true });
+      mkdirSync(BASE_DIR, { recursive: true });
       writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2), 'utf8');
     } catch (e) {
       console.error('[gtw] Failed to save token:', e.message);

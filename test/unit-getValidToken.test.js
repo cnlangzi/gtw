@@ -5,15 +5,14 @@
  */
 
 import { strict as assert } from 'assert';
-import { rmSync, existsSync } from 'fs';
+import { rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
-
-// Import after setting up config dir
+// Set GTW_CONFIG_DIR before importing config-dependent modules
+process.env.GTW_CONFIG_DIR = join(homedir(), '.gtw');
 const { getValidToken, readJSON, writeJSON } = await import('../utils/api.js');
+const { TOKEN_FILE } = await import('../utils/config.js');
 
 console.log('🧪 Testing getValidToken()\n');
 

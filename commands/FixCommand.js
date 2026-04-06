@@ -8,6 +8,7 @@ import { git, getDefaultBranch, getRemoteRepo, fetch, checkout, branchExists } f
 import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { resolveModel } from '../utils/ai.js';
+import { WIP_FILE } from '../utils/config.js';
 import https from 'https';
 
 // ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     `   d. Run: git -C "${workdir}" commit -m "title" -m "body"`,
     `   e. Run: git -C "${workdir}" push -u origin ${branchName}`,
     ``,
-    `4. After push completes (or if no changes), update ${join(homedir(), '.openclaw', 'gtw', 'wip.json')}:`,
+    `4. After push completes (or if no changes), update ${WIP_FILE}:`
     `   - Set latestFixStatus to "success" if push succeeded, "no-changes" if nothing to commit, or "failure" if error`,
     `   - Add fields: latestFixBranch, latestFixCommitTitle, latestFixPushedAt`,
     ``,

@@ -1,7 +1,5 @@
-import { join } from 'path';
-import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
-import { getConfig } from './config.js';
+import { getConfig, CONFIG_FILE } from './config.js';
 import { getSessionEntry } from './session.js';
 
 /**
@@ -134,9 +132,8 @@ export async function resolveModel(sessionKey = null) {
 
   // 2. gtw/config.json override (always checked; applies on top of session model)
   try {
-    const gtwConfigPath = join(homedir(), '.openclaw', 'gtw', 'config.json');
-    if (existsSync(gtwConfigPath)) {
-      const gtwConfig = JSON.parse(readFileSync(gtwConfigPath, 'utf8'));
+    if (existsSync(CONFIG_FILE)) {
+      const gtwConfig = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
       if (gtwConfig.model) model = gtwConfig.model;
     }
   } catch {}
