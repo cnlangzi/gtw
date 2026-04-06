@@ -1,7 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip, clearWip, saveWip } from '../utils/wip.js';
 import { getValidToken } from '../utils/api.js';
-import { apiRequest } from '../utils/api.js';
+import { GitHubClient } from '../utils/github.js';
 import { git } from '../utils/git.js';
 
 export class ConfirmCommand extends Commander {
@@ -48,6 +48,7 @@ export class ConfirmCommand extends Commander {
       let prData;
       try {
         const token = await getValidToken();
+        const client = new GitHubClient(token);
         const repo = wip.repo;
 
         // Always prepend canonical issue association at confirm time
@@ -56,7 +57,7 @@ export class ConfirmCommand extends Commander {
           prBody = `Fixes: #${issueId}\n\n${prBody}`;
         }
 
-        prData = await apiRequest('POST', `/repos/${repo}/pulls`, token, {
+        prData = await client.request('POST', `/repos/${repo}/pulls`, {
           title,
           body: prBody,
           head: headBranch,
@@ -141,9 +142,10 @@ export class ConfirmCommand extends Commander {
     if (!wip.issue?.title) throw new Error('No issue draft. Run /gtw new first');
 
     const token = await getValidToken();
+    const client = new GitHubClient(token);
     const { title, body } = wip.issue;
 
-    const data = await apiRequest('POST', `/repos/${wip.repo}/issues`, token, {
+    const data = await client.request('POST', `/repos/${wip.repo}/issues`, {
       title,
       body: body || 'Created via gtw',
     });

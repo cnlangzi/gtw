@@ -1,10 +1,12 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { getValidToken, apiRequest } from '../utils/api.js';
+import { getValidToken } from '../utils/api.js';
+import { GitHubClient } from '../utils/github.js';
 
 export class PollCommand extends Commander {
   async execute(args) {
     const token = await getValidToken();
+    const client = new GitHubClient(token);
     const wip = getWip();
     const repo = wip.repo;
     if (!repo) throw new Error('No repo set. Run /gtw on <workdir> first');
@@ -13,7 +15,7 @@ export class PollCommand extends Commander {
 
     if (sub === 'issue') {
       const params = new URLSearchParams({ state: 'open', per_page: '10', sort: 'created', direction: 'asc' });
-      const data = await apiRequest('GET', `/repos/${repo}/issues?${params}`, token);
+      const data = await client.request('GET', `/repos/${repo}/issues?${params}`);
       const issues = data.filter((i) => !i.pull_request);
       return {
         ok: true,
@@ -35,7 +37,7 @@ export class PollCommand extends Commander {
 
     if (sub === 'pr') {
       const params = new URLSearchParams({ state: 'open', per_page: '10', sort: 'created', direction: 'asc' });
-      const data = await apiRequest('GET', `/repos/${repo}/pulls?${params}`, token);
+      const data = await client.request('GET', `/repos/${repo}/pulls?${params}`);
       const prData = data.map((pr) => ({
         number: pr.number,
         title: pr.title,
@@ -59,8 +61,8 @@ export class PollCommand extends Commander {
     const issueParams = new URLSearchParams({ state: 'open', per_page: '10', sort: 'created', direction: 'asc' });
     const prParams = new URLSearchParams({ state: 'open', per_page: '10', sort: 'created', direction: 'asc' });
     const [issuesData, prsData] = await Promise.all([
-      apiRequest('GET', `/repos/${repo}/issues?${issueParams}`, token),
-      apiRequest('GET', `/repos/${repo}/pulls?${prParams}`, token),
+      client.request('GET', `/repos/${repo}/issues?${issueParams}`),
+      client.request('GET', `/repos/${repo}/pulls?${prParams}`),
     ]);
     const issues = issuesData.filter((i) => !i.pull_request);
     let display =

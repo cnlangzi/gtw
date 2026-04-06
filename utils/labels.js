@@ -3,20 +3,21 @@
  *
  * Exports:
  *   GTW_LABELS          — array of the 5 label names
- *   setPrLabel(ctx, label, api) — atomic set with mutual exclusion, concurrency rollback
+ *   setPrLabel(ctx, label) — atomic set with mutual exclusion, concurrency rollback
  *
- * The api parameter defaults to the real apiRequest but can be overridden for tests.
+ * Pass ctx.client (GitHubClient instance) or ctx.token for authentication.
  */
 
-import { apiRequest as _defaultApiRequest } from './api.js';
+import { GitHubClient } from './github.js';
 
 export const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
 
 /**
  * Context shape:
- *   { prNum, repo, token, isPR? }
+ *   { prNum, repo, client, isPR? }
  *
- * api: optional injectable apiRequest(mock) for testing.
+ * client: a GitHubClient instance (preferred).
+ *         For backward compatibility, ctx.token is also accepted.
  *
  * Returns { ok, preempted, label } on success.
  * Throws on network / API error (unless preemption rollback succeeds).
@@ -27,8 +28,18 @@ export const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gt
  *      runner beat us → rollback gtw/wip → set gtw/ready → return { preempted: true }.
  *   3. If rollback itself fails, throw (state is ambiguous).
  */
-export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
-  const { prNum, repo, token, isPR = true } = ctx;
+export async function setPrLabel(ctx, label) {
+  const { prNum, repo, isPR = true } = ctx;
+
+  // Get client from ctx or construct from ctx.token
+  let client;
+  if (ctx.client) {
+    client = ctx.client;
+  } else if (ctx.token) {
+    client = new GitHubClient(ctx.token);
+  } else {
+    throw new Error('setPrLabel requires either ctx.client or ctx.token');
+  }
 
   if (!GTW_LABELS.includes(label)) {
     throw new Error(
@@ -41,7 +52,7 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
   const endpointBase = `/repos/${repo}/issues/${prNum}`;
 
   // Step 1: fetch current labels
-  const currentLabels = await api('GET', `${endpointBase}/labels`, token);
+  const currentLabels = await client.request('GET', `${endpointBase}/labels`);
 
   // Step 2: remove other gtw/* labels
   const toRemove = currentLabels
@@ -50,7 +61,7 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
 
   for (const lbl of toRemove) {
     try {
-      await api('DELETE', `${endpointBase}/labels/${encodeURIComponent(lbl)}`, token);
+      await client.request('DELETE', `${endpointBase}/labels/${encodeURIComponent(lbl)}`);
     } catch (e) {
       // 404 = label already gone (race), which is fine.
       // Any other error: abort without continuing.
@@ -65,23 +76,22 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
   // Step 3: set target label — always POST to avoid stale alreadyHas races.
   // GitHub's label API is idempotent; duplicate POST is a no-op server-side.
   try {
-    await api('POST', `${endpointBase}/labels`, token, { labels: [label] });
+    await client.request('POST', `${endpointBase}/labels`, { labels: [label] });
   } catch (e) {
     throw new Error(`Failed to set label "${label}" on #${prNum}: ${e.message}. Aborting.`);
   }
 
   // Step 4: concurrency safety — only needed when claiming gtw/wip
   if (label === 'gtw/wip') {
-    const fresh = await api('GET', `${endpointBase}/labels`, token);
+    const fresh = await client.request('GET', `${endpointBase}/labels`);
     const wasPreempted = fresh.some((l) => l.name === 'gtw/ready');
 
     if (wasPreempted) {
       // Rollback: remove gtw/wip, restore gtw/ready
       try {
-        await api(
+        await client.request(
           'DELETE',
           `${endpointBase}/labels/${encodeURIComponent('gtw/wip')}`,
-          token,
         );
       } catch (e) {
         if (!e.message.includes('404') && !e.message.includes('Label not found')) {
@@ -91,7 +101,7 @@ export async function setPrLabel(ctx, label, api = _defaultApiRequest) {
         }
       }
       try {
-        await api('POST', `${endpointBase}/labels`, token, { labels: ['gtw/ready'] });
+        await client.request('POST', `${endpointBase}/labels`, { labels: ['gtw/ready'] });
       } catch (e) {
         throw new Error(
           `Rollback failed: could not restore gtw/ready after preemption. State ambiguous: ${e.message}`,

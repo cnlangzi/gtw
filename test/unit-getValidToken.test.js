@@ -12,6 +12,7 @@ import { homedir } from 'os';
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
+// Import after setting up config dir
 const { getValidToken, readJSON, writeJSON } = await import('../utils/api.js');
 
 console.log('🧪 Testing getValidToken()\n');

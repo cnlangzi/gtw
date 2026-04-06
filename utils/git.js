@@ -7,8 +7,8 @@
 import { execSync as _exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { join, resolve, dirname } from 'path';
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
+import { join, resolve, dirname, basename } from 'path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from 'fs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -379,5 +379,32 @@ export function worktreeAdd(workdir, name, path) {
 
 export function worktreeRemove(workdir, name) {
   validateWorktreeName(name);
-  execGit(`git worktree remove "${name}"`, workdir);
+  execGit(`git worktree remove --force "${name}"`, workdir);
+}
+
+/**
+ * Remove a worktree given its filesystem path (not its .worktrees/ name).
+ * Uses git worktree remove --force with the path.
+ */
+export function worktreeRemoveByPath(worktreePath, gitRoot) {
+  if (!worktreePath) return;
+  const entryName = worktreePath.includes('/') ? basename(worktreePath) : worktreePath;
+  const wtDir = join(gitRoot, '.git', 'worktrees');
+  const wtEntry = join(wtDir, entryName);
+
+  // Step 1: try git worktree remove (cleans up both dir AND git registry)
+  try {
+    execGit(`git worktree remove --force "${worktreePath}"`, gitRoot);
+    return;
+  } catch {}
+
+  // Step 2: git remove failed — manually clean up registry entry + directory
+  if (existsSync(wtEntry)) {
+    try { rmSync(wtEntry, { recursive: true, force: true }); } catch {}
+  }
+  if (existsSync(worktreePath)) {
+    try { rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  }
+  // Step 3: git prune cleans up any other orphaned registry entries
+  try { execGit('git worktree prune', gitRoot); } catch {}
 }
