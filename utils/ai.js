@@ -1,3 +1,5 @@
+import { join } from 'path';
+import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { getConfig, CONFIG_FILE } from './config.js';
 import { getSessionEntry } from './session.js';
