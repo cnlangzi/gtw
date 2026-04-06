@@ -27,33 +27,17 @@ export function writeJSON(file, data) {
 }
 
 /**
- * Get a valid GitHub token with the following priority:
- * 1. GITHUB_TOKEN environment variable (PAT)
- * 2. token.json cache (PAT or OAuth)
- * 
- * @param {string} envToken - Optional GITHUB_TOKEN from environment
- * @returns {Promise<string>} - Valid GitHub token
+/**
+ * Get a valid GitHub token from token.json cache (PAT or OAuth).
+ * Returns immediately without pre-validation.
+ * @returns {Promise<string>}
  */
-export async function getValidToken(envToken) {
-  // Priority 1: Environment variable (PAT)
-  if (envToken) {
-    console.log('[gtw] Using GITHUB_TOKEN from environment');
-    return envToken;
-  }
-
-  // Priority 2: token.json cache
+export async function getValidToken() {
   const cached = readJSON(TOKEN_FILE);
   if (cached?.access_token) {
-    // Validate cached token before using
-    const isValid = await validateToken(cached.access_token);
-    if (isValid) {
-      console.log(`[gtw] Using cached token from token.json (source: ${cached.source || 'unknown'})`);
-      return cached.access_token;
-    }
-    console.log('[gtw] Cached token invalid');
+    return cached.access_token;
   }
-
-  throw new Error('Not authenticated. Run /gtw login or set GITHUB_TOKEN environment variable');
+  throw new Error('Not authenticated. Run /gtw login');
 }
 
 /**

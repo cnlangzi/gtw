@@ -11,7 +11,7 @@ const BASE_DIR = process.env.GTW_CONFIG_DIR || join(homedir(), '.openclaw', 'gtw
 const CONFIG_FILE = join(BASE_DIR, 'config.json');
 const WIP_FILE = join(BASE_DIR, 'wip.json');
 
-export { CONFIG_FILE, WIP_FILE };
+export { BASE_DIR, CONFIG_FILE, WIP_FILE };
 
 export function getConfig() {
   return readJSON(CONFIG_FILE) || {};

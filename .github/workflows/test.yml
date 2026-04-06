@@ -44,4 +44,5 @@ jobs:
         run: npm install
 
       - name: Run E2E workflow tests
-        run: node --test commands/e2e/workflow.test.js
+        run: |
+          GTW_CONFIG_DIR=/tmp/gtw-workflow-test node --test commands/e2e/workflow.test.js

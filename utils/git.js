@@ -27,6 +27,11 @@ function findGitRoot(workdir) {
  * Execute a git command and return stdout.
  * Throws on non-zero exit.
  */
+// git — alias for execGit, used by ConfirmCommand and other legacy callers
+export function git(cmd, cwd) {
+  return execGit(cmd, cwd);
+}
+
 function execGit(cmd, cwd) {
   try {
     return _exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();

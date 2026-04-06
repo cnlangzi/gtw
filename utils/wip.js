@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { WIP_FILE } from './config.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { BASE_DIR, WIP_FILE } from './config.js';
 
 export function getWip() {
   try {
@@ -10,6 +10,7 @@ export function getWip() {
 }
 
 export function saveWip(data) {
+  mkdirSync(BASE_DIR, { recursive: true });
   writeFileSync(WIP_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
