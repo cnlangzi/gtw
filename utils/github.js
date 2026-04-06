@@ -30,7 +30,8 @@ const REQUEST_TIMEOUT_MS = 15000;
  * @param {string|null} body - Request body (for POST)
  * @returns {Promise<object>} - Parsed JSON response
  */
-export function httpsRequest(method, url, headers = {}, body = null) {
+// Declared as `let` so tests can inject a mock via setHttpsRequest().
+export let httpsRequest = function (method, url, headers = {}, body = null) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const options = {
@@ -79,6 +80,14 @@ export function httpsRequest(method, url, headers = {}, body = null) {
     if (body) req.write(body);
     req.end();
   });
+}
+
+/**
+ * Override httpsRequest for testing (injected mock).
+ * @param {function} fn - Replacement httpsRequest function
+ */
+export function setHttpsRequest(fn) {
+  httpsRequest = fn;
 }
 
 /**

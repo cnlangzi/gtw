@@ -1,10 +1,13 @@
 /**
  * Unit tests for GitHubClient device code flow
- * 
+ *
  * Tests cover:
  * 1. GitHubClient class instantiation
  * 2. Device code request
  * 3. Token validation
+ *
+ * Note: Network calls to GitHub API are mocked via a lightweight
+ * in-process httpsRequest stub to ensure tests run reliably offline.
  */
 
 import { strict as assert } from 'assert';
@@ -15,7 +18,45 @@ import { homedir } from 'os';
 const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
 const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
 
-const { GitHubClient } = await import('../utils/github.js');
+const { GitHubClient, httpsRequest: originalHttpsRequest, setHttpsRequest } = await import('../utils/github.js');
+
+// ---------------------------------------------------------------------------
+// Mock httpsRequest to intercept GitHub API calls during tests
+// ---------------------------------------------------------------------------
+
+/** @type {Map<string, object>} URL → mock response override */
+const mockOverrides = new Map();
+
+/**
+ * Mocked httpsRequest that intercepts known GitHub API endpoints.
+ * Falls back to the real implementation for un-mocked URLs.
+ */
+async function mockHttpsRequest(method, url, headers = {}, body = null) {
+  if (mockOverrides.has(url)) {
+    return mockOverrides.get(url);
+  }
+  return originalHttpsRequest(method, url, headers, body);
+}
+
+/**
+ * Install URL-specific response mocks.
+ * @param {string} url   - Full URL to intercept (e.g. 'https://api.github.com/user')
+ * @param {object} reply  - Response to return: { status, data }
+ */
+function mockUrl(url, reply) {
+  mockOverrides.set(url, reply);
+}
+
+/**
+ * Clear all URL mocks and restore the real httpsRequest.
+ */
+function restoreMock() {
+  mockOverrides.clear();
+  setHttpsRequest(originalHttpsRequest);
+}
+
+// Install the mock immediately so all subsequent code uses it.
+setHttpsRequest(mockHttpsRequest);
 
 console.log('🧪 Testing GitHubClient device code flow\n');
 
@@ -57,22 +98,34 @@ await asyncTest('GitHubClient.setToken updates token', async () => {
 
 // Test 4: validateToken rejects invalid token
 await asyncTest('GitHubClient.validateToken rejects invalid token', async () => {
+  // Mock GitHub API /user endpoint to return 401 Unauthorized
+  mockUrl('https://api.github.com/user', {
+    status: 401,
+    data: { message: 'Bad credentials' },
+  });
   const client = new GitHubClient('invalid_token_xyz');
   const isValid = await client.validateToken();
   assert.strictEqual(isValid, false, 'Invalid token should return false');
+  // Clean up mock so subsequent tests aren't affected
+  mockOverrides.delete('https://api.github.com/user');
 });
 
-// Test 5: validateToken accepts valid cached token
+// Test 5: validateToken accepts valid cached token (mocked)
 await asyncTest('GitHubClient.validateToken accepts valid cached token', async () => {
-  if (existsSync(TOKEN_FILE)) {
-    const { readFileSync } = await import('fs');
-    const cached = JSON.parse(readFileSync(TOKEN_FILE, 'utf8'));
-    if (cached?.access_token) {
-      const client = new GitHubClient(cached.access_token);
-      const isValid = await client.validateToken();
-      console.log(`   (token validation: ${isValid ? 'valid' : 'invalid'})`);
-    }
-  }
+  // Mock GitHub API /user endpoint to return 200 OK with a fake user
+  mockUrl('https://api.github.com/user', {
+    status: 200,
+    data: {
+      login: 'testuser',
+      id: 12345,
+      name: 'Test User',
+    },
+  });
+  const client = new GitHubClient('valid_mock_token_abc123');
+  const isValid = await client.validateToken();
+  assert.strictEqual(isValid, true, 'Valid token should return true');
+  // Clean up mock
+  mockOverrides.delete('https://api.github.com/user');
 });
 
 // Summary
