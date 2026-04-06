@@ -89,7 +89,7 @@ export class PushCommand extends Commander {
     if (!wip.workdir) throw new Error('No workdir set. Run /gtw on <workdir> first');
 
     const workdir = wip.workdir;
-    const branch = getCurrentBranch(workdir);
+    const branch = await getCurrentBranch(workdir);
 
     await addAll(workdir);
 
