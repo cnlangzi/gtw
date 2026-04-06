@@ -4,7 +4,7 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { SyncCommand } from './SyncCommand.js';
+import { CheckoutCommand } from './CheckoutCommand.js';
 import { getWip, saveWip, clearWip } from '../utils/wip.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -71,7 +71,7 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('SyncCommand', () => {
+describe('CheckoutCommand', () => {
   it('sync current branch — no args — pulls latest on current branch', async () => {
     commitOnBranch(REPO_W, 'main', 'f1', 'v2\n');
 

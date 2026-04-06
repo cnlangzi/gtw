@@ -12,7 +12,7 @@ import { ConfigCommand } from './ConfigCommand.js';
 import { ModelCommand } from './ModelCommand.js';
 import { UpdateCommand } from './UpdateCommand.js';
 import { PrCommand } from './PrCommand.js';
-import { SyncCommand } from './SyncCommand.js';
+import { CheckoutCommand } from './CheckoutCommand.js';
 import { WatchCommand } from './WatchCommand.js';
 import { LoginCommand } from './LoginCommand.js';
 
@@ -67,7 +67,7 @@ const MAP = {
   model: ModelCommand,
   update: UpdateCommand,
   pr: PrCommand,
-  checkout: SyncCommand,
+  checkout: CheckoutCommand,
   watch: WatchCommand,
   login: LoginCommand,
 };
