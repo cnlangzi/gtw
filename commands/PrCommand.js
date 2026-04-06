@@ -160,14 +160,14 @@ export class PrCommand extends Commander {
       derivedBranchName = `fix/${baseBranchName}`;
 
       // Robust checkout: handle remote-exists, local-only, not-found cases
-      checkoutStatus = tryCheckoutRemoteBranch(workdir, derivedBranchName);
+      checkoutStatus = await tryCheckoutRemoteBranch(workdir, derivedBranchName);
       headBranch = checkoutStatus.branch;
     }
     // -------------------------------------------------------------------
     // Mode: /gtw pr (no args) — always use current branch, never wip.json
     // -------------------------------------------------------------------
     else {
-      headBranch = getCurrentBranch(workdir);
+      headBranch = await getCurrentBranch(workdir);
       if (!headBranch) {
         throw new Error('Not on any branch. Use /gtw fix <issue_id> to create a branch first.');
       }

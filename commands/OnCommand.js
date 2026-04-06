@@ -29,7 +29,7 @@ export class OnCommand extends Commander {
     if (!existsSync(absWorkdir)) throw new Error(`Directory not found: ${absWorkdir}`);
 
     const repo = getRemoteRepo(absWorkdir);
-    saveWip({ workdir: absWorkdir, repo, createdAt: new Date().toISOString() });
+    saveWip({ workdir: absWorkdir, repo, sessionKey: this.sessionKey, createdAt: new Date().toISOString() });
 
     // Inject PLAN MODE directive so the agent knows to discuss before coding
     const injected = injectPlanModeDirective(this.sessionKey, absWorkdir, repo);
