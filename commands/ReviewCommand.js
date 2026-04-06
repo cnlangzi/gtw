@@ -1,7 +1,8 @@
 import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { getConfig } from '../utils/config.js';
-import { getValidToken, CONFIG_DIR } from '../utils/api.js';
+import { getValidToken } from '../utils/api.js';
+import { BASE_DIR } from '../utils/config.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { resolveModel, callAI } from '../utils/ai.js';
@@ -95,7 +96,7 @@ IMPORTANT:
  * @param {string} cloneUrl - Git clone URL
  */
 async function prepareReviewWorktree(repo, prNum, branchName, baseBranch, cloneUrl) {
-  const reviewRoot = path.resolve(CONFIG_DIR, 'reviews', repo);
+  const reviewRoot = path.resolve(BASE_DIR, 'reviews', repo);
   const worktreeRoot = path.resolve(reviewRoot, 'gtw_reviews');
   const worktreePath = path.resolve(worktreeRoot, branchName);
 
