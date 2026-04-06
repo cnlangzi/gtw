@@ -4,14 +4,16 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { readJSON, writeJSON } from './api.js';
 
 /**
- * Config directory: GTW_CONFIG_DIR env var if set, otherwise ~/.openclaw/gtw/
+ * Config directory: GTW_CONFIG_DIR env var if set, otherwise ~/.gtw/
  * Tests set GTW_CONFIG_DIR to an isolated directory to avoid conflicts.
  */
-const BASE_DIR = process.env.GTW_CONFIG_DIR || join(homedir(), '.openclaw', 'gtw');
+const BASE_DIR = process.env.GTW_CONFIG_DIR || join(homedir(), '.gtw');
 const CONFIG_FILE = join(BASE_DIR, 'config.json');
 const WIP_FILE = join(BASE_DIR, 'wip.json');
+const TOKEN_FILE = join(BASE_DIR, 'token.json');
+const POLLING_STATE_FILE = join(BASE_DIR, 'polling_state.json');
 
-export { BASE_DIR, CONFIG_FILE, WIP_FILE };
+export { BASE_DIR, CONFIG_FILE, WIP_FILE, TOKEN_FILE, POLLING_STATE_FILE };
 
 export function getConfig() {
   return readJSON(CONFIG_FILE) || {};

@@ -19,7 +19,7 @@ Documentation (README.md and DESIGN.md) was out of sync with the actual implemen
 - Rewrote `/gtw fix` section to reflect the current main implementation: full subagent automation, gtw/wip label lifecycle, directive injection, state transitions (unclaimed → claimed → wip branch → fix-spawned → subagent running → pendingCommit → pushed → unclaimed).
 - Updated file structure list to accurately describe FixCommand, PrCommand, and PushCommand roles.
 - Added notes on why the two-step confirm model exists (safety, human reviewability, retry on failure).
-- Documented where pendingCommit and pendingPr are stored (`~/.openclaw/gtw/wip.json`).
+- Documented where pendingCommit and pendingPr are stored (`~/.gtw/wip.json`).
 
 **Added:**
 - `NOTES.md` — this changelog entry documenting the sync and date (2026-03-31).

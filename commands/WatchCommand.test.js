@@ -2,21 +2,22 @@
  * Unit tests for WatchCommand (AC6).
  * Run: node --test commands/WatchCommand.test.js
  */
+import { join } from 'path';
+import { homedir } from 'os';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+
+// Set GTW_CONFIG_DIR before importing modules that depend on it
+process.env.GTW_CONFIG_DIR = join(homedir(), '.gtw');
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { WatchCommand } from './WatchCommand.js';
-import { getConfig, saveConfig } from '../utils/config.js';
-import { join } from 'path';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
-
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+import { getConfig, saveConfig, CONFIG_FILE } from '../utils/config.js';
 
 const makeContext = () => ({ api: {}, config: {}, sessionKey: 'test' });
 
 function writeConfig(data) {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(require('path').dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 function readConfig() {
