@@ -2,27 +2,43 @@
  * Unit tests for utils/labels.js — setPrLabel atomicity, rollback, and concurrency.
  * Run: node --test utils/labels.test.js
  */
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { GTW_LABELS, setPrLabel } from './labels.js';
+import { httpsRequest as originalHttpsRequest, setHttpsRequest } from './github.js';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Mock httpsRequest — intercepts all GitHub API calls
 // ---------------------------------------------------------------------------
 
-/**
- * Build a stateful mock API whose behavior changes based on call count.
- * @param {Array<function>} handlers - array of handler functions, one per call
- */
-function makeMockApi(handlers) {
-  let callIdx = 0;
-  return async function mockApi(method, path, token, body) {
-    if (callIdx >= handlers.length) {
-      throw new Error(`No handler for call #${callIdx} (${method} ${path}). Total handlers: ${handlers.length}`);
+/** @type {Array<function>} sequential handlers for the current test */
+let handlerQueue = [];
+
+async function mockHttpsRequest(method, url, headers, body) {
+  if (url.startsWith('https://api.github.com/')) {
+    if (handlerQueue.length === 0) {
+      throw new Error(`No mock handler left for ${method} ${url}`);
     }
-    return handlers[callIdx++](method, path, token, body);
-  };
+    const handlerResult = await handlerQueue.shift()(method, url, headers, body);
+    // GitHubClient.request expects { status, data }
+    return { status: 200, data: handlerResult };
+  }
+  return originalHttpsRequest(method, url, headers, body);
 }
+
+function installMock(handlers) {
+  handlerQueue = [...handlers];
+  setHttpsRequest(mockHttpsRequest);
+}
+
+function uninstallMock() {
+  handlerQueue = [];
+  setHttpsRequest(originalHttpsRequest);
+}
+
+afterEach(() => {
+  uninstallMock();
+});
 
 // ---------------------------------------------------------------------------
 // GTW_LABELS
@@ -78,11 +94,11 @@ describe('setPrLabel: success (AC1 — mutual exclusion)', () => {
       ];
 
       const totalCalls = handlers.length;
+      installMock(handlers);
 
       const result = await setPrLabel(
         { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
         label,
-        makeMockApi(handlers),
       );
 
       assert.strictEqual(result.ok, true);
@@ -110,12 +126,12 @@ describe('setPrLabel: atomicity — network error aborts (AC2)', () => {
       },
     ];
 
+    installMock(handlers);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/wip',
-          makeMockApi(handlers),
         ),
       /Failed to remove label "gtw\/ready".+Aborting/,
     );
@@ -132,12 +148,12 @@ describe('setPrLabel: atomicity — network error aborts (AC2)', () => {
       },
     ];
 
+    installMock(handlers);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/wip',
-          makeMockApi(handlers),
         ),
       /Failed to set label "gtw\/wip".+Aborting/,
     );
@@ -158,12 +174,12 @@ describe('setPrLabel: atomicity — network error aborts (AC2)', () => {
       },
     ];
 
+    installMock(handlers);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/wip',
-          makeMockApi(handlers),
         ),
       /Aborting/,
     );
@@ -173,12 +189,12 @@ describe('setPrLabel: atomicity — network error aborts (AC2)', () => {
   });
 
   it('throws if initial GET fails', async () => {
+    installMock([async () => { throw new Error('ENOTFOUND DNS lookup failed'); }]);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/lgtm',
-          makeMockApi([async () => { throw new Error('ENOTFOUND DNS lookup failed'); }]),
         ),
       /ENOTFOUND/,
     );
@@ -211,10 +227,11 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
       async () => { ops.push('POST-gtw/ready-restore'); return {}; },
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/wip',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -240,10 +257,11 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
       async () => { ops.push('GET#2-recheck'); return [{ name: 'gtw/wip' }]; },
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/wip',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -262,10 +280,11 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
         async () => { ops.push('POST'); return {}; },
       ];
 
+      installMock(handlers);
+
       const result = await setPrLabel(
         { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
         label,
-        makeMockApi(handlers),
       );
 
       assert.strictEqual(result.ok, true, `${label}: should succeed`);
@@ -285,10 +304,11 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
       async () => { /* POST gtw/ready restore ok */ return {}; },
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/wip',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -306,12 +326,12 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
       async () => { throw new Error('GitHub API 500: Rollback failed'); }, // rollback POST gtw/ready FAILS
     ];
 
+    installMock(handlers);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/wip',
-          makeMockApi(handlers),
         ),
       /Rollback failed.*State ambiguous/,
     );
@@ -327,12 +347,12 @@ describe('setPrLabel: concurrency — gtw/wip preemption with rollback (AC3)', (
       async () => { throw new Error('GitHub API 500: Internal Server Error'); }, // rollback DELETE fails
     ];
 
+    installMock(handlers);
     await assert.rejects(
       async () =>
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'gtw/wip',
-          makeMockApi(handlers),
         ),
       /Rollback failed.*State ambiguous/,
     );
@@ -350,7 +370,6 @@ describe('setPrLabel: invalid label rejects cleanly', () => {
         setPrLabel(
           { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
           'random-label',
-          async () => {},
         ),
       /Invalid gtw label: random-label/,
     );
@@ -372,10 +391,11 @@ describe('setPrLabel: 404 during removal is non-fatal', () => {
       async () => { ops.push('GET-recheck'); return [{ name: 'gtw/wip' }]; },
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/wip',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -400,10 +420,11 @@ describe('setPrLabel: always POSTs target label (no alreadyHas skip)', () => {
       async () => { ops.push('GET-recheck'); return [{ name: 'gtw/wip' }]; }, // recheck
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/wip',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -419,10 +440,11 @@ describe('setPrLabel: always POSTs target label (no alreadyHas skip)', () => {
       async () => { ops.push('POST'); return {}; }, // always POST
     ];
 
+    installMock(handlers);
+
     const result = await setPrLabel(
       { prNum: 1, repo: 'owner/repo', token: 'tok', isPR: true },
       'gtw/lgtm',
-      makeMockApi(handlers),
     );
 
     assert.strictEqual(result.ok, true);
@@ -438,17 +460,26 @@ describe('setPrLabel: always POSTs target label (no alreadyHas skip)', () => {
 describe('setPrLabel: isPR=false uses issues endpoint', () => {
   it('uses /issues/ not /pulls/ when isPR=false', async () => {
     let capturedPath;
+    let callIdx = 0;
+    installMock([
+      // GET labels
+      async (method, path) => {
+        capturedPath = path;
+        return [{ name: 'gtw/wip' }];
+      },
+      // DELETE old label
+      async (method, path) => {
+        return {};
+      },
+      // POST new label
+      async (method, path) => {
+        return {};
+      },
+    ]);
 
     await setPrLabel(
       { prNum: 42, repo: 'owner/repo', token: 'tok', isPR: false },
       'gtw/ready',
-      async (method, path) => {
-        capturedPath = path;
-        if (method === 'GET') return [{ name: 'gtw/wip' }]; // not gtw/ready
-        if (method === 'POST') return {};
-        if (method === 'DELETE') return {};
-        throw new Error(`Unexpected: ${method}`);
-      },
     );
 
     assert.ok(

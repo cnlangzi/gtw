@@ -9,55 +9,62 @@
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { join } from 'path';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
 
 import { WatchCommand } from '../WatchCommand.js';
 import { ReviewCommand } from '../ReviewCommand.js';
 import { mergeChecklistState } from '../ReviewCommand.js';
 import { setPrLabel } from '../../utils/labels.js';
-
-const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
-const DEFAULT_MAX_ROUNDS = 5;
+import { httpsRequest as originalHttpsRequest, setHttpsRequest } from '../../utils/github.js';
+import { setConfigOverride } from '../../utils/config.js';
 
 // ---------------------------------------------------------------------------
-// File helpers (shared across workflow tests)
-// CI isolation: tests use a fixed temp directory to avoid polluting real ~/.openclaw/gtw/
-const CONFIG_DIR = '/tmp/gtw-workflow-test';
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
-const WIP_FILE = join(CONFIG_DIR, 'wip.json');
+// In-memory config store (no real files needed for WatchCommand tests)
+// ---------------------------------------------------------------------------
 
-function ensureDir() {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+/** @type {Map<string, object>} */
+const configStore = new Map();
+
+function installConfigMock() {
+  setConfigOverride(
+    () => configStore.has('config') ? configStore.get('config') : {},
+    (c) => configStore.set('config', c),
+  );
 }
 
-function readConfig() {
-  ensureDir();
-  if (!existsSync(CONFIG_FILE)) return {};
-  return JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
+function uninstallConfigMock() {
+  setConfigOverride(null, null);
 }
 
-function writeConfig(data) {
-  ensureDir();
-  writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), 'utf8');
+function clearStore() {
+  configStore.clear();
 }
 
-function readWip() {
-  ensureDir();
-  if (!existsSync(WIP_FILE)) return {};
-  return JSON.parse(readFileSync(WIP_FILE, 'utf8'));
+// ---------------------------------------------------------------------------
+// WF5 mock httpsRequest for GitHub label API
+// ---------------------------------------------------------------------------
+
+/** @type {Array<function>} */
+let wf5HandlerQueue = [];
+
+async function mockHttpsRequest(method, url, headers, body) {
+  if (url.startsWith('https://api.github.com/')) {
+    if (wf5HandlerQueue.length === 0) {
+      throw new Error(`No mock handler left for ${method} ${url}`);
+    }
+    const handlerResult = await wf5HandlerQueue.shift()(method, url, headers, body);
+    return { status: 200, data: handlerResult };
+  }
+  return originalHttpsRequest(method, url, headers, body);
 }
 
-function writeWip(data) {
-  ensureDir();
-  writeFileSync(WIP_FILE, JSON.stringify(data, null, 2), 'utf8');
+function installMock(handlers) {
+  wf5HandlerQueue = [...handlers];
+  setHttpsRequest(mockHttpsRequest);
 }
 
-function cleanupFiles() {
-  ensureDir();
-  writeConfig({});
-  writeWip({});
+function uninstallMock() {
+  wf5HandlerQueue = [];
+  setHttpsRequest(originalHttpsRequest);
 }
 
 function makeMockApi(handlers) {
@@ -70,6 +77,30 @@ function makeMockApi(handlers) {
     }
     return handlers[callIdx++](method, path, token, body);
   };
+}
+
+const CHECKLIST_ITEMS = ['Destructive', 'Out-of-scope'];
+const DEFAULT_MAX_ROUNDS = 5;
+
+// Mock store helpers for WF2's wip test
+function readWip() {
+  return configStore.has('wip') ? configStore.get('wip') : {};
+}
+
+function writeWip(data) {
+  configStore.set('wip', data);
+}
+
+function readConfig() {
+  return configStore.has('config') ? configStore.get('config') : {};
+}
+
+function writeConfig(data) {
+  configStore.set('config', data);
+}
+
+function cleanupFiles() {
+  clearStore();
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +152,12 @@ describe('WF1: PR sorting — oldest PR picked first', () => {
 // ---------------------------------------------------------------------------
 
 describe('WF2: WIP state management', () => {
-  beforeEach(() => cleanupFiles());
-  afterEach(() => cleanupFiles());
+  beforeEach(() => clearStore());
+  afterEach(() => clearStore());
+
+  // Install config mock so WatchCommand reads/writes the in-memory store
+  beforeEach(() => installConfigMock());
+  afterEach(() => uninstallConfigMock());
 
   it('reviewState tracks each PR independently', () => {
     const wip = {
@@ -236,14 +271,11 @@ describe('WF3: Round tracking and stuck detection', () => {
 // WF4: Watch list + review integration
 // ---------------------------------------------------------------------------
 
-// NOTE: no beforeEach/afterEach here — each test is self-contained and writes its own config.
-// WF4 uses the same CONFIG_DIR as WatchCommand.test.js.
-// Do NOT add cleanup hooks here; they can cause state-leak races in CI
-// when WatchCommand.test.js runs in the same process (cleanupFiles writes {})
-// and the file-write flush timing in CI differs from local.
 describe('WF4: Watch list + review integration', () => {
+  beforeEach(() => { clearStore(); installConfigMock(); });
+  afterEach(() => { clearStore(); uninstallConfigMock(); });
+
   it('WatchCommand: add → config persists', async () => {
-    cleanupFiles(); // ensure clean slate
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     await cmd.execute(['add', 'cnlangzi/gtw']);
 
@@ -253,7 +285,6 @@ describe('WF4: Watch list + review integration', () => {
   });
 
   it('WatchCommand: add duplicate → no-op, list unchanged', async () => {
-    cleanupFiles();
     writeConfig({ watchList: ['cnlangzi/gtw'] });
 
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
@@ -263,7 +294,6 @@ describe('WF4: Watch list + review integration', () => {
   });
 
   it('WatchCommand: rm last → empty watch list', async () => {
-    cleanupFiles();
     writeConfig({ watchList: ['only/one'] });
 
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
@@ -277,6 +307,8 @@ describe('WF4: Watch list + review integration', () => {
 // ---------------------------------------------------------------------------
 
 describe('WF5: Label transitions across modules', () => {
+  afterEach(() => uninstallMock());
+
   // Verify the 5-label mutual exclusion contract holds across all transitions
   const GTW_LABELS = ['gtw/ready', 'gtw/wip', 'gtw/lgtm', 'gtw/revise', 'gtw/stuck'];
 
@@ -295,10 +327,11 @@ describe('WF5: Label transitions across modules', () => {
           ...(needsRecheck ? [async () => { ops.push('RECHECK'); return [{ name: to }]; }] : []),
         ];
 
+        installMock(handlers);
+
         const result = await setPrLabel(
           { prNum: 1, repo: 'o/r', token: 't', isPR: true },
           to,
-          makeMockApi(handlers),
         );
 
         assert.strictEqual(result.ok, true);

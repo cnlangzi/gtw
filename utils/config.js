@@ -15,12 +15,22 @@ const POLLING_STATE_FILE = join(BASE_DIR, 'polling_state.json');
 
 export { BASE_DIR, CONFIG_FILE, WIP_FILE, TOKEN_FILE, POLLING_STATE_FILE };
 
+/** Override hook for testing — mirrors httpsRequest/setHttpsRequest pattern */
+let _getConfigOverride = null;
+let _saveConfigOverride = null;
+
+export function setConfigOverride(getter, setter) {
+  _getConfigOverride = getter;
+  _saveConfigOverride = setter;
+}
+
 export function getConfig() {
+  if (_getConfigOverride) return _getConfigOverride();
   return readJSON(CONFIG_FILE) || {};
 }
 
 export function saveConfig(c) {
-  // Ensure directory exists
+  if (_saveConfigOverride) return _saveConfigOverride(c);
   mkdirSync(BASE_DIR, { recursive: true });
   writeJSON(CONFIG_FILE, c);
 }
