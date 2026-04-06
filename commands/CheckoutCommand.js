@@ -9,7 +9,7 @@ import { git, currentBranch as getCurrentBranch, fetch, checkout } from '../util
  *   With branch:  fetch → checkout -B <branch> origin/<branch> → pull
  *   Without args: fetch → checkout -B <current> origin/<current> → pull
  */
-export class SyncCommand extends Commander {
+export class CheckoutCommand extends Commander {
   async execute(args) {
     const wip = getWip();
     if (!wip.workdir) {
