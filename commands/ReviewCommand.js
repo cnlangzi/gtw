@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync as _exec } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -102,16 +102,16 @@ async function prepareReviewWorktree(repo, prNum, branchName, baseBranch, cloneU
   // Step 1: ensure base clone exists
   if (!fs.existsSync(reviewRoot)) {
     fs.mkdirSync(reviewRoot, { recursive: true });
-    execSync(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`, { stdio: 'pipe' });
+    _exec(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`, { stdio: 'pipe' });
   }
 
   // Step 2: ensure worktree exists
   if (fs.existsSync(worktreePath)) {
     // Worktree exists — git pull with rebase to get latest changes
     try {
-      execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath, stdio: 'pipe' });
-      execSync(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
-      execSync(`git reset --hard FETCH_HEAD`, { cwd: worktreePath, stdio: 'pipe' });
+      _exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath, stdio: 'pipe' });
+      _exec(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
+      _exec(`git reset --hard FETCH_HEAD`, { cwd: worktreePath, stdio: 'pipe' });
     } catch {
       // Pull failed — remove and recreate next time
       fs.rmSync(worktreePath, { recursive: true, force: true });
@@ -121,13 +121,13 @@ async function prepareReviewWorktree(repo, prNum, branchName, baseBranch, cloneU
   if (!fs.existsSync(worktreePath)) {
     // Fetch the PR branch ref into the base clone
     try {
-      execSync(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot, stdio: 'pipe' });
+      _exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot, stdio: 'pipe' });
     } catch {}
     // Create worktree at the path using the PR's branch name
     fs.mkdirSync(worktreeRoot, { recursive: true });
-    execSync(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot, stdio: 'pipe' });
+    _exec(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot, stdio: 'pipe' });
     // Enable rebase for future pulls
-    execSync(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
+    _exec(`git config pull.rebase true`, { cwd: worktreePath, stdio: 'pipe' });
   }
 
   return worktreePath;
