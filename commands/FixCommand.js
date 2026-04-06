@@ -119,7 +119,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     `   d. Run: git -C "${workdir}" commit -m "title" -m "body"`,
     `   e. Run: git -C "${workdir}" push -u origin ${branchName}`,
     ``,
-    `4. After push completes (or if no changes), update ${WIP_FILE}:`
+    `4. After push completes (or if no changes), update ${WIP_FILE}:`,
     `   - Set latestFixStatus to "success" if push succeeded, "no-changes" if nothing to commit, or "failure" if error`,
     `   - Add fields: latestFixBranch, latestFixCommitTitle, latestFixPushedAt`,
     ``,
