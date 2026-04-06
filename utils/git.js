@@ -152,12 +152,11 @@ export async function checkout(workdir, ref, { force = false, remote = 'origin' 
     const trackingRef = `${remote}/${ref}`;
     const trackingExists = await existsRef(workdir, trackingRef);
     if (trackingExists) {
-      execGit(`git checkout -b ${ref} -t ${trackingRef}`, workdir);
+      execGit(`git checkout -B ${ref} -t ${trackingRef}`, workdir);
       return true;
     }
   }
-  const forceStr = force ? ' -f' : '';
-  execGit(`git checkout${forceStr} ${ref}`, workdir);
+  execGit(`git checkout -B ${ref}`, workdir);
   return true;
 }
 
