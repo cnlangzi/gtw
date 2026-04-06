@@ -1,5 +1,5 @@
 /**
- * Unit tests for SyncCommand.
+ * Unit tests for CheckoutCommand (formerly SyncCommand).
  * Run: node --test commands/SyncCommand.test.js
  */
 import { describe, it, beforeEach, afterEach } from 'node:test';

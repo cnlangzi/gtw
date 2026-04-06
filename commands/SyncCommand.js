@@ -3,9 +3,9 @@ import { getWip } from '../utils/wip.js';
 import { git, currentBranch as getCurrentBranch, fetch, checkout } from '../utils/git.js';
 
 /**
- * SyncCommand — fetch and switch to a branch, pulling the latest from origin.
+ * CheckoutCommand — fetch and switch to a branch, pulling the latest from origin.
  *
- * /gtw sync [branch]
+ * /gtw checkout [branch]
  *   With branch:  fetch → checkout -B <branch> origin/<branch> → pull
  *   Without args: fetch → checkout -B <current> origin/<current> → pull
  */

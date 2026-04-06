@@ -67,7 +67,7 @@ const MAP = {
   model: ModelCommand,
   update: UpdateCommand,
   pr: PrCommand,
-  sync: SyncCommand,
+  checkout: SyncCommand,
   watch: WatchCommand,
   login: LoginCommand,
 };
