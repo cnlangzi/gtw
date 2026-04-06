@@ -15,10 +15,10 @@ import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const TOKEN_FILE = join(CONFIG_DIR, 'token.json');
-
+// Set GTW_CONFIG_DIR before importing config-dependent modules
+process.env.GTW_CONFIG_DIR = join(homedir(), '.gtw');
 const { GitHubClient, httpsRequest: originalHttpsRequest, setHttpsRequest } = await import('../utils/github.js');
+const { TOKEN_FILE } = await import('../utils/config.js');
 
 // ---------------------------------------------------------------------------
 // Mock httpsRequest to intercept GitHub API calls during tests

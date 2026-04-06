@@ -117,7 +117,7 @@ gtw/ready ──(claim)──> gtw/wip
 
 ## Config Command
 
-Global key-value config stored at `~/.openclaw/gtw/config.json`. Backed by a flat JSON map of `key → value` strings.
+Global key-value config stored at `~/.gtw/config.json`. Backed by a flat JSON map of `key → value` strings.
 
 | Command | Description |
 |---------|-------------|

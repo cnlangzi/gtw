@@ -1,26 +1,20 @@
 /**
  * Unit tests for WIP clear behavior consistency
- * 
+ *
  * Tests cover:
  * 1. utils/wip.js clearWip() preserves workdir/repo/createdAt
  * 2. ESM and CJS implementations match
  */
 
 import { strict as assert } from 'assert';
-import { existsSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-const CONFIG_DIR = join(homedir(), '.openclaw', 'gtw');
-const WIP_FILE = join(CONFIG_DIR, 'wip.json');
-
+// Set GTW_CONFIG_DIR before importing config-dependent modules
+process.env.GTW_CONFIG_DIR = join(homedir(), '.gtw');
 const { getWip, saveWip, clearWip } = await import('../utils/wip.js');
-
-// Ensure config dir exists
-if (!existsSync(CONFIG_DIR)) {
-  const { mkdirSync } = await import('fs');
-  mkdirSync(CONFIG_DIR, { recursive: true });
-}
+const { WIP_FILE } = await import('../utils/config.js');
 
 console.log('🧪 Testing WIP clear behavior consistency\n');
 

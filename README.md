@@ -96,7 +96,7 @@ openclaw gateway restart
 ```
 /gtw login --pat ghp_your_token_here
 ```
-Validates the token via GitHub API and caches it to `~/.openclaw/gtw/token.json`.
+Validates the token via GitHub API and caches it to `~/.gtw/token.json`.
 
 **Option B: Environment variable**
 ```bash
@@ -136,7 +136,7 @@ gh auth status
 
 **Token Priority:**
 1. `GITHUB_TOKEN` environment variable (PAT)
-2. Cached token in `~/.openclaw/gtw/token.json` (PAT or OAuth)
+2. Cached token in `~/.gtw/token.json` (PAT or OAuth)
 3. `gh auth token` (validated before use)
 
 Check auth status anytime:
@@ -147,7 +147,7 @@ Check auth status anytime:
 
 ### Configuration Items
 
-`~/.openclaw/gtw/config.json` stores gtw-specific settings:
+`~/.gtw/config.json` stores gtw-specific settings:
 
 ```json
 {
@@ -345,10 +345,10 @@ You: /gtw review 23
 ## State Files
 
 ```
-~/.openclaw/gtw/wip.json            # Workdir, repo, pendingCommit, pendingPr, issue, branch
-~/.openclaw/gtw/token.json          # Cached token (PAT, OAuth, or gh CLI)
-~/.openclaw/gtw/device_code.json    # Cached device code for OAuth login reuse
-~/.openclaw/gtw/config.json         # Custom AI model setting
+~/.gtw/wip.json            # Workdir, repo, pendingCommit, pendingPr, issue, branch
+~/.gtw/token.json          # Cached token (PAT, OAuth, or gh CLI)
+~/.gtw/device_code.json    # Cached device code for OAuth login reuse
+~/.gtw/config.json         # Custom AI model setting
 ```
 
 ### Two-Step Confirm Model
@@ -369,7 +369,7 @@ After any change to command logic, verify the affected flow:
 **`/gtw push` flow:**
 1. `cd <workdir> && echo "// test" >> README.md`
 2. `/gtw push` → should show "🔍 Commit draft — run /gtw confirm to push" (NOT immediate push)
-3. `cat ~/.openclaw/gtw/wip.json` → should contain `pendingCommit` with title/body/branch
+3. `cat ~/.gtw/wip.json` → should contain `pendingCommit` with title/body/branch
 4. `/gtw confirm` → should show "📦 Committed and pushed"
 5. `git log --oneline -1` → should show the commit
 
@@ -382,9 +382,9 @@ After any change to command logic, verify the affected flow:
 **`/gtw pr` flow:**
 1. Ensure branch is pushed and on the correct branch
 2. `/gtw pr` → should show "🔍 PR draft — run /gtw confirm to create PR"
-3. `cat ~/.openclaw/gtw/wip.json` → should contain `pendingPr` with title/body
+3. `cat ~/.gtw/wip.json` → should contain `pendingPr` with title/body
 4. `/gtw confirm` → should create PR on GitHub and show URL
-5. `cat ~/.openclaw/gtw/wip.json` → `pendingPr` should be cleared, `pr` should be set
+5. `cat ~/.gtw/wip.json` → `pendingPr` should be cleared, `pr` should be set
 
 **`/gtw review` flow:**
 1. `/gtw review` → should claim an unclaimed PR (eyes comment appears)

@@ -109,9 +109,9 @@ That's it — index.js does not change.
 
 | File | Purpose |
 |------|---------|
-| `~/.openclaw/gtw/wip.json` | Current workdir, repo, pending issue/branch/pr |
-| `~/.openclaw/gtw/config.json` | Custom AI model setting |
-| `~/.openclaw/gtw/token.json` | Cached gh CLI token |
+| `~/.gtw/wip.json` | Current workdir, repo, pending issue/branch/pr |
+| `~/.gtw/config.json` | Custom AI model setting |
+| `~/.gtw/token.json` | Cached gh CLI token |
 
 ## Workflow
 
@@ -176,7 +176,7 @@ The two-step pattern (`pendingCommit` → `/gtw confirm`) and the two-step PR fl
 - **Human reviewable**: The generated commit message and PR title/body are displayed before execution, allowing the user to catch LLM hallucinations.
 - **Retry on failure**: If the GitHub API call fails, the pending draft is preserved and the user can retry after fixing the issue.
 
-`pendingCommit` and `pendingPr` are stored in `wip.json` under the `~/.openclaw/gtw/` directory.
+`pendingCommit` and `pendingPr` are stored in `wip.json` under the `~/.gtw/` directory.
 
 ### FixCommand Implementation Notes
 
