@@ -2,17 +2,20 @@
  * Codebase Index — Build, persist, and search function signatures.
  *
  * Serves as the foundation for duplicate detection in /gtw review.
- * - Builds Markdown index from codebase (full or incremental)
- * - Persists to ~/.gtw/codebase-index/{owner}/{repo}.md
+ * - Per-branch index: ~/.gtw/codebase-index/{owner}/{repo}@{branch}.json
+ * - Git-aware incremental updates (commit hash based)
  * - Fuzzy search via Fuse.js
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import { getExtractor } from './extractors/index.js';
 import Fuse from 'fuse.js';
 import { BASE_DIR } from './config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const INDEX_DIR = path.resolve(BASE_DIR, 'codebase-index');
 
@@ -29,39 +32,75 @@ const EXCLUDED_DIRS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
-
-function getIndexPath(repo) {
-  const [owner, repoName] = repo.split('/');
-  const repoDir = path.resolve(INDEX_DIR, owner);
-  return path.resolve(repoDir, `${repoName}.md`);
-}
-
-function getIndexJsonPath(repo) {
-  const [owner, repoName] = repo.split('/');
-  const repoDir = path.resolve(INDEX_DIR, owner);
-  return path.resolve(repoDir, `${repoName}.json`);
-}
-
-// ---------------------------------------------------------------------------
-// File scanning
+// Git helpers (run in worktree)
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively collect all source files in a directory.
+ * Get current branch name in a worktree.
+ * @param {string} worktreePath
+ * @returns {string}
  */
-function collectFiles(dir) {
+function getCurrentBranch(worktreePath) {
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).toString().trim();
+  } catch {
+    return 'main';
+  }
+}
+
+/**
+ * Get the commit hash of a specific branch head.
+ * @param {string} worktreePath
+ * @param {string} branch
+ * @returns {string}
+ */
+function getBranchHead(worktreePath, branch) {
+  try {
+    return execSync(`git rev-parse ${branch}`, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Get list of files changed between two refs.
+ * @param {string} worktreePath
+ * @param {string} fromRef - base ref (older)
+ * @param {string} toRef - head ref (newer)
+ * @returns {string[]} - array of relative file paths
+ */
+function getChangedFiles(worktreePath, fromRef, toRef) {
+  try {
+    const output = execSync(`git diff --name-only ${fromRef}..${toRef}`, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).toString().trim();
+    return output ? output.split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get all tracked source files in worktree.
+ */
+function collectFiles(worktreePath) {
   const files = [];
   let entries;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = fs.readdirSync(worktreePath, { withFileTypes: true });
   } catch {
     return files;
   }
 
   for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
+    const fullPath = path.join(worktreePath, entry.name);
     if (entry.isDirectory()) {
       if (EXCLUDED_DIRS.has(entry.name)) continue;
       files.push(...collectFiles(fullPath));
@@ -70,7 +109,7 @@ function collectFiles(dir) {
       if (!INCLUDED_EXTS.has(ext)) continue;
       try {
         const stat = fs.statSync(fullPath);
-        const relPath = path.relative(dir, fullPath);
+        const relPath = path.relative(worktreePath, fullPath);
         files.push({ path: relPath, fullPath, type: ext, size: stat.size, mtime: stat.mtime });
       } catch {}
     }
@@ -79,12 +118,39 @@ function collectFiles(dir) {
 }
 
 // ---------------------------------------------------------------------------
-// Markdown rendering
+// Path helpers — per-branch index
 // ---------------------------------------------------------------------------
 
 /**
- * Render a single ExportSymbol as a Markdown code block.
+ * Get index path for a specific branch.
+ * Format: {owner}/{repo}@{branch}.json
+ * Branch name sanitized (slashes replaced).
  */
+function getIndexJsonPath(repo, branch) {
+  const [owner, repoName] = repo.split('/');
+  const repoDir = path.resolve(INDEX_DIR, owner);
+  const safeBranch = branch.replace(/\//g, '_');
+  return path.resolve(repoDir, `${repoName}@${safeBranch}.json`);
+}
+
+function getIndexMarkdownPath(repo, branch) {
+  const [owner, repoName] = repo.split('/');
+  const repoDir = path.resolve(INDEX_DIR, owner);
+  const safeBranch = branch.replace(/\//g, '_');
+  return path.resolve(repoDir, `${repoName}@${safeBranch}.md`);
+}
+
+/**
+ * Sanitize branch name for use in file paths.
+ */
+function sanitizeBranch(branch) {
+  return branch.replace(/\//g, '_');
+}
+
+// ---------------------------------------------------------------------------
+// Markdown rendering
+// ---------------------------------------------------------------------------
+
 function renderSymbolAsMarkdown(symbol, indent = '') {
   let md = `${indent}### \`${symbol.name}\`\n\n`;
   md += `${indent}\`\`\`${symbol.location.file.split('.').pop()}\n`;
@@ -96,32 +162,26 @@ function renderSymbolAsMarkdown(symbol, indent = '') {
     }
     md += `${indent} */\n`;
     md += `${indent}${symbol.signature}`;
-
     if (symbol.methods && symbol.methods.length > 0) {
-      md += ` {\n`;
+      md += ' {\n';
       for (const method of symbol.methods) {
         md += `${indent}  ${method.signature}\n`;
-        if (method.docstring) {
-          md += `${indent}  /** ${method.docstring} */\n`;
-        }
+        if (method.docstring) md += `${indent}  /** ${method.docstring} */\n`;
       }
       md += `${indent}}`;
     }
   } else {
-    if (symbol.docstring) {
-      md += `${indent}/** ${symbol.docstring} */\n`;
-    }
+    if (symbol.docstring) md += `${indent}/** ${symbol.docstring} */\n`;
     md += `${indent}${symbol.signature}`;
   }
 
   md += `\n${indent}\`\`\`\n`;
 
   if (symbol.parameters && symbol.parameters.length > 0) {
-    md += `${indent}| Parameters | Type | Description |\n`;
-    md += `${indent}|---|---|---|\n`;
+    md += `${indent}| Parameters | Type | Description |\n${indent}|---|---|---|\n`;
     for (const param of symbol.parameters) {
-      const optional = param.optional ? ' (optional)' : '';
-      md += `${indent}| ${param.name}${optional} | ${param.type || 'unknown'} | ${param.description || ''} |\n`;
+      const opt = param.optional ? ' (optional)' : '';
+      md += `${indent}| ${param.name}${opt} | ${param.type || 'unknown'} | ${param.description || ''} |\n`;
     }
     md += '\n';
   }
@@ -133,31 +193,23 @@ function renderSymbolAsMarkdown(symbol, indent = '') {
   return md;
 }
 
-/**
- * Render a file's symbols as a Markdown section.
- */
 function renderFileSection(filePath, symbols) {
   let md = `## ${filePath}\n\n`;
-
   for (const symbol of symbols) {
     md += renderSymbolAsMarkdown(symbol);
   }
-
   return md;
 }
 
-/**
- * Render the full Markdown index document.
- */
-function renderMarkdownIndex(repo, lastUpdated, files) {
-  let md = `# Codebase Index: ${repo}\n`;
-  md += `Last updated: ${lastUpdated}\n\n`;
+function renderMarkdownIndex(repo, branch, lastUpdated, lastCommit, files) {
+  let md = `# Codebase Index: ${repo} (${branch})\n`;
+  md += `Last updated: ${lastUpdated}\n`;
+  md += `Last commit: ${lastCommit}\n\n`;
 
   for (const [filePath, symbols] of Object.entries(files)) {
     md += renderFileSection(filePath, symbols);
     md += '\n---\n\n';
   }
-
   return md;
 }
 
@@ -165,13 +217,9 @@ function renderMarkdownIndex(repo, lastUpdated, files) {
 // Index build
 // ---------------------------------------------------------------------------
 
-/**
- * Build index for a single file using the appropriate extractor.
- */
 function indexFile(fullPath, relativePath) {
   const extractor = getExtractor(fullPath);
   if (!extractor) return null;
-
   try {
     const content = fs.readFileSync(fullPath, 'utf8');
     return extractor.extractExports(content, relativePath);
@@ -182,13 +230,11 @@ function indexFile(fullPath, relativePath) {
 }
 
 /**
- * Build a full index for a worktree.
- * @param {string} worktreePath - Absolute path to the repo worktree
- * @param {string} repo - "owner/repo" string
- * @returns {{ files: Record<string, object[]>, stats: object }}
+ * Build full index for a worktree on a given branch.
  */
-export function buildIndex(worktreePath, repo) {
+export function buildIndex(worktreePath, repo, branch) {
   const startTime = Date.now();
+  const lastCommit = getBranchHead(worktreePath, branch);
   const files = collectFiles(worktreePath);
 
   const indexedFiles = {};
@@ -205,73 +251,87 @@ export function buildIndex(worktreePath, repo) {
     }
   }
 
-  const elapsed = Date.now() - startTime;
-
   return {
     files: indexedFiles,
-    stats: {
-      totalFiles: files.length,
-      indexedFiles: Object.keys(indexedFiles).length,
-      skippedFiles,
-      totalFunctions,
-      elapsedMs: elapsed,
+    meta: {
+      repo,
+      branch,
+      lastCommit,
+      lastUpdated: new Date().toISOString(),
+      stats: {
+        totalFiles: files.length,
+        indexedFiles: Object.keys(indexedFiles).length,
+        skippedFiles,
+        totalFunctions,
+        elapsedMs: Date.now() - startTime,
+      },
     },
   };
 }
 
 /**
- * Incrementally update index for a worktree.
- * Only re-indexes files whose mtime has changed since last build.
- * @param {string} worktreePath
- * @param {string} repo
- * @param {string} indexPath
- * @param {object} existingIndex
- * @returns {{ files: Record<string, object[]>, stats: object }}
+ * Incrementally update index — only re-index files changed since last commit.
  */
-export function buildIncrementalIndex(worktreePath, repo, existingIndex) {
-  const files = collectFiles(worktreePath);
-  const previousFiles = existingIndex?.files || {};
-  const previousMeta = existingIndex?.meta || {};
+export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex) {
+  const lastCommit = getBranchHead(worktreePath, branch);
+  const previousCommit = existingIndex?.meta?.lastCommit;
 
+  // If commit hash changed, find what files changed
+  let changedFiles = new Set();
+  if (previousCommit && previousCommit !== lastCommit) {
+    const changed = getChangedFiles(worktreePath, previousCommit, lastCommit);
+    changedFiles = new Set(changed);
+    console.log(`[codebase-index] Branch ${branch}: ${changedFiles.size} files changed since ${previousCommit}`);
+  }
+
+  const previousFiles = existingIndex?.files || {};
   const indexedFiles = {};
   let totalFunctions = 0;
   let rebuilt = 0;
   let unchanged = 0;
-  let skippedFiles = 0;
 
-  for (const file of files) {
-    const prevMeta = previousMeta[file.path];
-    const needsRebuild = !prevMeta || new Date(file.mtime) > new Date(prevMeta.mtime);
+  // If no previous index, do full build
+  if (!existingIndex || !previousFiles || Object.keys(previousFiles).length === 0) {
+    console.log('[codebase-index] No existing index, doing full build');
+    const fullResult = buildIndex(worktreePath, repo, branch);
+    return fullResult;
+  }
+
+  // Collect all current source files
+  const currentFiles = collectFiles(worktreePath);
+
+  for (const file of currentFiles) {
+    const needsRebuild = changedFiles.has(file.path) || !previousFiles[file.path];
 
     if (needsRebuild) {
       const symbols = indexFile(file.fullPath, file.path);
       if (symbols && symbols.length > 0) {
         indexedFiles[file.path] = symbols;
         totalFunctions += symbols.length;
-        if (prevMeta) rebuilt++;
-      } else {
-        skippedFiles++;
+        rebuilt++;
       }
     } else {
-      // Use previous result
-      if (previousFiles[file.path]) {
-        indexedFiles[file.path] = previousFiles[file.path];
-        totalFunctions += previousFiles[file.path].length;
-        unchanged++;
-      }
+      indexedFiles[file.path] = previousFiles[file.path];
+      totalFunctions += previousFiles[file.path].length;
+      unchanged++;
     }
   }
 
   return {
     files: indexedFiles,
-    stats: {
-      totalFiles: files.length,
-      indexedFiles: Object.keys(indexedFiles).length,
-      skippedFiles,
-      totalFunctions,
-      rebuilt,
-      unchanged,
-      elapsedMs: 0,
+    meta: {
+      repo,
+      branch,
+      lastCommit,
+      lastUpdated: new Date().toISOString(),
+      stats: {
+        totalFiles: currentFiles.length,
+        indexedFiles: Object.keys(indexedFiles).length,
+        totalFunctions,
+        rebuilt,
+        unchanged,
+        elapsedMs: 0,
+      },
     },
   };
 }
@@ -281,60 +341,62 @@ export function buildIncrementalIndex(worktreePath, repo, existingIndex) {
 // ---------------------------------------------------------------------------
 
 /**
- * Save index to disk (Markdown + structured JSON for search).
+ * Save index to disk (Markdown + JSON).
  */
-export function saveIndex(repo, indexData) {
-  const indexPath = getIndexPath(repo);
-  const jsonPath = getIndexJsonPath(repo);
+function saveIndexToDisk(repo, branch, indexData) {
+  const jsonPath = getIndexJsonPath(repo, branch);
+  const mdPath = getIndexMarkdownPath(repo, branch);
 
-  // Ensure directory exists
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
 
-  const lastUpdated = new Date().toISOString();
-
-  // Save Markdown (human-readable, used for prompt injection)
-  const markdown = renderMarkdownIndex(repo, lastUpdated, indexData.files);
-  fs.writeFileSync(indexPath, markdown, 'utf8');
-
-  // Save JSON (machine-readable, used for fuzzy search)
-  const jsonData = {
-    repo,
+  // JSON
+  const jsonPayload = {
+    repo: indexData.meta.repo,
+    branch: indexData.meta.branch,
     schemaVersion: '1.0',
-    lastUpdated,
-    stats: indexData.stats,
-    files: indexData.files, // structured ExportSymbol[] per file
+    lastCommit: indexData.meta.lastCommit,
+    lastUpdated: indexData.meta.lastUpdated,
+    stats: indexData.meta.stats,
+    files: indexData.files,
   };
-  fs.writeFileSync(jsonPath, JSON.stringify(jsonData, null, 2), 'utf8');
+  fs.writeFileSync(jsonPath, JSON.stringify(jsonPayload, null, 2), 'utf8');
 
-  console.log(`[codebase-index] Saved to ${indexPath} + ${jsonPath}`);
-  return indexPath;
+  // Markdown
+  const markdown = renderMarkdownIndex(
+    repo,
+    branch,
+    indexData.meta.lastUpdated,
+    indexData.meta.lastCommit,
+    indexData.files
+  );
+  fs.writeFileSync(mdPath, markdown, 'utf8');
+
+  console.log(`[codebase-index] Saved ${repo}@${branch} → ${jsonPath}`);
+  return jsonPath;
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Load existing index from disk (structured JSON).
+ * Load index for a specific branch.
  * @returns {{ files: Record<string, object[]>, meta: object } | null}
  */
-export function loadIndex(repo) {
-  const jsonPath = getIndexJsonPath(repo);
-
-  if (!fs.existsSync(jsonPath)) {
-    return null;
-  }
+export function loadIndex(repo, branch) {
+  const jsonPath = getIndexJsonPath(repo, branch);
+  if (!fs.existsSync(jsonPath)) return null;
 
   try {
-    const jsonData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     return {
-      files: jsonData.files || {},
+      files: data.files || {},
       meta: {
-        repo: jsonData.repo,
-        lastUpdated: jsonData.lastUpdated,
-        stats: jsonData.stats,
-        files: Object.fromEntries(
-          Object.entries(jsonData.files || {}).map(([k, v]) => [
-            k,
-            { mtime: jsonData.lastUpdated, functionCount: v.length },
-          ])
-        ),
+        repo: data.repo,
+        branch: data.branch,
+        lastCommit: data.lastCommit,
+        lastUpdated: data.lastUpdated,
+        stats: data.stats,
       },
     };
   } catch (e) {
@@ -344,24 +406,94 @@ export function loadIndex(repo) {
 }
 
 /**
- * Load index with full Markdown content.
+ * Load Markdown content of index for prompt injection.
  */
-export function loadIndexMarkdown(repo) {
-  const indexPath = getIndexPath(repo);
-  if (!fs.existsSync(indexPath)) {
-    return null;
+export function loadIndexMarkdown(repo, branch) {
+  const mdPath = getIndexMarkdownPath(repo, branch);
+  if (!fs.existsSync(mdPath)) return null;
+  return fs.readFileSync(mdPath, 'utf8');
+}
+
+/**
+ * Check if index for a branch is fresh (commit matches current HEAD).
+ * @returns {{ fresh: boolean, indexedCommit: string, currentCommit: string }}
+ */
+export function checkIndexFreshness(repo, branch, worktreePath) {
+  // Load by sanitized branch name (file path), but use real branch name for git
+  const existing = loadIndex(repo, sanitizeBranch(branch));
+  const currentCommit = getBranchHead(worktreePath, branch);
+
+  if (!existing) {
+    return { fresh: false, indexedCommit: null, currentCommit };
   }
-  return fs.readFileSync(indexPath, 'utf8');
+
+  return {
+    fresh: existing.meta.lastCommit === currentCommit,
+    indexedCommit: existing.meta.lastCommit,
+    currentCommit,
+  };
+}
+
+/**
+ * Get or build index for a branch (incremental if existing).
+ */
+export function getOrBuildIndex(worktreePath, repo, branch, { force = false } = {}) {
+  if (force) {
+    const data = buildIndex(worktreePath, repo, branch);
+    return saveIndexToDisk(repo, branch, data);
+  }
+
+  const existing = loadIndex(repo, branch);
+  if (existing) {
+    const data = buildIncrementalIndex(worktreePath, repo, branch, existing);
+    return saveIndexToDisk(repo, branch, data);
+  }
+
+  const data = buildIndex(worktreePath, repo, branch);
+  return saveIndexToDisk(repo, branch, data);
+}
+
+/**
+ * Rebuild index for a branch (always full).
+ */
+export function rebuildIndex(worktreePath, repo, branch) {
+  const data = buildIndex(worktreePath, repo, branch);
+  return saveIndexToDisk(repo, branch, data);
+}
+
+/**
+ * Remove index for a branch.
+ */
+export function removeIndex(repo, branch) {
+  const jsonPath = getIndexJsonPath(repo, branch);
+  const mdPath = getIndexMarkdownPath(repo, branch);
+  try {
+    if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
+    if (fs.existsSync(mdPath)) fs.unlinkSync(mdPath);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * List all indexed branches for a repo.
+ */
+export function listIndexedBranches(repo) {
+  const [owner] = repo.split('/');
+  const repoDir = path.resolve(INDEX_DIR, owner);
+  if (!fs.existsSync(repoDir)) return [];
+
+  const prefix = repo.split('/')[1] + '@';
+  return fs.readdirSync(repoDir)
+    .filter((f) => f.startsWith(prefix) && f.endsWith('.json'))
+    .map((f) => f.replace(prefix, '').replace('.json', ''));
 }
 
 // ---------------------------------------------------------------------------
-// Fuzzy Search (for duplicate detection)
+// Fuzzy Search
 // ---------------------------------------------------------------------------
 
-/**
- * Flatten indexed symbols for Fuse.js search.
- * @param {Record<string, object[]>} files
- */
 function flattenSymbols(files) {
   const symbols = [];
   for (const [filePath, fileSymbols] of Object.entries(files)) {
@@ -369,13 +501,7 @@ function flattenSymbols(files) {
       symbols.push({
         ...symbol,
         _file: filePath,
-        // Build searchable text
-        _searchText: [
-          symbol.name,
-          symbol.signature,
-          symbol.docstring,
-          symbol.kind,
-        ]
+        _searchText: [symbol.name, symbol.signature, symbol.docstring, symbol.kind]
           .filter(Boolean)
           .join(' '),
       });
@@ -385,11 +511,7 @@ function flattenSymbols(files) {
 }
 
 /**
- * Fuzzy search symbols for potential duplicates.
- * @param {Record<string, object[]>} files - Indexed files
- * @param {string} query - Function name or description to search
- * @param {{ threshold?: number, limit?: number }} options
- * @returns {object[]}
+ * Fuzzy search across indexed symbols.
  */
 export function searchSymbols(files, query, { threshold = 0.4, limit = 10 } = {}) {
   const allSymbols = flattenSymbols(files);
@@ -405,9 +527,7 @@ export function searchSymbols(files, query, { threshold = 0.4, limit = 10 } = {}
     ignoreLocation: true,
   });
 
-  const results = fuse.search(query, { limit });
-
-  return results.map((r) => ({
+  return fuse.search(query, { limit }).map((r) => ({
     symbol: {
       name: r.item.name,
       kind: r.item.kind,
@@ -423,81 +543,19 @@ export function searchSymbols(files, query, { threshold = 0.4, limit = 10 } = {}
 }
 
 /**
- * Search for duplicates of a specific function.
- * @param {Record<string, object[]>} files
- * @param {string} funcName
- * @param {string} funcSignature
- * @param {number} limit
+ * Find potential duplicates for a function.
  */
 export function findPotentialDuplicates(files, funcName, funcSignature, limit = 5) {
-  const results = searchSymbols(files, `${funcName} ${funcSignature}`, { threshold: 0.5, limit });
-  return results.filter((r) => r.symbol.name !== funcName); // exclude exact name match
+  const results = searchSymbols(
+    files,
+    `${funcName} ${funcSignature}`,
+    { threshold: 0.5, limit }
+  );
+  return results.filter((r) => r.symbol.name !== funcName);
 }
 
 // ---------------------------------------------------------------------------
-// Index management
+// Git helpers (exported for use by ReviewCommand)
 // ---------------------------------------------------------------------------
 
-/**
- * Full rebuild of index.
- * @param {string} worktreePath
- * @param {string} repo
- */
-export function rebuildIndex(worktreePath, repo) {
-  const indexData = buildIndex(worktreePath, repo);
-  return saveIndex(repo, indexData);
-}
-
-/**
- * Incremental update of index.
- * @param {string} worktreePath
- * @param {string} repo
- */
-export function updateIndex(worktreePath, repo) {
-  const existingIndex = loadIndex(repo);
-  const indexData = buildIncrementalIndex(worktreePath, repo, existingIndex);
-  return saveIndex(repo, indexData);
-}
-
-/**
- * Get or build index for a repo.
- * @param {string} worktreePath
- * @param {string} repo
- * @param {{ force?: boolean }} options
- */
-export function getOrBuildIndex(worktreePath, repo, { force = false } = {}) {
-  if (force) {
-    return rebuildIndex(worktreePath, repo);
-  }
-
-  const existing = loadIndex(repo);
-  if (existing) {
-    return updateIndex(worktreePath, repo);
-  }
-
-  return rebuildIndex(worktreePath, repo);
-}
-
-/**
- * Check if index exists for a repo.
- */
-export function indexExists(repo) {
-  return fs.existsSync(getIndexPath(repo));
-}
-
-/**
- * Remove index for a repo.
- */
-export function removeIndex(repo) {
-  const indexPath = getIndexPath(repo);
-  const metaPath = getIndexMetaPath(repo);
-
-  try {
-    if (fs.existsSync(indexPath)) fs.unlinkSync(indexPath);
-    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
-    return true;
-  } catch (e) {
-    console.error(`[codebase-index] Failed to remove index: ${e.message}`);
-    return false;
-  }
-}
+export { getCurrentBranch, getBranchHead, getChangedFiles };
