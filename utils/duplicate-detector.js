@@ -11,7 +11,6 @@ import {
   getOrBuildIndex,
   loadIndex,
   searchSymbols,
-  findPotentialDuplicates,
   getRemoteBranchHead,
   getChangedFiles,
 } from './codebase-index.js';

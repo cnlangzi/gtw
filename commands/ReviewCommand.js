@@ -93,6 +93,12 @@ export class ReviewCommand extends Commander {
         prData.pr.cloneUrl
       );
     } catch (e) {
+      // Rollback label on worktree failure
+      try {
+        await setPrLabel({ prNum, repo, client, isPR: true }, 'gtw/ready');
+      } catch (rollbackErr) {
+        console.error(`[ReviewCommand] Rollback failed: ${rollbackErr.message}`);
+      }
       return {
         ok: false,
         message: `⚠️ Failed to create worktree: ${e.message}`,
@@ -225,11 +231,10 @@ export class ReviewCommand extends Commander {
   }
 
   async _postComment(prNum, repo, client, body) {
-    const { execSync } = await import('child_process');
     // Find existing comment by bot
     const comments = await client.request('GET', `/repos/${repo}/issues/${prNum}/comments`);
     const myLogin = (await client.request('GET', '/user')).login;
-    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## Duplicate Detection'));
+    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## Duplicate Detection Review'));
 
     if (existing) {
       await client.request('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, {
