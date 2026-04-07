@@ -15,6 +15,7 @@ import { PrCommand } from './PrCommand.js';
 import { CheckoutCommand } from './CheckoutCommand.js';
 import { WatchCommand } from './WatchCommand.js';
 import { LoginCommand } from './LoginCommand.js';
+import { IndexCommand } from './IndexCommand.js';
 
 /**
  * CommanderFactory — creates the appropriate Commander instance for a given cmd.
@@ -70,4 +71,5 @@ const MAP = {
   checkout: CheckoutCommand,
   watch: WatchCommand,
   login: LoginCommand,
+  index: IndexCommand,
 };
