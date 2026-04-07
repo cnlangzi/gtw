@@ -62,7 +62,7 @@ const gtw = definePluginEntry({
           const cmd = parts[0].toLowerCase();
           const args = parts.slice(1);
 
-          dbg('[gtw] cmd=', cmd, 'args=', args);
+          dbg('[gtw] cmd=', cmd, 'args=', args, 'sessionKey=', ctx.sessionKey);
 
           // Build factory with API context + session helpers
           const factory = new CommanderFactory({

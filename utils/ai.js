@@ -53,6 +53,10 @@ export function findModelProviderConfig(model, agentId = 'main') {
 
 /**
  * Make an AI API call using OpenClaw's model + auth configuration.
+ * Auth token priority:
+ *   1. auth-profiles.json \\u2192 profiles[<provider>:default].access  (PAT / device flow token)
+ *   2. auth-profiles.json \\u2192 profiles[<provider>:default].key    (api_key type)
+ *   3. models.json        \\u2192 providers[<provider>].apiKey        (inline apiKey)
  * @param {string} model - Model id (with optional provider prefix)
  * @param {string} systemPrompt
  * @param {string} userPrompt
@@ -66,20 +70,35 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
   const { provider, baseUrl, authHeader } = providerConfig;
   const modelId = model.includes('/') ? model.split('/')[1] : model;
   const authKey = `${provider}:default`;
+  const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
 
   const headers = { 'Content-Type': 'application/json' };
+  let token = null;
+
+  // Priority 1+2: auth-profiles.json (access or key field)
   try {
     const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
     const authData = JSON.parse(readFileSync(authPath, 'utf8'));
-    const token = authData.profiles?.[authKey]?.access;
-    if (token) {
-      if (authHeader) {
-        headers['Authorization'] = `Bearer ${token}`;
-      } else {
-        headers['x-api-key'] = token;
-      }
+    const profile = authData.profiles?.[authKey];
+    // OpenClaw stores tokens under "access" (PAT/device flow) or "key" (api_key type)
+    token = profile?.access || profile?.key || null;
+  } catch { /* no auth profile */ }
+
+  // Priority 3: models.json inline apiKey (e.g. minimax configured in openclaw.json)
+  if (!token) {
+    try {
+      const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
+      token = modelConf.providers?.[provider]?.apiKey || null;
+    } catch { /* no inline key */ }
+  }
+
+  if (token) {
+    if (authHeader) {
+      headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      headers['x-api-key'] = token;
     }
-  } catch { /* no auth needed */ }
+  }
 
   const api = providerConfig.api || 'openai-chat';
   let endpoint;
@@ -88,7 +107,6 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
-    const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
     const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
