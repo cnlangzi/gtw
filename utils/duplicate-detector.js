@@ -121,12 +121,15 @@ export async function detectDuplicates(prNum, baseBranch, worktreePath, repo, cl
     return { items: [], newFunctions: [] };
   }
 
+  // Collect PR-modified files (for filtering candidates)
+  const prFiles = new Set(newFunctions.map(fn => fn.file));
+
   // Step 4: Fuzzy search for each new function
   const candidates = [];
   for (const fn of newFunctions) {
     const results = searchSymbols(baseIndex, `${fn.name} ${fn.signature}`, { threshold: 0.5, limit: 5 });
-    // Filter out files that are changed by the PR (not in base)
-    const duplicates = results.filter(r => !newFunctions.some(nf => nf.file === r.file));
+    // Filter out candidates from files that were modified in this PR
+    const duplicates = results.filter(r => !prFiles.has(r.file));
     candidates.push({ newFunc: fn, duplicates });
   }
 
@@ -206,43 +209,34 @@ function parseFunctionsFromDiff(diff, file, lang) {
   const functions = [];
   const lines = diff.split('\n');
 
-  let inHunk = false;
-  let hunkStart = 0;
-  let contextBefore = [];
   let patchLines = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Hunk header
+    // Hunk header — process previous hunk
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      // Process previous hunk
       if (patchLines.length > 0) {
-        const funcs = extractFromPatch(contextBefore, patchLines, file, lang);
+        const funcs = extractFromPatch(patchLines, file, lang);
         functions.push(...funcs);
       }
-      inHunk = true;
-      hunkStart = parseInt(hunkMatch[3]);
-      contextBefore = [];
       patchLines = [];
       continue;
     }
 
-    if (inHunk) {
-      if (line.startsWith('+')) {
-        patchLines.push({ line: line.slice(1), added: true });
-      } else if (line.startsWith('-')) {
-        // Removed line — skip
-      } else if (line.startsWith(' ')) {
-        patchLines.push({ line: line.slice(1), added: false });
-      }
+    if (line.startsWith('+')) {
+      patchLines.push({ line: line.slice(1), added: true });
+    } else if (line.startsWith('-')) {
+      // Removed line — skip (don't include in context)
+    } else if (line.startsWith(' ')) {
+      patchLines.push({ line: line.slice(1), added: false });
     }
   }
 
   // Process last hunk
   if (patchLines.length > 0) {
-    const funcs = extractFromPatch(contextBefore, patchLines, file, lang);
+    const funcs = extractFromPatch(patchLines, file, lang);
     functions.push(...funcs);
   }
 
@@ -251,12 +245,17 @@ function parseFunctionsFromDiff(diff, file, lang) {
 
 /**
  * Extract function signatures from a patch hunk.
+ * Looks at both added lines and surrounding context (including non-added lines)
+ * to capture multi-line function signatures and docstrings.
  */
-function extractFromPatch(contextBefore, patchLines, file, lang) {
+function extractFromPatch(patchLines, file, lang) {
   const functions = [];
   const pattern = NEW_FUNC_PATTERNS[lang === 'typescript' ? 'ts' : lang] || NEW_FUNC_PATTERNS.js;
 
-  // Collect added lines and their positions
+  // Build full line text for context
+  const allText = patchLines.map(p => p.line).join('\n');
+
+  // Find added function definition lines
   const addedLines = patchLines
     .map((p, idx) => ({ ...p, idx }))
     .filter(p => p.added);
@@ -270,28 +269,53 @@ function extractFromPatch(contextBefore, patchLines, file, lang) {
     const name = match[1] || match[2] || match[3];
     if (!name) continue;
 
-    // Collect surrounding lines for docstring context
-    const startIdx = Math.max(0, idx - 3);
+    // Collect context: 5 lines before through 10 lines after
+    // This captures multi-line signatures and docstrings
+    const startIdx = Math.max(0, idx - 5);
     const endIdx = Math.min(patchLines.length, idx + 10);
     const context = patchLines.slice(startIdx, endIdx);
 
-    // Build function description from context
+    // Extract docstring lines and parameters from context
     const docLines = [];
     let paramStr = '';
+    let foundOpenParen = false;
+    let braceDepth = 0;
 
     for (const p of context) {
       const t = p.line.trim();
-      if (t.startsWith('/**') || t.startsWith('*') || t.startsWith('"""') || t.startsWith("'''")) {
+
+      // Docstring detection (all lines, not just added)
+      if (t.startsWith('/**') || t.startsWith('*') || t.startsWith('"""') || t.startsWith("'''") || t.startsWith('///')) {
         docLines.push(t.replace(/^(\*?\/?\s*)/, ''));
       }
-      if (t.includes('(') && !paramStr) {
-        const paramMatch = t.match(/\(([^)]*)\)/);
-        if (paramMatch) paramStr = paramMatch[1];
+
+      // Multi-line parameter detection: collect from ( to )
+      if (!foundOpenParen && t.includes('(')) {
+        foundOpenParen = true;
+      }
+      if (foundOpenParen) {
+        const openCount = (t.match(/\(/g) || []).length;
+        const closeCount = (t.match(/\)/g) || []).length;
+        braceDepth += openCount - closeCount;
+
+        if (!paramStr && t.includes('(')) {
+          const paramStart = t.indexOf('(');
+          paramStr = t.slice(paramStart + 1);
+        } else if (paramStr) {
+          paramStr += ' ' + t;
+        }
+
+        if (braceDepth === 0 && paramStr) {
+          // Found closing paren
+          const closeIdx = paramStr.indexOf(')');
+          if (closeIdx > 0) paramStr = paramStr.slice(0, closeIdx);
+          break;
+        }
       }
     }
 
     const docstring = docLines.join(' ').replace(/[*#]+/g, '').trim();
-    const signature = paramStr ? `${name}(${paramStr})` : name;
+    const signature = paramStr ? `${name}(${paramStr.trim()})` : name;
 
     functions.push({
       name,
