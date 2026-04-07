@@ -142,9 +142,18 @@ function getIndexMarkdownPath(repo, branch) {
 
 /**
  * Sanitize branch name for use in file paths.
+ * Replaces or removes characters that are invalid in filenames.
  */
 function sanitizeBranch(branch) {
-  return branch.replace(/\//g, '_');
+  // Replace / with _ (common in branch names)
+  // Remove other invalid filename characters
+  return branch
+    .replace(/\//g, '_')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\.+$/, '')       // no leading/trailing dots
+    .replace(/^\.+/, '')
+    .replace(/_{2,}/g, '_')    // no consecutive underscores
+    .slice(0, 200);            // max length 200 chars
 }
 
 // ---------------------------------------------------------------------------
