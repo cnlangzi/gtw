@@ -22,6 +22,7 @@ export function findModelProviderConfig(model, agentId = 'main') {
       const [provider, modelId] = model.split('/');
       const conf = data.providers?.[provider];
       if (conf?.models?.some((m) => m.id === modelId)) {
+        console.log(`[gtw] findModelProviderConfig → ${provider}/${modelId} (api=${conf.api || 'anthropic-messages'})`);
         return {
           provider,
           baseUrl: conf.baseUrl || '',
@@ -36,6 +37,7 @@ export function findModelProviderConfig(model, agentId = 'main') {
     for (const [provider, conf] of Object.entries(data.providers || {})) {
       const hasModel = conf.models?.some((m) => m.id === model);
       if (hasModel) {
+        console.log(`[gtw] findModelProviderConfig → ${provider}/${model} (api=${conf.api || 'anthropic-messages'})`);
         return {
           provider,
           baseUrl: conf.baseUrl || '',
@@ -45,6 +47,7 @@ export function findModelProviderConfig(model, agentId = 'main') {
       }
     }
   } catch {}
+  console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model}`);
   return null;
 }
 
@@ -101,7 +104,9 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
     body.messages.push({ role: 'user', content: userPrompt });
   }
 
+  console.log(`[gtw] AI request → ${endpoint}`);
   const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+  console.log(`[gtw] AI response ← ${endpoint} [${res.status}]`);
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
 
   if (api === 'anthropic-messages') {

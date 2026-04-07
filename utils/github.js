@@ -134,7 +134,8 @@ export class GitHubClient {
     }
 
     const { status, data } = await httpsRequest(method, url, headers, bodyStr);
-    
+    console.log(`[gtw] GitHub → ${method} ${endpoint} [${status}]`);
+
     if (status >= 200 && status < 300) {
       return data;
     } else {
@@ -182,6 +183,8 @@ export class GitHubClient {
       Accept: 'application/vnd.github.v4+json',
     };
     const { status, data } = await httpsRequest('POST', GITHUB_API_BASE + '/graphql', headers, bodyStr);
+    const opName = (query.match(/\bquery\s+(\w+)/) || query.match(/\bmutation\s+(\w+)/) || ['?', '?'])[1];
+    console.log(`[gtw] GitHub → GraphQL ${opName} [${status}]`);
     if (status >= 200 && status < 300) {
       if (data.errors) throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
       return data.data;
