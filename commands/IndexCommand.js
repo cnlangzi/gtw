@@ -16,7 +16,6 @@ import {
   rebuildIndex,
   loadIndex,
   loadIndexMarkdown,
-  indexExists,
   removeIndex,
   listIndexedBranches,
   getCurrentBranch,

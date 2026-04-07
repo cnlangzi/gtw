@@ -52,12 +52,9 @@ function getCurrentBranch(worktreePath) {
 }
 
 /**
- * Get the commit hash of a specific branch head.
- * @param {string} worktreePath
- * @param {string} branch
- * @returns {string}
+ * Get the commit hash of a local branch head.
  */
-function getBranchHead(worktreePath, branch) {
+function getLocalBranchHead(worktreePath, branch) {
   try {
     return execSync(`git rev-parse ${branch}`, {
       cwd: worktreePath,
@@ -66,6 +63,48 @@ function getBranchHead(worktreePath, branch) {
   } catch {
     return '';
   }
+}
+
+/**
+ * Get the commit hash of a remote branch (origin/<branch>).
+ * Fetches origin first to ensure we have the latest.
+ * @param {string} worktreePath
+ * @param {string} branch
+ * @returns {string} — empty string if remote branch not found
+ */
+function getRemoteBranchHead(worktreePath, branch) {
+  try {
+    // Fetch the specific remote branch
+    execSync(`git fetch origin refs/heads/${branch}:refs/remotes/origin/${branch} --depth=1`, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 30000,
+    });
+  } catch {
+    // fetch failed, try with existing refs
+  }
+
+  try {
+    return execSync(`git rev-parse origin/${branch}`, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Get the commit hash of a branch (local or remote).
+ * Prefers remote (origin/<branch>) if available.
+ */
+function getBranchHead(worktreePath, branch) {
+  // Try remote first (most likely to be up-to-date)
+  const remote = getRemoteBranchHead(worktreePath, branch);
+  if (remote) return remote;
+
+  // Fall back to local
+  return getLocalBranchHead(worktreePath, branch);
 }
 
 /**
@@ -424,13 +463,13 @@ export function loadIndexMarkdown(repo, branch) {
 }
 
 /**
- * Check if index for a branch is fresh (commit matches current HEAD).
+ * Check if index for a branch is fresh (commit matches current remote HEAD).
+ * Uses origin/<branch> for freshness check — ensures we detect remote updates.
  * @returns {{ fresh: boolean, indexedCommit: string, currentCommit: string }}
  */
 export function checkIndexFreshness(repo, branch, worktreePath) {
-  // Load by sanitized branch name (file path), but use real branch name for git
   const existing = loadIndex(repo, sanitizeBranch(branch));
-  const currentCommit = getBranchHead(worktreePath, branch);
+  const currentCommit = getRemoteBranchHead(worktreePath, branch);
 
   if (!existing) {
     return { fresh: false, indexedCommit: null, currentCommit };
