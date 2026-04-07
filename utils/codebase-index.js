@@ -606,4 +606,4 @@ export function findPotentialDuplicates(files, funcName, funcSignature, limit = 
 // Git helpers (exported for use by ReviewCommand)
 // ---------------------------------------------------------------------------
 
-export { getCurrentBranch, getBranchHead, getChangedFiles };
+export { getCurrentBranch, getBranchHead, getRemoteBranchHead, getChangedFiles };
