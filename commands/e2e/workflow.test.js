@@ -12,7 +12,6 @@ import assert from 'node:assert';
 
 import { WatchCommand } from '../WatchCommand.js';
 import { ReviewCommand } from '../ReviewCommand.js';
-import { mergeChecklistState } from '../ReviewCommand.js';
 import { setPrLabel } from '../../utils/labels.js';
 import { httpsRequest as originalHttpsRequest, setHttpsRequest } from '../../utils/github.js';
 import { setConfigOverride } from '../../utils/config.js';
