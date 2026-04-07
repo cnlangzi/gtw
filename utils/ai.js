@@ -87,7 +87,7 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
 
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
-    endpoint = baseUrl.replace(/\/$/, '') + '/v1/messages';
+    endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
     const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
     const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
     const maxTokens = (
@@ -98,7 +98,7 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
     body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
   } else {
-    endpoint = baseUrl.replace(/\/$/, '') + '/chat/completions';
+    endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/chat/completions';
     body = { model: modelId, messages: [] };
     if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
     body.messages.push({ role: 'user', content: userPrompt });
