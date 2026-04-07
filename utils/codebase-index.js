@@ -9,12 +9,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
 import { getExtractor } from './extractors/index.js';
 import Fuse from 'fuse.js';
+import { BASE_DIR } from './config.js';
 
-const BASE_DIR = path.resolve(os.homedir(), '.gtw');
 const INDEX_DIR = path.resolve(BASE_DIR, 'codebase-index');
 
 const INCLUDED_EXTS = new Set([
