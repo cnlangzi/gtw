@@ -116,7 +116,7 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
     body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
   } else {
-    endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/chat/completions';
+    endpoint = baseUrl + '/chat/completions';
     body = { model: modelId, messages: [] };
     if (systemPrompt) body.messages.push({ role: 'system', content: systemPrompt });
     body.messages.push({ role: 'user', content: userPrompt });
