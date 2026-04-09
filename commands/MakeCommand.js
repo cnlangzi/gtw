@@ -1,6 +1,6 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { exec, execRaw } from 'child_process';
+import { exec } from '../utils/exec.js';
 
 /**
  * /gtw make [target]

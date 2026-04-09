@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { exec, execRaw } from 'child_process';
+import { exec } from '../utils/exec.js';
 import { BASE_DIR } from '../utils/config.js';
 
 /**
