@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync as _exec } from 'child_process';
+import { exec } from './exec.js';
 import { getExtractor } from './extractors/index.js';
 import Fuse from 'fuse.js';
 import { BASE_DIR } from './config.js';
@@ -42,7 +42,7 @@ const EXCLUDED_DIRS = new Set([
  */
 function getCurrentBranch(worktreePath) {
   try {
-    return _exec('git rev-parse --abbrev-ref HEAD', {
+    return exec('git rev-parse --abbrev-ref HEAD', {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString().trim();
@@ -56,7 +56,7 @@ function getCurrentBranch(worktreePath) {
  */
 function getLocalBranchHead(worktreePath, branch) {
   try {
-    return _exec(`git rev-parse ${branch}`, {
+    return exec(`git rev-parse ${branch}`, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString().trim();
@@ -75,7 +75,7 @@ function getLocalBranchHead(worktreePath, branch) {
 function getRemoteBranchHead(worktreePath, branch) {
   try {
     // Fetch the specific remote branch
-    _exec(`git fetch origin refs/heads/${branch}:refs/remotes/origin/${branch} --depth=1`, {
+    exec(`git fetch origin refs/heads/${branch}:refs/remotes/origin/${branch} --depth=1`, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 30000,
@@ -85,7 +85,7 @@ function getRemoteBranchHead(worktreePath, branch) {
   }
 
   try {
-    return _exec(`git rev-parse origin/${branch}`, {
+    return exec(`git rev-parse origin/${branch}`, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString().trim();
@@ -116,7 +116,7 @@ function getBranchHead(worktreePath, branch) {
  */
 function getChangedFiles(worktreePath, fromRef, toRef) {
   try {
-    const output = _exec(`git diff --name-only ${fromRef}..${toRef}`, {
+    const output = exec(`git diff --name-only ${fromRef}..${toRef}`, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).toString().trim();

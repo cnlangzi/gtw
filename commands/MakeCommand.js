@@ -1,6 +1,6 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { execSync as _xrun } from 'child_process';
+import { exec, execRaw } from 'child_process';
 
 /**
  * /gtw make [target]
@@ -26,7 +26,7 @@ export class MakeCommand extends Commander {
     let exitCode = 0;
 
     try {
-      stdout = _xrun(cmd, {
+      stdout = exec(cmd, {
         cwd: wip.workdir,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
