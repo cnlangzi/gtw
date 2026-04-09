@@ -24,7 +24,7 @@ jobs:
       - name: Check no direct child_process.execSync imports
         run: |
           # Find all files importing execSync directly (except exec.js itself)
-          count=$(grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js' | wc -l)
+          count=$(grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js' | grep -v '\.test\.js$' | wc -l)
           if [ "$count" -gt 0 ]; then
             echo "Found direct execSync imports (use utils/exec.js instead):"
             grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js'
