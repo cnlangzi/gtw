@@ -5,7 +5,7 @@
  * in the target branch.
  */
 
-import { execSync } from 'child_process';
+import { execSync  as _exec } from 'child_process';
 import {
   checkIndexFreshness,
   getOrBuildIndex,
@@ -185,7 +185,7 @@ async function extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, work
     if (!lang) continue;
 
     try {
-      const diff = execSync(
+      const diff = _exec(
         `git diff origin/${baseRef}..origin/${headRef} -- "${file}"`,
         { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
