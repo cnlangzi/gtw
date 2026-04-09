@@ -21,14 +21,16 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run unit tests
+      - name: Check no direct child_process.execSync imports
         run: |
-          node --test \
-            utils/git.test.js \
-            utils/git.checkout.test.js \
-            utils/labels.test.js \
-            commands/WatchCommand.test.js \
-            commands/ReviewCommand.test.js
+          # Find all files importing execSync directly (except exec.js itself)
+          count=$(grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js' | wc -l)
+          if [ "$count" -gt 0 ]; then
+            echo "Found direct execSync imports (use utils/exec.js instead):"
+            grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js'
+            exit 1
+          fi
+          echo "✓ No direct execSync imports found"
 
   e2e-workflow-tests:
     runs-on: ubuntu-latest
