@@ -9,7 +9,7 @@ import { getWip, saveWip, clearWip } from '../utils/wip.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
-import { execSync } from 'child_process';
+import { exec } from '../utils/exec.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — real bare git repos for integration testing
@@ -20,33 +20,33 @@ const REPO_A = join(REPOS, 'repo-a');   // remote (bare)
 const REPO_W = join(REPOS, 'repo-w');   // worktree (clone)
 
 function setupRemote(name) {
-  execSync(`git init --bare ${name}`, { stdio: 'pipe' });
+  exec(`git init --bare ${name}`, { stdio: 'pipe' });
   // Bootstrap: init a real repo, push to bare to have real refs
   const bootstrap = join(tmpdir(), `gtw-bootstrap-${Date.now()}`);
   mkdirSync(bootstrap);
-  execSync(`git init`, { cwd: bootstrap, stdio: 'pipe' });
-  execSync(`git config user.email "test@gtw"`, { cwd: bootstrap, stdio: 'pipe' });
-  execSync(`git config user.name "GTW Test"`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git init`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git config user.email "test@gtw"`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git config user.name "GTW Test"`, { cwd: bootstrap, stdio: 'pipe' });
   writeFileSync(join(bootstrap, 'f'), 'first commit\n');
-  execSync(`git add .`, { cwd: bootstrap, stdio: 'pipe' });
-  execSync(`git commit -m "init"`, { cwd: bootstrap, stdio: 'pipe' });
-  execSync(`git remote add origin ${name}`, { cwd: bootstrap, stdio: 'pipe' });
-  execSync(`git push origin main`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git add .`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git commit -m "init"`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git remote add origin ${name}`, { cwd: bootstrap, stdio: 'pipe' });
+  exec(`git push origin main`, { cwd: bootstrap, stdio: 'pipe' });
   rmSync(bootstrap, { recursive: true, force: true });
 }
 
 function cloneRemote(remote, worktree) {
-  execSync(`git clone ${remote} ${worktree}`, { stdio: 'pipe' });
-  execSync(`git config user.email "test@gtw"`, { cwd: worktree, stdio: 'pipe' });
-  execSync(`git config user.name "GTW Test"`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git clone ${remote} ${worktree}`, { stdio: 'pipe' });
+  exec(`git config user.email "test@gtw"`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git config user.name "GTW Test"`, { cwd: worktree, stdio: 'pipe' });
 }
 
 function commitOnBranch(worktree, branch, filename, content) {
-  execSync(`git checkout ${branch}`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git checkout ${branch}`, { cwd: worktree, stdio: 'pipe' });
   writeFileSync(join(worktree, filename), content);
-  execSync(`git add .`, { cwd: worktree, stdio: 'pipe' });
-  execSync(`git commit -m "commit ${filename}"`, { cwd: worktree, stdio: 'pipe' });
-  execSync(`git push origin ${branch}`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git add .`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git commit -m "commit ${filename}"`, { cwd: worktree, stdio: 'pipe' });
+  exec(`git push origin ${branch}`, { cwd: worktree, stdio: 'pipe' });
 }
 
 // ---------------------------------------------------------------------------
@@ -85,11 +85,11 @@ describe('CheckoutCommand', () => {
   });
 
   it('sync specific branch — checks out and pulls remote branch', async () => {
-    execSync(`git checkout -b feat`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git checkout -b feat`, { cwd: REPO_W, stdio: 'pipe' });
     writeFileSync(join(REPO_W, 'featfile'), 'feat content\n');
-    execSync(`git add .`, { cwd: REPO_W, stdio: 'pipe' });
-    execSync(`git commit -m "feat commit"`, { cwd: REPO_W, stdio: 'pipe' });
-    execSync(`git push origin feat`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git add .`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git commit -m "feat commit"`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git push origin feat`, { cwd: REPO_W, stdio: 'pipe' });
 
     const cmd = new SyncCommand({ api: {}, config: {}, sessionKey: 'test' });
     const result = await cmd.execute(['feat']);
@@ -103,22 +103,22 @@ describe('CheckoutCommand', () => {
     // Set up: reset-test branch has "old.txt" on both local and origin,
     // but origin has an additional "new.txt" that local doesn't.
     // After sync, local should match origin (gaining new.txt, keeping old.txt).
-    execSync(`git checkout -b reset-test`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git checkout -b reset-test`, { cwd: REPO_W, stdio: 'pipe' });
     writeFileSync(join(REPO_W, 'old.txt'), 'old content\n');
-    execSync(`git add old.txt`, { cwd: REPO_W, stdio: 'pipe' });
-    execSync(`git commit -m "old commit"`, { cwd: REPO_W, stdio: 'pipe' });
-    execSync(`git push origin reset-test`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git add old.txt`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git commit -m "old commit"`, { cwd: REPO_W, stdio: 'pipe' });
+    exec(`git push origin reset-test`, { cwd: REPO_W, stdio: 'pipe' });
 
     // Advance origin/reset-test with an extra file (via temp clone to keep REPO_W clean)
     const tempClone = join(REPOS, 'temp-push');
-    execSync(`git clone ${REPO_A} ${tempClone}`, { stdio: 'pipe' });
-    execSync(`git config user.email "test@gtw"`, { cwd: tempClone, stdio: 'pipe' });
-    execSync(`git config user.name "GTW Test"`, { cwd: tempClone, stdio: 'pipe' });
-    execSync(`git checkout reset-test`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git clone ${REPO_A} ${tempClone}`, { stdio: 'pipe' });
+    exec(`git config user.email "test@gtw"`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git config user.name "GTW Test"`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git checkout reset-test`, { cwd: tempClone, stdio: 'pipe' });
     writeFileSync(join(tempClone, 'new.txt'), 'new content\n');
-    execSync(`git add new.txt`, { cwd: tempClone, stdio: 'pipe' });
-    execSync(`git commit -m "new commit on origin"`, { cwd: tempClone, stdio: 'pipe' });
-    execSync(`git push origin reset-test`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git add new.txt`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git commit -m "new commit on origin"`, { cwd: tempClone, stdio: 'pipe' });
+    exec(`git push origin reset-test`, { cwd: tempClone, stdio: 'pipe' });
     rmSync(tempClone, { recursive: true, force: true });
 
     // REPO_W is still on old commit (no new.txt)

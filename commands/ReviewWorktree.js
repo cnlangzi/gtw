@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { exec } from '../utils/exec.js';
 import { BASE_DIR } from '../utils/config.js';
 
 /**
@@ -30,15 +30,15 @@ export async function prepareReviewWorktree(repo, prNum, branchName, baseBranch,
   // Ensure base clone exists
   if (!fs.existsSync(reviewRoot)) {
     fs.mkdirSync(reviewRoot, { recursive: true });
-    _exec(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`);
+    exec(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`);
   }
 
   // Ensure worktree exists
   if (fs.existsSync(worktreePath)) {
     try {
-      _exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath });
-      _exec(`git config pull.rebase true`, { cwd: worktreePath });
-      _exec(`git reset --hard FETCH_HEAD`, { cwd: worktreePath });
+      exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath });
+      exec(`git config pull.rebase true`, { cwd: worktreePath });
+      exec(`git reset --hard FETCH_HEAD`, { cwd: worktreePath });
     } catch {
       // Pull failed — remove and recreate
       fs.rmSync(worktreePath, { recursive: true, force: true });
@@ -48,21 +48,18 @@ export async function prepareReviewWorktree(repo, prNum, branchName, baseBranch,
   if (!fs.existsSync(worktreePath)) {
     // Fetch PR branch ref
     try {
-      _exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot });
+      exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot });
     } catch {}
     // Create worktree
     fs.mkdirSync(worktreeRoot, { recursive: true });
     try {
-      _exec(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot });
+      exec(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot });
     } catch {
       // May fail if worktree already exists, try continuing
     }
-    _exec(`git config pull.rebase true`, { cwd: worktreePath });
+    exec(`git config pull.rebase true`, { cwd: worktreePath });
   }
 
   return worktreePath;
 }
 
-function _exec(cmd, opts = {}) {
-  return execSync(cmd, { stdio: 'pipe', ...opts }).toString().trim();
-}

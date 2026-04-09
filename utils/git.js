@@ -4,7 +4,7 @@
  * All git operations are wrappers around the `git` CLI.
  * Uses execGit (spawnSync) internally — no isomorphic-git dependency.
  */
-import { execSync as _exec } from 'child_process';
+import { exec } from './exec.js';
 import fs from 'fs';
 import path from 'path';
 import { join, resolve, dirname, basename } from 'path';
@@ -34,7 +34,7 @@ export function git(cmd, cwd) {
 
 function execGit(cmd, cwd) {
   try {
-    return _exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch (e) {
     throw new Error(`Git error: ${e.message}`);
   }
@@ -106,7 +106,7 @@ export function getDefaultBranch(workdir) {
         }
       }
     }
-    const symRef = _exec('git symbolic-ref refs/remotes/origin/HEAD', {
+    const symRef = exec('git symbolic-ref refs/remotes/origin/HEAD', {
       cwd: workdir,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
