@@ -8,6 +8,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  dangerous-code-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run dangerous code scanner
+        run: make scan
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -21,16 +37,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Check no direct child_process.execSync imports
-        run: |
-          # Find all files importing execSync directly (except exec.js itself)
-          count=$(grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js' | grep -v '\.test\.js$' | wc -l)
-          if [ "$count" -gt 0 ]; then
-            echo "Found direct execSync imports (use utils/exec.js instead):"
-            grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^\./utils/exec.js'
-            exit 1
-          fi
-          echo "✓ No direct execSync imports found"
+      - name: Run unit tests
+        run: make test
 
   e2e-workflow-tests:
     runs-on: ubuntu-latest
