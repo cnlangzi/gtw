@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  dangerous-code-scan:
+  openclaw-install-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run dangerous code scanner
+      - name: Run OpenClaw install compatibility check
         run: make scan
 
   unit-tests:
