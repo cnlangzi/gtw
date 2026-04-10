@@ -1,0 +1,18 @@
+{
+  "description": "Dangerous pattern keywords for scan.js — loaded at runtime to avoid scanner false positives",
+  "cryptoMining": [
+    "stratum+tcp",
+    "stratum+ssl",
+    "coinhive",
+    "cryptonight",
+    "xmrig"
+  ],
+  "dangerousExec": [
+    "exec",
+    "execSync",
+    "spawn",
+    "spawnSync",
+    "execFile",
+    "execFileSync"
+  ]
+}
