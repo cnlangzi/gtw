@@ -242,7 +242,7 @@ export function injectPlanModeDirective(sessionKey, workdir, repo) {
     `You are now in PLAN MODE for requirements clarification.`,
     ``,
     `RULES:`,
-    `1. First, read the directory file tree to understand the project structure. Use \`find . -type f | head -200\` to list all files (names only, no contents). Do NOT read any file contents yet.`,
+    `1. First, read the directory file tree to understand the project structure. Use `tree -L 3 -I 'node_modules|.git|dist|build|coverage|.next|.nuxt|vendor|__pycache__|.pytest_cache|target|bin|obj|.cache|.tmp' --dirsfirst | head -200` to list all files in a hierarchical structure (names only, no contents). Do NOT read any file contents yet.`,
     `2. If \`README.md\` or \`AGENTS.md\` exists in the root directory, read and understand its contents — these files contain project-specific context and conventions you should be aware of.`,
     `3. After the file tree and any root docs are loaded, wait for the user to ask questions or give further instructions.`,
     `4. When the user asks a question, read only the relevant files they mention or ask about.`,
