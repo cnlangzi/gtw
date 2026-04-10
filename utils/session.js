@@ -15,7 +15,7 @@ function getDirectoryTree(workdir) {
   } catch {
     throw new Error(' PLAN MODE requires `tree` command. Please install it first: apt install tree (Debian/Ubuntu) or brew install tree (macOS)');
   }
-  return sh(`tree -L 3 -I '${excludedDirs}' --dirsfirst | head -200`, { cwd: workdir, timeout: 5000 });
+  return sh(`tree -I '${excludedDirs}' --dirsfirst | head -200`, { cwd: workdir, timeout: 5000 });
 }
 
 /**
