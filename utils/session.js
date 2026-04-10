@@ -9,15 +9,13 @@ import { sh } from './exec.js';
  */
 function getDirectoryTree(workdir) {
   const excludedDirs = 'node_modules|.git|dist|build|coverage|.next|.nuxt|vendor|__pycache__|.pytest_cache|target|bin|obj|.cache|.tmp';
+  // Check if tree is available
   try {
-    return sh(`tree -L 3 -I '${excludedDirs}' --dirsfirst | head -200`, { cwd: workdir, timeout: 5000 });
+    sh('which tree', { cwd: workdir, timeout: 3000 });
   } catch {
-    try {
-      return sh(`find . -type f | head -200`, { cwd: workdir, timeout: 5000 });
-    } catch {
-      return '(failed to read directory tree)';
-    }
+    throw new Error(' PLAN MODE requires `tree` command. Please install it first: apt install tree (Debian/Ubuntu) or brew install tree (macOS)');
   }
+  return sh(`tree -L 3 -I '${excludedDirs}' --dirsfirst | head -200`, { cwd: workdir, timeout: 5000 });
 }
 
 /**
