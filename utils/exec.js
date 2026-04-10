@@ -44,7 +44,9 @@ function shRaw(cmd, opts = {}) {
 // Re-export all child_process exec functions under original names
 // ---------------------------------------------------------------------------
 
-export const exec = _exec;
+// Note: exec is sync here for backward compatibility with callers using .trim()
+// For async exec, use a dedicated async wrapper when needed.
+export const exec = _execSync;
 export const execSync = _execSync;
 export const spawn = _spawn;
 export const spawnSync = _spawnSync;
