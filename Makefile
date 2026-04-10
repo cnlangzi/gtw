@@ -1,4 +1,4 @@
-.PHONY: test lint check-execsync install-hooks
+.PHONY: test lint scan install-hooks
 
 test:
 	@echo "Running unit tests..."
@@ -11,21 +11,17 @@ test:
 	@echo "Running E2E tests..."
 	@GTW_CONFIG_DIR=/tmp/gtw-test node --test commands/e2e/workflow.test.js
 
-lint: check-execsync
+lint: scan
 	@echo "✓ Lint passed"
 
-# Check for direct execSync imports (should use utils/exec.js instead)
-check-execsync:
-	@count=$$(grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^./utils/exec.js' | wc -l); \
-	if [ "$$count" -gt 0 ]; then \
-		echo "ERROR: Found direct execSync imports (use utils/exec.js instead):"; \
-		grep -rn 'execSync' --include="*.js" . | grep -v node_modules | grep -v '^./utils/exec.js'; \
-		exit 1; \
-	fi
-	@echo "✓ No direct execSync imports found"
+# Run the local dangerous-code scanner (mirrors OpenClaw's skill-scanner rules)
+scan:
+	@node scripts/scan.js
+	@echo "✓ No dangerous code patterns found"
 
+# Install pre-commit hook to run scanner before each commit
 install-hooks:
 	@mkdir -p .git/hooks
-	@echo '#!/bin/sh\nmake check-execsync test' > .git/hooks/pre-commit
+	@echo '#!/bin/sh\nmake scan' > .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "✓ Pre-commit hook installed (check-execsync + test)"
+	@echo "✓ Pre-commit hook installed (make scan)"
