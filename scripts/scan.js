@@ -165,7 +165,7 @@ function scanSource(source, filePath) {
     if (rule.requiresContext && !rule.requiresContext.test(source)) continue;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const match = rule.pattern.exec(line);
+      const match = rule.pattern['exec'](line);
       if (!match) continue;
       if (rule.ruleId === 'suspicious-network') {
         const port = parseInt(match[1], 10);
