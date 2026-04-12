@@ -40,14 +40,14 @@ export class CheckoutCommand extends Commander {
       return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
     }
 
-    // Step 2 & 3: checkout -B (create or reset) tracking branch + pull
+    // Step 2: checkout -B (create or reset) tracking branch to origin/<branch>
+    // No pull needed — checkout -B origin/<branch> already points us at origin/<branch>
     try {
       // -B: create branch if missing, or reset existing to origin/<branch>
       const checkoutResult = git(`git checkout -B ${branch} origin/${branch}`, workdir);
-      const pullResult = git(`git pull`, workdir);
 
       const finalBranch = await getCurrentBranch(workdir);
-      const output = [checkoutResult, pullResult].filter(Boolean).join('\n');
+      const output = [checkoutResult].filter(Boolean).join('\n');
       return {
         ok: true,
         branch: finalBranch,
@@ -89,12 +89,12 @@ export class CheckoutCommand extends Commander {
       return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
     }
 
-    // Step 2 & 3: checkout -B current origin/current + pull
+    // Step 2: checkout -B current origin/current
+    // No pull needed — checkout -B origin/<branch> already points us at origin/<branch>
     try {
       const checkoutResult = git(`git checkout -B ${currentBranch} origin/${currentBranch}`, workdir);
-      const pullResult = git(`git pull`, workdir);
 
-      const output = [checkoutResult, pullResult].filter(Boolean).join('\n');
+      const output = [checkoutResult].filter(Boolean).join('\n');
       return {
         ok: true,
         branch: currentBranch,

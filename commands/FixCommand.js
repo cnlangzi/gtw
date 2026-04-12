@@ -254,7 +254,7 @@ export class FixCommand extends Commander {
       await fetch(workdir, { remote: 'origin' });
       const defaultBranch = getDefaultBranch(workdir);
       await checkout(workdir, defaultBranch);
-      git(`git pull --rebase origin ${defaultBranch}`, workdir);
+      git(`git reset --hard origin/${defaultBranch}`, workdir);
       branchName = ensureUniqueBranch(workdir, baseBranchName);
       await checkout(workdir, branchName, { force: true });
     } catch (e) {
