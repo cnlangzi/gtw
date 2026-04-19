@@ -36,6 +36,8 @@ gtw/
     git.js                  ← Git operations (git(), getRemoteRepo(), etc.)
     config.js               ← Config read/write (config.json)
     session.js              ← Parent session JSONL read/write
+    review-reuse.js         ← Code Reuse Detection for /gtw review
+    codebase-index.js       ← Per-branch function index + Fuse.js search
   tests/
     *.test.js
 ```
@@ -224,3 +226,149 @@ Reply format:
 ```
 
 The subagent session used by NewCommand is isolated and unaffected — it does not read this directive.
+
+## `/gtw review` — Code Reuse Review
+
+`/gtw review <pr-number>` performs a **Code Reuse Review** on a pull request, identifying opportunities where new code could reuse existing functionality in the base branch.
+
+### Architecture
+
+```
+PR #N (head → base)
+       │
+       ▼
+ReviewCommand._reviewPr()
+       │
+       ├─ claim 'gtw/wip' label
+       ├─ prepareReviewWorktree()
+       │         │
+       │         ▼
+       │    detectReuse()  ← review-reuse.js
+       │         │
+       │         ├─ extractNewFunctionsFromDiff()
+       │         │         ├─ parseFunctionsFromDiff()      (function definitions)
+       │         │         └─ extractInlineBlocksFromDiff() (non-function patterns)
+       │         │
+       │         ├─ findStructuralMatches()  Jaccard on call patterns
+       │         │
+       │         ├─ detectInternalReuse()    SimHash internal PR duplicates
+       │         │
+       │         ├─ detectAntiPatterns()    regex anti-pattern rules
+       │         │
+       │         └─ requestReuseVerdict()    LLM semantic judgment
+       │
+       ├─ _buildComment()
+       └─ post comment → GitHub PR
+```
+
+### Detection Pipeline (Layered Recall)
+
+The review uses a **four-layer detection strategy**, ordered from fast/cheap to slow/expensive:
+
+| Layer | Method | Purpose |
+|-------|--------|---------|
+| 1 | Exact match (name) | Symbol name identical in base branch |
+| 2 | Fuzzy search (Fuse.js) | Signature/docstring similarity |
+| 3 | Structural match (Jaccard) | Same call patterns, different names |
+| 4 | Semantic match (LLM) | Actual code content, deep reasoning |
+
+Additionally:
+- **PR Internal** (SimHash): Same logic duplicated across files in the PR itself
+- **Pattern Detection** (regex): Known anti-patterns in function bodies and inline code
+
+### Finding Types & Verdict Taxonomy
+
+| Verdict | Meaning | Action |
+|---------|---------|--------|
+| `duplicate` | Clear functional overlap, existing helper available | Must reuse |
+| `similar` | Some overlap, consider refactoring | Non-blocking |
+| `internal-duplicate` | Same logic appears in multiple PR files | Extract to shared module |
+| `pattern` | Matches known anti-pattern | Refactor recommended |
+| `distinct` | No meaningful overlap | Skip |
+
+### Severity Levels
+
+| Level | Meaning |
+|-------|---------|
+| 🔴 critical | Functionally identical, 3+ occurrences, must extract |
+| 🟠 high | Obvious duplication, existing helper available |
+| 🟡 medium | Partial overlap, refactorable but non-blocking |
+| 🟢 low | Edge cases, recommend attention |
+
+### Module: `utils/review-reuse.js`
+
+Single-responsibility functions:
+
+| Function | Role |
+|----------|------|
+| `detectReuse(prNum, ...)` | Main entry point, orchestrates all steps |
+| `extractNewFunctionsFromDiff(...)` | Returns `{ functions, inlineBlocks }` from PR diff |
+| `parseFunctionsFromDiff(diff, file, lang)` | Parses function definitions from a diff hunk |
+| `extractFromPatch(patchLines, file, lang)` | Extracts function bodies with actual code |
+| `extractInlineBlocksFromDiff(diff, file, lang, functions)` | Scans non-function lines for anti-patterns |
+| `extractCallPatterns(code)` | Extracts method/function call signatures from code |
+| `patternSimilarity(a, b)` | Jaccard similarity between two call-pattern sets |
+| `findStructuralMatches(targetPatterns, baseIndex, threshold)` | Finds base-branch functions with similar call patterns |
+| `detectInternalReuse(newFunctions)` | SimHash-based duplicate detection within the PR |
+| `detectAntiPatterns(newFunctions)` | Scans function bodies against regex anti-pattern rules |
+| `requestReuseVerdict(newFunctions, candidates, ...)` | LLM call for semantic duplicate verdict |
+
+### SimHash Implementation
+
+Used for **PR-internal duplicate detection**:
+
+1. **Tokenize**: Character n-grams (n=3) + language keywords
+2. **Hash**: Two-round MixHash producing full 64-bit fingerprint per token
+3. **Fingerprint**: Sum per-bit contribution across all tokens → 64-bit SimHash
+4. **Compare**: Hamming distance between fingerprints; threshold 0.85 similarity
+
+### Codebase Index
+
+The base branch is indexed into `~/.gtw/codebase-index/{owner}/{repo}@{branch}.json`.
+
+- Per-branch: separate index per base branch (main, develop, etc.)
+- Incremental: only re-indexes files changed since last commit
+- Freshness check: compares commit hash against `origin/<branch>`
+- Indexed data: function name, signature, docstring, file location, parameters
+
+### Comment Format
+
+Posted as a PR comment (updated on re-run, not duplicated):
+
+```markdown
+## 🔍 Code Reuse Review — PR #42
+
+### 📊 Summary
+| Type | Count |
+|------|-------|
+| 🔴 Critical | 1 |
+| 🟠 High | 1 |
+| 🟡 Medium | 2 |
+| 💡 Internal Duplicates | 1 |
+
+### 🚨 Critical Duplicates (1)
+**🔴 `validateEmail`** (src/auth.js → src/utils/validation.isValidEmail)
+> Extract to shared module and import instead.
+
+### ⚠️ Similar Patterns (2)
+**`buildPath`** → similar to **`resolve`**: Both normalize and join path segments
+
+### 💡 Internal Duplicates (1)
+**`parseQueryString`** appears 2× in this PR:
+  - src/api/users.js:31
+  - src/api/posts.js:28
+
+### 🔧 Pattern Anti-Patterns (1)
+**`formatName`**: Chained string operations detected — consider extracting to helper
+
+---
+*Code Reuse detection via SimHash + codebase index + fuzzy search + LLM semantic analysis*
+```
+
+### Design Decisions
+
+1. **Report-only, no auto-fix**: All findings remain human-decided; the tool surfaces opportunities, never forces changes.
+2. **Backward compatible**: Codebase index schema extended, not rebuilt. Old indexes remain valid.
+3. **Inline-block exclusion**: `extractInlineBlocksFromDiff` receives parsed function line ranges and excludes them, preventing double-reporting of patterns inside new functions.
+4. **Deduplication with pattern discrimination**: Findings are deduplicated by `(newFunc, existingFunc, verdict)`, but pattern findings also include `patternId` to preserve distinct anti-pattern hits on the same function.
+5. **LLM prompt completeness**: The LLM receives actual code diff lines (not just signatures), internal duplicates, pattern findings, and structural matches — giving it full context for semantic judgment.
