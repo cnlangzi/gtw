@@ -344,6 +344,7 @@ class SimHash {
 
   /**
    * Compute hash for a single token.
+   * Produces a full 64-bit hash using a two-round MixHash approach.
    */
   hashToken(token) {
     let hash = 0;
@@ -351,9 +352,16 @@ class SimHash {
       hash = ((hash << 5) - hash) + token.charCodeAt(i);
       hash = hash & hash; // Convert to 32bit integer
     }
-    // Expand to this.hashBits
-    const h = BigInt(hash >>> 0);
-    return h;
+    // Round 1: 32-bit hash
+    const h1 = BigInt(hash >>> 0);
+    // Round 2: mix bits to produce upper 32 bits
+    let hash2 = 0;
+    for (let i = 0; i < token.length; i++) {
+      hash2 = ((hash2 << 5) - hash2) ^ token.charCodeAt(i);
+      hash2 = hash2 & hash2;
+    }
+    const h2 = BigInt(hash2 >>> 0) << 32n;
+    return h1 | h2;
   }
 
   /**
@@ -420,9 +428,9 @@ class SimHash {
 }
 
 /**
- * Detect PR-internal duplicates using SimHash.
+ * Detect PR-internal reuse opportunities using SimHash.
  */
-function detectInternalDuplicates(newFunctions) {
+function detectInternalReuse(newFunctions) {
   const simhash = new SimHash();
   const codeBlocks = [];
 
@@ -458,6 +466,7 @@ function detectInternalDuplicates(newFunctions) {
         const occurrences = [block, ...similar.map(s => ({ name: s.name, file: s.file, line: s.line, code: s.code }))];
         internalDuplicates.push({
           newFunc: block.name,
+          file: block.file,
           existingFunc: similar[0].name,
           verdict: 'internal-duplicate',
           severity: occurrences.length >= 3 ? 'critical' : 'high',
@@ -475,7 +484,7 @@ function detectInternalDuplicates(newFunctions) {
 /**
  * Detect pattern anti-patterns in code.
  */
-function detectPatterns(newFunctions) {
+function detectAntiPatterns(newFunctions) {
   const findings = [];
 
   for (const fn of newFunctions) {
@@ -574,11 +583,11 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
   }
 
   // Step 5: PR Internal Duplicate Detection (SimHash)
-  const internalDuplicates = detectInternalDuplicates(newFunctions);
+  const internalDuplicates = detectInternalReuse(newFunctions);
   console.log(`[review-reuse] Found ${internalDuplicates.length} internal duplicates`);
 
   // Step 6: Pattern Anti-Pattern Detection
-  const patternFindings = detectPatterns(newFunctions);
+  const patternFindings = detectAntiPatterns(newFunctions);
   console.log(`[review-reuse] Found ${patternFindings.length} pattern anti-patterns`);
 
   // Step 6.5: Inline block findings (from inline code block extraction)
@@ -592,7 +601,7 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
   }));
 
   // Step 7: Specialized LLM call (now with actual code + structural matches)
-  const items = await callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings, structuralCandidates);
+  const items = await requestReuseVerdict(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings, structuralCandidates);
   console.log(`[review-reuse] LLM found ${items.length} reuse/similar items`);
 
   // Merge all findings
@@ -615,7 +624,19 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
     ...items,
   ];
 
-  return { items: allItems, newFunctions, inlineBlocks };
+  // Deduplicate: same (newFunc, existingFunc, verdict) → keep highest severity first
+  const severityRank = { critical: 0, high: 1, medium: 2, low: 3 };
+  const seen = new Map();
+  for (const item of allItems) {
+    const key = `${item.newFunc}::${item.existingFunc || ''}::${item.verdict}`;
+    const existing = seen.get(key);
+    if (!existing || severityRank[item.severity] < severityRank[existing.severity]) {
+      seen.set(key, item);
+    }
+  }
+  const deduplicated = Array.from(seen.values());
+
+  return { items: deduplicated, newFunctions, inlineBlocks };
 }
 
 // ---------------------------------------------------------------------------
@@ -860,7 +881,7 @@ function extractFromPatch(patchLines, file, lang) {
 /**
  * Call LLM to determine duplicate verdicts.
  */
-async function callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates = [], patternFindings = [], structuralCandidates = []) {
+async function requestReuseVerdict(newFunctions, candidates, sessionKey, internalDuplicates = [], patternFindings = [], structuralCandidates = []) {
   if (newFunctions.length === 0) return [];
 
   // Build prompt with ACTUAL CODE content (not just signatures)
