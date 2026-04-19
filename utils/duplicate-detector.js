@@ -39,6 +39,9 @@ const DUPLICATE_SYSTEM_PROMPT = `You are a duplicate detection specialist. Your 
 ## PATTERN ANTI-PATTERNS (detected in PR code):
 {patterns list}
 
+## STRUCTURAL MATCHES (similar call patterns — same utilities, different names):
+{structural matches list}
+
 For each new function:
 1. Compare against candidates (sorted by similarity score)
 2. Determine if functionality truly overlaps
@@ -131,6 +134,175 @@ const PATTERN_RULES = [
     message: 'Possible copy-paste code with duplicate TODO/FIXME comments',
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Call Pattern Extraction (Structural Match)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract call patterns from code — what methods are called on what objects.
+ * Used for structural matching: two functions with different names but similar
+ * call patterns may be functional duplicates.
+ *
+ * Examples:
+ *   'path.join(a, b).resolve(c)'  → ['path.join', 'path.resolve']
+ *   'fs.readFileSync(x).toString()'  → ['fs.readFileSync', 'toString']
+ *   'JSON.parse(x).filter(y)'  → ['JSON.parse', 'filter']
+ */
+function extractCallPatterns(code) {
+  if (!code) return [];
+
+  // Remove strings and comments to avoid false positives
+  const normalized = code
+    .replace(/['"`][^'"`]*['"`]/g, '')
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  const patterns = [];
+
+  // Match chained method calls: obj.method().method()
+  // Pattern: identifier.identifier (possibly chained)
+  const chainPattern = /\b([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\.\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(?=\(|\[|\.|$)/g;
+  let match;
+  while ((match = chainPattern.exec(normalized)) !== null) {
+    const obj = match[1];
+    const method = match[2];
+    // Skip common non-useful patterns
+    if (['if', 'else', 'for', 'while', 'switch', 'case', 'return', 'throw', 'new', 'typeof', 'void'].includes(obj)) continue;
+    if (['length', 'size', 'prototype', 'constructor', '__proto__'].includes(method)) continue;
+    patterns.push(`${obj}.${method}`);
+  }
+
+  // Also extract standalone function calls (no object prefix)
+  const funcCallPattern = /\b([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(\s*[^)]*\)/g;
+  while ((match = funcCallPattern.exec(normalized)) !== null) {
+    const func = match[1];
+    if (!patterns.some(p => p.endsWith(func)) && !['if', 'else', 'for', 'while', 'switch', 'case', 'return', 'throw', 'new', 'require', 'import', 'export', 'async', 'await'].includes(func)) {
+      patterns.push(func);
+    }
+  }
+
+  return [...new Set(patterns)].sort();
+}
+
+/**
+ * Compute Jaccard similarity between two call pattern sets.
+ */
+function patternSimilarity(a, b) {
+  if (!a.length || !b.length) return 0;
+  const setA = new Set(a);
+  const setB = new Set(b);
+  const intersection = a.filter(p => setB.has(p)).length;
+  const union = new Set([...a, ...b]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Find structurally similar functions from the base index.
+ * Two functions are structurally similar if they call the same underlying
+ * utilities, even if their names are different.
+ */
+function findStructuralMatches(targetPatterns, baseIndex, threshold = 0.4) {
+  const matches = [];
+
+  for (const [filePath, symbols] of Object.entries(baseIndex)) {
+    for (const symbol of symbols) {
+      // Skip if we don't have code or if this is the same symbol
+      if (!symbol._callPatterns) {
+        // Compute call patterns from signature and docstring (best effort)
+        const text = [symbol.name, symbol.signature, symbol.docstring].filter(Boolean).join(' ');
+        symbol._callPatterns = extractCallPatterns(text);
+      }
+
+      const sim = patternSimilarity(targetPatterns, symbol._callPatterns);
+      if (sim >= threshold) {
+        matches.push({
+          symbol,
+          file: filePath,
+          similarity: sim,
+        });
+      }
+    }
+  }
+
+  return matches.sort((a, b) => b.similarity - a.similarity);
+}
+
+// ---------------------------------------------------------------------------
+// Inline Code Block Detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Inline code block patterns to extract from diffs.
+ * These are non-function code snippets that warrant review.
+ */
+const INLINE_BLOCK_RULES = [
+  {
+    id: 'chained-string-ops',
+    name: 'Chained String Operations',
+    severity: 'medium',
+    pattern: /\.[a-zA-Z]+\([^)]*\)\s*\.\s*(?:split|map|filter|reduce|join|replace|trim|substring|substr|toLowerCase|toUpperCase)\s*\([^)]*\)/g,
+    description: 'Chain of string operations — consider extracting to helper',
+  },
+  {
+    id: 'nested-replace',
+    name: 'Nested Replace Chain',
+    severity: 'medium',
+    pattern: /\.replace\s*\([^,]+,\s*[^)]+\s*\+\s*[^)]+\s*\)/g,
+    description: 'Nested replace with concatenation — use transformation map',
+  },
+  {
+    id: 'path-join-resolve',
+    name: 'Redundant Path Operations',
+    severity: 'low',
+    pattern: /path\s*\.\s*(?:join|resolve|normalize|absolute)\s*\([^)]+\)\s*\.\s*(?:join|resolve|normalize|absolute)\s*\(/g,
+    description: 'Consecutive path operations that could be combined',
+  },
+];
+
+/**
+ * Extract inline code blocks from a diff (not inside function definitions).
+ * Returns blocks that match known anti-patterns.
+ */
+function extractInlineBlocksFromDiff(diff, file, lang) {
+  const blocks = [];
+
+  // Extract added lines only
+  const addedLines = diff.split('\n')
+    .filter(line => line.startsWith('+'))
+    .map(line => line.slice(1))
+    .join('\n');
+
+  if (!addedLines.trim()) return blocks;
+
+  for (const rule of INLINE_BLOCK_RULES) {
+    // Reset regex lastIndex
+    rule.pattern.lastIndex = 0;
+    let match;
+    while ((match = rule.pattern.exec(addedLines)) !== null) {
+      const snippet = match[0];
+      // Avoid duplicates
+      if (!blocks.some(b => b.snippet === snippet)) {
+        blocks.push({
+          type: 'inline-block',
+          ruleId: rule.id,
+          ruleName: rule.name,
+          snippet,
+          file,
+          lang,
+          severity: rule.severity,
+          description: rule.description,
+          verdict: 'pattern',
+          newFunc: `${rule.name} (${file})`,
+          existingFunc: null,
+          reason: rule.description,
+        });
+      }
+    }
+  }
+
+  return blocks;
+}
 
 // ---------------------------------------------------------------------------
 // SimHash for PR Internal Duplicate Detection
@@ -363,16 +535,34 @@ export async function detectDuplicates(prNum, baseBranch, worktreePath, repo, cl
     return { items: [], newFunctions: [] };
   }
 
-  // Step 3: Extract new functions from PR diff (with actual code)
-  const newFunctions = await extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, worktreePath);
-  console.log(`[duplicate-detector] Found ${newFunctions.length} new functions in PR`);
+  // Step 3: Extract new functions + inline blocks from PR diff (with actual code)
+  const { functions: newFunctions, inlineBlocks } = await extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, worktreePath);
+  console.log(`[duplicate-detector] Found ${newFunctions.length} new functions and ${inlineBlocks.length} inline blocks in PR`);
 
-  if (newFunctions.length === 0) {
-    return { items: [], newFunctions: [] };
+  if (newFunctions.length === 0 && inlineBlocks.length === 0) {
+    return { items: [], newFunctions: [], inlineBlocks: [] };
   }
 
   // Collect PR-modified files (for filtering candidates)
   const prFiles = new Set(newFunctions.map(fn => fn.file));
+
+  // Step 3.5: Structural Match — find functions with similar call patterns
+  const structuralCandidates = [];
+  for (const fn of newFunctions) {
+    if (!fn.code) continue;
+    const callPatterns = extractCallPatterns(fn.code);
+    if (callPatterns.length < 2) continue; // Need at least 2 call patterns to match
+    const matches = findStructuralMatches(callPatterns, baseIndex, 0.4);
+    // Filter out candidates from PR-modified files
+    const filtered = matches.filter(m => !prFiles.has(m.file));
+    if (filtered.length > 0) {
+      structuralCandidates.push({
+        newFunc: fn,
+        structuralMatches: filtered.slice(0, 3),
+      });
+    }
+  }
+  console.log(`[duplicate-detector] Found ${structuralCandidates.length} structural matches`);
 
   // Step 4: Fuzzy search for each new function
   const candidates = [];
@@ -391,18 +581,41 @@ export async function detectDuplicates(prNum, baseBranch, worktreePath, repo, cl
   const patternFindings = detectPatterns(newFunctions);
   console.log(`[duplicate-detector] Found ${patternFindings.length} pattern anti-patterns`);
 
-  // Step 7: Specialized LLM call (now with actual code content)
-  const items = await callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings);
+  // Step 6.5: Inline block findings (from inline code block extraction)
+  const inlineFindings = inlineBlocks.map(block => ({
+    newFunc: block.newFunc,
+    existingFunc: block.existingFunc,
+    verdict: block.verdict,
+    severity: block.severity,
+    reason: block.description,
+    code: block.snippet,
+  }));
+
+  // Step 7: Specialized LLM call (now with actual code + structural matches)
+  const items = await callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings, structuralCandidates);
   console.log(`[duplicate-detector] LLM found ${items.length} duplicate/similar items`);
 
   // Merge all findings
+  const structuralItems = structuralCandidates
+    .filter(sc => sc.structuralMatches && sc.structuralMatches.length > 0)
+    .map(sc => ({
+      newFunc: sc.newFunc.name,
+      existingFunc: sc.structuralMatches[0].symbol.name,
+      verdict: 'similar',
+      severity: 'medium',
+      reason: `Structural match: both call ${sc.structuralMatches[0].similarity >= 0.7 ? 'similar' : 'partially overlapping'} utility patterns (${sc.structuralMatches[0].similarity.toFixed(2)} similarity)`,
+      code: sc.newFunc.code ? sc.newFunc.code.slice(0, 150) : null,
+    }));
+
   const allItems = [
     ...internalDuplicates,
     ...patternFindings,
+    ...inlineFindings,
+    ...structuralItems,
     ...items,
   ];
 
-  return { items: allItems, newFunctions };
+  return { items: allItems, newFunctions, inlineBlocks };
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +633,7 @@ async function extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, work
 
   if (!headRef) {
     console.log(`[duplicate-detector] No head ref for PR #${prNum}`);
-    return [];
+    return { functions: [], inlineBlocks: [] };
   }
 
   // Get list of changed files
@@ -433,17 +646,18 @@ async function extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, work
       changedFiles = getChangedFiles(worktreePath, baseRef, headRef);
     } catch (e) {
       console.log(`[duplicate-detector] Failed to get changed files: ${e.message}`);
-      return [];
+      return { functions: [], inlineBlocks: [] };
     }
   }
 
   if (changedFiles.length === 0) {
     console.log(`[duplicate-detector] No changed files found`);
-    return [];
+    return { functions: [], inlineBlocks: [] };
   }
 
   // Get diff for each changed file
   const newFunctions = [];
+  const allInlineBlocks = [];
 
   for (const file of changedFiles) {
     const ext = file.split('.').pop().toLowerCase();
@@ -459,12 +673,16 @@ async function extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, work
       // Parse diff to find new function definitions
       const funcs = parseFunctionsFromDiff(diff, file, lang);
       newFunctions.push(...funcs);
+
+      // Extract inline code blocks (non-function patterns)
+      const inlineBlocks = extractInlineBlocksFromDiff(diff, file, lang);
+      allInlineBlocks.push(...inlineBlocks);
     } catch (e) {
       console.log(`[duplicate-detector] Failed to diff ${file}: ${e.message}`);
     }
   }
 
-  return newFunctions;
+  return { functions: newFunctions, inlineBlocks: allInlineBlocks };
 }
 
 /**
@@ -642,7 +860,7 @@ function extractFromPatch(patchLines, file, lang) {
 /**
  * Call LLM to determine duplicate verdicts.
  */
-async function callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates = [], patternFindings = []) {
+async function callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates = [], patternFindings = [], structuralCandidates = []) {
   if (newFunctions.length === 0) return [];
 
   // Build prompt with ACTUAL CODE content (not just signatures)
@@ -677,11 +895,26 @@ async function callDuplicateLLM(newFunctions, candidates, sessionKey, internalDu
     ? patternFindings.map(p => `- ${p.newFunc}: ${p.reason}`).join('\n')
     : '(none)';
 
+  // Build structural matches list
+  const structuralList = structuralCandidates.length > 0
+    ? structuralCandidates
+        .map(sc => {
+          if (!sc.structuralMatches || sc.structuralMatches.length === 0) return '';
+          const matches = sc.structuralMatches
+            .map(m => `  - ${m.symbol.name} (${m.file}, similarity: ${m.similarity.toFixed(2)})`)
+            .join('\n');
+          return `NEW FUNCTION: ${sc.newFunc.name}\n${matches}`;
+        })
+        .filter(Boolean)
+        .join('\n\n')
+    : '(none)';
+
   const systemPrompt = DUPLICATE_SYSTEM_PROMPT
     .replace('{newFunctions list}', newFuncList || '(none)')
     .replace('{candidates list}', candList || '(no candidates found)')
     .replace('{internal duplicates list}', internalList)
-    .replace('{patterns list}', patternsList);
+    .replace('{patterns list}', patternsList)
+    .replace('{structural matches list}', structuralList);
 
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
