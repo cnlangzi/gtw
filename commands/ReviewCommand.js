@@ -192,40 +192,110 @@ export class ReviewCommand extends Commander {
 
   _buildComment(prNum, prData, results) {
     const items = results.items || [];
+
+    // Categorize items by verdict and severity
     const criticalItems = items.filter(
       (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
     );
     const similarItems = items.filter((i) => i.verdict === 'similar');
+    const internalDuplicates = items.filter((i) => i.verdict === 'internal-duplicate');
+    const patternItems = items.filter((i) => i.verdict === 'pattern');
+    const mediumItems = items.filter(
+      (i) => i.verdict === 'duplicate' && i.severity === 'medium'
+    );
+    const lowItems = items.filter(
+      (i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict)
+    );
 
-    let comment = `## Duplicate Detection Review\n\n`;
-    comment += `**PR:** #${prNum} — ${prData.pr.title}\n`;
-    comment += `**Base:** ${prData.baseBranch}\n\n`;
+    // Summary counts
+    const summary = {
+      critical: items.filter((i) => i.severity === 'critical').length,
+      high: items.filter((i) => i.severity === 'high').length,
+      medium: items.filter((i) => i.severity === 'medium').length,
+      low: items.filter((i) => i.severity === 'low').length,
+      internal: internalDuplicates.length,
+    };
 
-    comment += `### Functions Analyzed: ${results.newFunctions?.length || 0}\n\n`;
+    let comment = '## 🔍 Code Reuse Review — PR #' + prNum + '\n\n';
+    comment += '**PR:** #' + prNum + ' — ' + prData.pr.title + '\n';
+    comment += '**Base:** ' + prData.baseBranch + '\n\n';
 
+    comment += '### 📊 Summary\n\n';
+    comment += '| Type | Count |\n';
+    comment += '|------|-------|\n';
+    comment += '| 🔴 Critical | ' + summary.critical + ' |\n';
+    comment += '| 🟠 High | ' + summary.high + ' |\n';
+    comment += '| 🟡 Medium | ' + summary.medium + ' |\n';
+    comment += '| 🟢 Low | ' + summary.low + ' |\n';
+    comment += '| 💡 Internal Duplicates | ' + summary.internal + ' |\n\n';
+
+    comment += '### Functions Analyzed: ' + (results.newFunctions?.length || 0) + '\n\n';
+
+    // Critical duplicates
     if (criticalItems.length > 0) {
-      comment += `### 🚨 Duplicates (${criticalItems.length})\n\n`;
+      comment += '### 🚨 Critical Duplicates (' + criticalItems.length + ')\n\n';
       for (const item of criticalItems) {
-        comment += `#### ${item.newFunc}\n`;
-        comment += `**Duplicates:** ${item.existingFunc}\n`;
-        comment += `**Severity:** ${item.severity}\n`;
-        comment += `**Reason:** ${item.reason}\n\n`;
+        const severityEmoji = item.severity === 'critical' ? '🔴' : '🟠';
+        comment += '**' + severityEmoji + ' `' + item.newFunc + '`** (' + item.existingFunc + ')\n';
+        comment += '> ' + item.reason + '\n\n';
+        if (item.code) {
+          comment += '```\n' + item.code.slice(0, 200) + (item.code.length > 200 ? '...' : '') + '\n```\n\n';
+        }
       }
     }
 
+    // Similar patterns
     if (similarItems.length > 0) {
-      comment += `### ⚠️ Similar (${similarItems.length})\n\n`;
+      comment += '### ⚠️ Similar Patterns (' + similarItems.length + ')\n\n';
       for (const item of similarItems) {
-        comment += `- ${item.newFunc} → similar to ${item.existingFunc}: ${item.reason}`;
+        comment += '- **`' + item.newFunc + '`** → similar to **`' + item.existingFunc + '`**: ' + item.reason + '\n';
       }
-      comment += '\n\n';
+      comment += '\n';
+    }
+
+    // Internal duplicates
+    if (internalDuplicates.length > 0) {
+      comment += '### 💡 Internal Duplicates (' + internalDuplicates.length + ')\n\n';
+      for (const item of internalDuplicates) {
+        const occurrences = item.occurrences || [{ file: 'unknown', line: 0 }];
+        const locList = occurrences.map((o) => '  - ' + o.file + ':' + o.line).join('\n');
+        comment += '**`' + item.newFunc + '`** appears ' + occurrences.length + '× in this PR:\n' + locList + '\n';
+        comment += '> ' + item.reason + '\n\n';
+      }
+    }
+
+    // Pattern anti-patterns
+    if (patternItems.length > 0) {
+      comment += '### 🔧 Pattern Anti-Patterns (' + patternItems.length + ')\n\n';
+      for (const item of patternItems) {
+        comment += '- **`' + item.newFunc + '`**: ' + item.reason + '\n';
+      }
+      comment += '\n';
+    }
+
+    // Medium severity
+    if (mediumItems.length > 0) {
+      comment += '### 🟡 Medium Priority (' + mediumItems.length + ')\n\n';
+      for (const item of mediumItems) {
+        comment += '- **`' + item.newFunc + '`** → ' + item.existingFunc + ': ' + item.reason + '\n';
+      }
+      comment += '\n';
+    }
+
+    // Low priority
+    if (lowItems.length > 0) {
+      comment += '### 🟢 Low Priority (' + lowItems.length + ')\n\n';
+      for (const item of lowItems) {
+        comment += '- **`' + item.newFunc + '`**: ' + item.reason + '\n';
+      }
+      comment += '\n';
     }
 
     if (items.length === 0) {
-      comment += `✅ **No duplicates or similar functions found.**\n\n`;
+      comment += '✅ **No duplicates, similar functions, or patterns found.**\n\n';
     }
 
-    comment += `---\n*Duplicate detection via codebase index + fuzzy search + LLM verdict*`;
+    comment += '---\n*Code Reuse detection via SimHash + codebase index + fuzzy search + LLM semantic analysis*';
 
     return comment;
   }
@@ -234,7 +304,7 @@ export class ReviewCommand extends Commander {
     // Find existing comment by bot
     const comments = await client.request('GET', `/repos/${repo}/issues/${prNum}/comments`);
     const myLogin = (await client.request('GET', '/user')).login;
-    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## Duplicate Detection Review'));
+    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## 🔍 Code Reuse Review'));
 
     if (existing) {
       await client.request('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, {
