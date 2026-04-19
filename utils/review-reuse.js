@@ -262,41 +262,86 @@ const INLINE_BLOCK_RULES = [
 
 /**
  * Extract inline code blocks from a diff (not inside function definitions).
- * Returns blocks that match known anti-patterns.
+ * Returns blocks that match known anti-patterns, excluding code that
+ * belongs to newly added functions (those are handled separately).
+ *
+ * @param {string} diff - Raw git diff string
+ * @param {string} file - File path
+ * @param {string} lang - Language identifier
+ * @param {Array} functions - Parsed functions with {name, line, code} to exclude
  */
-function extractInlineBlocksFromDiff(diff, file, lang) {
+function extractInlineBlocksFromDiff(diff, file, lang, functions = []) {
   const blocks = [];
 
-  // Extract added lines only
-  const addedLines = diff.split('\n')
-    .filter(line => line.startsWith('+'))
-    .map(line => line.slice(1))
-    .join('\n');
+  // Build a Set of line numbers that belong to function bodies.
+  // These will be excluded from inline block scanning.
+  const funcLineNumbers = new Set();
+  for (const fn of functions) {
+    if (!fn.code) continue;
+    // fn.line is the starting line; estimate body end by counting braces
+    let endLine = fn.line;
+    let braceDepth = 0;
+    for (const cl of fn.code.split('\n')) {
+      braceDepth += (cl.match(/{/g) || []).length - (cl.match(/}/g) || []).length;
+      if (braceDepth > 0) endLine++;
+      else if (braceDepth === 0 && braceDepth !== 0) break; // Already closed
+    }
+    for (let l = fn.line; l <= endLine; l++) funcLineNumbers.add(l);
+  }
 
-  if (!addedLines.trim()) return blocks;
+  // Parse diff to get added lines with line numbers
+  const lines = diff.split('\n');
+  let baseLineNum = 0;
+  let headLineNum = 0;
+  const addedLines = []; // { lineNumber, text }
+
+  for (const line of lines) {
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunkMatch) {
+      baseLineNum = parseInt(hunkMatch[1], 10) - 1;
+      headLineNum = parseInt(hunkMatch[3], 10) - 1;
+      continue;
+    }
+    if (line.startsWith('+')) {
+      headLineNum++;
+      if (!funcLineNumbers.has(headLineNum)) {
+        addedLines.push({ lineNumber: headLineNum, text: line.slice(1) });
+      }
+    } else if (line.startsWith('-')) {
+      baseLineNum++;
+    } else if (line.startsWith(' ')) {
+      baseLineNum++;
+      headLineNum++;
+    }
+  }
+
+  if (addedLines.length === 0) return blocks;
 
   for (const rule of INLINE_BLOCK_RULES) {
     // Reset regex lastIndex
     rule.pattern.lastIndex = 0;
-    let match;
-    while ((match = rule.pattern.exec(addedLines)) !== null) {
-      const snippet = match[0];
-      // Avoid duplicates
-      if (!blocks.some(b => b.snippet === snippet)) {
-        blocks.push({
-          type: 'inline-block',
-          ruleId: rule.id,
-          ruleName: rule.name,
-          snippet,
-          file,
-          lang,
-          severity: rule.severity,
-          description: rule.description,
-          verdict: 'pattern',
-          newFunc: `${rule.name} (${file})`,
-          existingFunc: null,
-          reason: rule.description,
-        });
+    for (const { lineNumber, text } of addedLines) {
+      rule.pattern.lastIndex = 0;
+      if (rule.pattern.test(text)) {
+        const snippet = text.trim();
+        // Avoid duplicate blocks with same snippet
+        if (!blocks.some(b => b.snippet === snippet)) {
+          blocks.push({
+            type: 'inline-block',
+            ruleId: rule.id,
+            ruleName: rule.name,
+            snippet,
+            file,
+            lang,
+            line: lineNumber,
+            severity: rule.severity,
+            description: rule.description,
+            verdict: 'pattern',
+            newFunc: `${rule.name} (${file}:${lineNumber})`,
+            existingFunc: null,
+            reason: rule.description,
+          });
+        }
       }
     }
   }
@@ -625,10 +670,13 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
   ];
 
   // Deduplicate: same (newFunc, existingFunc, verdict) → keep highest severity first
+  // For 'pattern' verdict, also include patternId so distinct anti-patterns on the
+  // same function are preserved rather than collapsed into one.
   const severityRank = { critical: 0, high: 1, medium: 2, low: 3 };
   const seen = new Map();
   for (const item of allItems) {
-    const key = `${item.newFunc}::${item.existingFunc || ''}::${item.verdict}`;
+    const patternDiscriminator = item.verdict === 'pattern' ? (item.patternId || item.ruleId || '') : '';
+    const key = `${item.newFunc}::${item.existingFunc || ''}::${item.verdict}::${patternDiscriminator}`;
     const existing = seen.get(key);
     if (!existing || severityRank[item.severity] < severityRank[existing.severity]) {
       seen.set(key, item);
@@ -696,7 +744,8 @@ async function extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, work
       newFunctions.push(...funcs);
 
       // Extract inline code blocks (non-function patterns)
-      const inlineBlocks = extractInlineBlocksFromDiff(diff, file, lang);
+      // Pass parsed functions so we can exclude lines inside their bodies
+      const inlineBlocks = extractInlineBlocksFromDiff(diff, file, lang, funcs);
       allInlineBlocks.push(...inlineBlocks);
     } catch (e) {
       console.log(`[duplicate-detector] Failed to diff ${file}: ${e.message}`);
