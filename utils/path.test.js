@@ -81,15 +81,41 @@ describe('expandPath', () => {
       const result = expandPath(FIXTURES.fileAsDir);
       assert.strictEqual(result.isValid, false);
     });
+
+    it('treats bare relative path as ~/path (default to homedir)', () => {
+      // "code/gfwproxy" → ~/code/gfwproxy
+      const result = expandPath('code/gfwproxy');
+      assert.strictEqual(result.expanded, join(homedir(), 'code/gfwproxy'));
+      assert.strictEqual(result.isAbsolute, true); // mapped to ~/style, passes absolute-path check
+    });
+
+    it('marks bare relative path as ~/path (isValid depends on expansion target)', () => {
+      // ~/fixtures/rel may or may not exist in homedir; we just verify the expansion target
+      const result = expandPath('fixtures/rel');
+      assert.strictEqual(result.expanded, join(homedir(), 'fixtures/rel'));
+      assert.strictEqual(result.isAbsolute, true); // mapped to ~/style
+    });
+
+    it('treats ./foo as relative to cwd (not homedir)', () => {
+      const result = expandPath('./fixtures');
+      assert.ok(result.expanded.startsWith(process.cwd()), `Got: ${result.expanded}`);
+      assert.strictEqual(result.isAbsolute, false);
+    });
+
+    it('treats ../foo as relative to cwd parent (not homedir)', () => {
+      const result = expandPath('../code');
+      assert.strictEqual(result.isAbsolute, false);
+      assert.ok(result.expanded.endsWith('/code'), `Got: ${result.expanded}`);
+    });
   });
 
   // ─── Relative path handling ────────────────────────────────────
 
   describe('relative paths', () => {
-    it('resolves relative path against cwd', () => {
-      const result = expandPath('fixtures/rel');
+    it('resolves ./ prefixed path against cwd', () => {
+      const result = expandPath('./utils');
       assert.strictEqual(result.isAbsolute, false);
-      assert.ok(result.expanded.endsWith('fixtures/rel'), `Got: ${result.expanded}`);
+      assert.ok(result.expanded.startsWith(process.cwd()), `Got: ${result.expanded}`);
     });
   });
 
