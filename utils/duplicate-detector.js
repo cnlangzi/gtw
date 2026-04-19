@@ -128,7 +128,7 @@ const PATTERN_RULES = [
     name: 'Potential Copy-Paste',
     severity: 'high',
     pattern: /(?:TODO|FIXME|HACK|XXX|NOTE):.*(?:TODO|FIXME|HACK|XXX|NOTE):/,
-    message: 'Possible copy-paste code with遗留 comments',
+    message: 'Possible copy-paste code with duplicate TODO/FIXME comments',
   },
 ];
 
@@ -392,7 +392,7 @@ export async function detectDuplicates(prNum, baseBranch, worktreePath, repo, cl
   console.log(`[duplicate-detector] Found ${patternFindings.length} pattern anti-patterns`);
 
   // Step 7: Specialized LLM call (now with actual code content)
-  const items = await callDuplicateLLM(newFunctions, candidates, sessionKey);
+  const items = await callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings);
   console.log(`[duplicate-detector] LLM found ${items.length} duplicate/similar items`);
 
   // Merge all findings
