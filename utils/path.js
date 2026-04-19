@@ -24,11 +24,11 @@ export function expandPath(inputPath) {
     expanded = join(homedir(), inputPath.slice(2));
     usesHomedir = true;
   } else if (inputPath.startsWith('~')) {
-    // ~user/path style — strip ~user, replace with current homedir
-    const afterTilde = inputPath.slice(1);
-    const slashIdx = afterTilde.indexOf('/');
-    const pathPart = slashIdx >= 0 ? afterTilde.slice(slashIdx) : '';
-    expanded = join(homedir(), pathPart);
+    // ~user/path or ~user — keep the full segment after ~ as the first path under homedir
+    // ~code/project → ~/code/project  (preserves the typo "code/" segment)
+    // ~code          → ~/code
+    const afterTilde = inputPath.slice(1); // "user/path" or "user"
+    expanded = join(homedir(), afterTilde);
     usesHomedir = true;
   } else if (isAbsolute(inputPath)) {
     expanded = inputPath;

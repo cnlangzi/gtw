@@ -102,6 +102,18 @@ describe('expandPath', () => {
       assert.strictEqual(result.isAbsolute, false);
     });
 
+    it('preserves user segment in ~user/path (no slash after ~)', () => {
+      // ~code/project → ~/code/project (NOT ~/project)
+      const result = expandPath('~code/project');
+      assert.strictEqual(result.expanded, join(homedir(), 'code/project'));
+      assert.notStrictEqual(result.expanded, join(homedir(), 'project'));
+    });
+
+    it('treats ~user with no slash as ~/user', () => {
+      const result = expandPath('~code');
+      assert.strictEqual(result.expanded, join(homedir(), 'code'));
+    });
+
     it('treats ../foo as relative to cwd parent (not homedir)', () => {
       const result = expandPath('../code');
       assert.strictEqual(result.isAbsolute, false);
