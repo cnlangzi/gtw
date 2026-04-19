@@ -1,7 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
 import { exec } from '../utils/exec.js';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 
@@ -18,25 +18,38 @@ export class MakeCommand extends Commander {
     let workdir = null;
     const filteredArgs = [];
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--on' && i + 1 < args.length) {
+      if (args[i] === '--on') {
         const pathArg = args[i + 1];
+
+        // Detect missing path argument
+        if (!pathArg || pathArg.startsWith('-')) {
+          return {
+            ok: false,
+            message: '/gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
+            display: '❌ /gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
+          };
+        }
         i++; // skip next arg
 
-        // Expand ~ to homedir
-        const expandedPath = pathArg.startsWith('~')
-          ? join(homedir(), pathArg.slice(1))
-          : pathArg;
+        // Expand ~ or ~/ to homedir
+        let expandedPath = pathArg;
+        if (pathArg === '~') {
+          expandedPath = homedir();
+        } else if (pathArg.startsWith('~/')) {
+          expandedPath = join(homedir(), pathArg.slice(2));
+        }
+
         // Resolve to absolute path
         workdir = isAbsolute(expandedPath)
           ? expandedPath
           : join(process.cwd(), expandedPath);
 
-        // Validate directory exists
-        if (!existsSync(workdir)) {
+        // Validate it's a directory
+        if (!existsSync(workdir) || !statSync(workdir).isDirectory()) {
           return {
             ok: false,
-            message: `Directory not found: ${workdir}`,
-            display: `❌ Directory not found: ${workdir}`,
+            message: `Not a directory: ${workdir}`,
+            display: `❌ Not a directory: ${workdir}`,
           };
         }
       } else {
