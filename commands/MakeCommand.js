@@ -1,24 +1,62 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
 import { exec } from '../utils/exec.js';
+import { expandPath } from '../utils/path.js';
 
 /**
- * /gtw make [target]
- * Execute a make target in the current workdir.
+ * /gtw make [target] [--on <path>]
+ * Execute a make target in the current workdir or in a specified directory.
+ *
+ * Options:
+ *   --on <path>  Execute make in the specified directory (one-time, not persisted)
  */
 export class MakeCommand extends Commander {
   async execute(args) {
-    const wip = getWip();
+    // Parse --on <path> from args
+    let workdir = null;
+    const filteredArgs = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--on') {
+        const pathArg = args[i + 1];
 
-    if (!wip?.workdir) {
-      return {
-        ok: false,
-        message: 'No workdir set. Run /gtw on <workdir> first.',
-        display: '❌ No workdir set. Run /gtw on <workdir> first.',
-      };
+        // Detect missing path argument
+        if (!pathArg || pathArg.startsWith('-')) {
+          return {
+            ok: false,
+            message: '/gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
+            display: '❌ /gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
+          };
+        }
+        i++; // skip next arg
+
+        const { expanded, isValid } = expandPath(pathArg);
+        if (!isValid) {
+          return {
+            ok: false,
+            message: `Not a directory: ${expanded}`,
+            display: `❌ Not a directory: ${expanded}`,
+          };
+        }
+        workdir = expanded;
+      } else {
+        filteredArgs.push(args[i]);
+      }
     }
 
-    const target = args.join(' ').trim();
+    // If no --on provided, use wip.workdir
+    if (!workdir) {
+      const wip = getWip();
+      if (!wip?.workdir) {
+        return {
+          ok: false,
+          message: 'No workdir set. Run /gtw on <workdir> first.',
+          display: '❌ No workdir set. Run /gtw on <workdir> first.',
+        };
+      }
+      workdir = wip.workdir;
+    }
+
+    const target = filteredArgs.join(' ').trim();
     const cmd = target ? `make ${target}` : 'make';
 
     let stdout = '';
@@ -27,7 +65,7 @@ export class MakeCommand extends Commander {
 
     try {
       stdout = exec(cmd, {
-        cwd: wip.workdir,
+        cwd: workdir,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
