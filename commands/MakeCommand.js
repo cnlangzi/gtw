@@ -66,7 +66,7 @@ export class MakeCommand extends Commander {
 
     try {
       stdout = exec(cmd, {
-        cwd: wip.workdir,
+        cwd: workdir,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
