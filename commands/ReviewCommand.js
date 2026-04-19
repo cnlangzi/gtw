@@ -11,7 +11,7 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
-import { detectReuse } from '../utils/reuse-reviewer.js';
+import { detectReuse } from '../utils/review-reuse.js';
 import { prepareReviewWorktree } from './ReviewWorktree.js';
 
 export class ReviewCommand extends Commander {

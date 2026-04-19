@@ -515,21 +515,21 @@ function detectPatterns(newFunctions) {
  * @returns {Promise<{ items: DuplicateItem[], newFunctions: NewFunction[] }>}
  */
 export async function detectReuse(prNum, baseBranch, worktreePath, repo, client, sessionKey) {
-  console.log(`[reuse-reviewer] Starting for PR #${prNum} (base: ${baseBranch})`);
+  console.log(`[review-reuse] Starting for PR #${prNum} (base: ${baseBranch})`);
 
   // Step 1: Ensure base branch index is fresh
   const freshness = checkIndexFreshness(repo, baseBranch, worktreePath);
-  console.log(`[reuse-reviewer] Freshness: ${freshness.fresh} (indexed: ${freshness.indexedCommit?.slice(0, 7)}, current: ${freshness.currentCommit?.slice(0, 7)})`);
+  console.log(`[review-reuse] Freshness: ${freshness.fresh} (indexed: ${freshness.indexedCommit?.slice(0, 7)}, current: ${freshness.currentCommit?.slice(0, 7)})`);
 
   if (!freshness.fresh) {
-    console.log(`[reuse-reviewer] Index stale, rebuilding for ${baseBranch}...`);
+    console.log(`[review-reuse] Index stale, rebuilding for ${baseBranch}...`);
     getOrBuildIndex(worktreePath, repo, baseBranch);
   }
 
   // Step 2: Load base branch index
   const { files: baseIndex } = loadIndex(repo, baseBranch);
   if (!baseIndex || Object.keys(baseIndex).length === 0) {
-    console.log(`[reuse-reviewer] No index found for ${repo}@${baseBranch}, building...`);
+    console.log(`[review-reuse] No index found for ${repo}@${baseBranch}, building...`);
     getOrBuildIndex(worktreePath, repo, baseBranch);
     const idx = loadIndex(repo, baseBranch);
     return { items: [], newFunctions: [] };
@@ -537,7 +537,7 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
 
   // Step 3: Extract new functions + inline blocks from PR diff (with actual code)
   const { functions: newFunctions, inlineBlocks } = await extractNewFunctionsFromDiff(prNum, baseBranch, client, repo, worktreePath);
-  console.log(`[reuse-reviewer] Found ${newFunctions.length} new functions and ${inlineBlocks.length} inline blocks in PR`);
+  console.log(`[review-reuse] Found ${newFunctions.length} new functions and ${inlineBlocks.length} inline blocks in PR`);
 
   if (newFunctions.length === 0 && inlineBlocks.length === 0) {
     return { items: [], newFunctions: [], inlineBlocks: [] };
@@ -562,7 +562,7 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
       });
     }
   }
-  console.log(`[reuse-reviewer] Found ${structuralCandidates.length} structural matches`);
+  console.log(`[review-reuse] Found ${structuralCandidates.length} structural matches`);
 
   // Step 4: Fuzzy search for each new function
   const candidates = [];
@@ -575,11 +575,11 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
 
   // Step 5: PR Internal Duplicate Detection (SimHash)
   const internalDuplicates = detectInternalDuplicates(newFunctions);
-  console.log(`[reuse-reviewer] Found ${internalDuplicates.length} internal duplicates`);
+  console.log(`[review-reuse] Found ${internalDuplicates.length} internal duplicates`);
 
   // Step 6: Pattern Anti-Pattern Detection
   const patternFindings = detectPatterns(newFunctions);
-  console.log(`[reuse-reviewer] Found ${patternFindings.length} pattern anti-patterns`);
+  console.log(`[review-reuse] Found ${patternFindings.length} pattern anti-patterns`);
 
   // Step 6.5: Inline block findings (from inline code block extraction)
   const inlineFindings = inlineBlocks.map(block => ({
@@ -593,7 +593,7 @@ export async function detectReuse(prNum, baseBranch, worktreePath, repo, client,
 
   // Step 7: Specialized LLM call (now with actual code + structural matches)
   const items = await callDuplicateLLM(newFunctions, candidates, sessionKey, internalDuplicates, patternFindings, structuralCandidates);
-  console.log(`[reuse-reviewer] LLM found ${items.length} reuse/similar items`);
+  console.log(`[review-reuse] LLM found ${items.length} reuse/similar items`);
 
   // Merge all findings
   const structuralItems = structuralCandidates
