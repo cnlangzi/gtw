@@ -1,9 +1,7 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
 import { exec } from '../utils/exec.js';
-import { existsSync, statSync } from 'fs';
-import { join, isAbsolute } from 'path';
-import { homedir } from 'os';
+import { expandPath } from '../utils/path.js';
 
 /**
  * /gtw make [target] [--on <path>]
@@ -31,27 +29,15 @@ export class MakeCommand extends Commander {
         }
         i++; // skip next arg
 
-        // Expand ~ or ~/ to homedir
-        let expandedPath = pathArg;
-        if (pathArg === '~') {
-          expandedPath = homedir();
-        } else if (pathArg.startsWith('~/')) {
-          expandedPath = join(homedir(), pathArg.slice(2));
-        }
-
-        // Resolve to absolute path
-        workdir = isAbsolute(expandedPath)
-          ? expandedPath
-          : join(process.cwd(), expandedPath);
-
-        // Validate it's a directory
-        if (!existsSync(workdir) || !statSync(workdir).isDirectory()) {
+        const { expanded, isValid } = expandPath(pathArg);
+        if (!isValid) {
           return {
             ok: false,
-            message: `Not a directory: ${workdir}`,
-            display: `❌ Not a directory: ${workdir}`,
+            message: `Not a directory: ${expanded}`,
+            display: `❌ Not a directory: ${expanded}`,
           };
         }
+        workdir = expanded;
       } else {
         filteredArgs.push(args[i]);
       }

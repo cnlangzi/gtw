@@ -1,8 +1,6 @@
 import { Commander } from './Commander.js';
 import { injectPlanModeDirective } from '../utils/session.js';
-import { existsSync } from 'fs';
-import { join, isAbsolute } from 'path';
-import { homedir } from 'os';
+import { expandPath } from '../utils/path.js';
 import { getRemoteRepo } from '../utils/git.js';
 import { saveWip } from '../utils/wip.js';
 
@@ -16,17 +14,12 @@ export class OnCommand extends Commander {
     const workdir = args[0];
     if (!workdir) throw new Error('Usage: /gtw on <workdir>');
 
-    const expandedWorkdir = workdir.startsWith('~')
-      ? join(homedir(), workdir.slice(1))
-      : workdir;
-    const absWorkdir = isAbsolute(expandedWorkdir)
-      ? expandedWorkdir
-      : join(process.cwd(), expandedWorkdir);
+    const { expanded: absWorkdir, isAbsolute: wasAbsolute, isValid } = expandPath(workdir);
 
-    if (!isAbsolute(absWorkdir)) {
+    if (!wasAbsolute) {
       throw new Error('Please use an absolute path, e.g. /Users/name/code/myproject or ~/code/myproject');
     }
-    if (!existsSync(absWorkdir)) throw new Error(`Directory not found: ${absWorkdir}`);
+    if (!isValid) throw new Error(`Directory not found: ${absWorkdir}`);
 
     const repo = getRemoteRepo(absWorkdir);
     saveWip({ workdir: absWorkdir, repo, sessionKey: this.sessionKey, createdAt: new Date().toISOString() });
