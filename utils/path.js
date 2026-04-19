@@ -19,8 +19,13 @@ export function expandPath(inputPath) {
   } else if (inputPath.startsWith('~/')) {
     expanded = join(homedir(), inputPath.slice(2));
   } else if (inputPath.startsWith('~')) {
-    // ~user/path style - fall back to homedir for ~user part
-    expanded = join(homedir(), inputPath.slice(1));
+    // ~user/path style — strip ~user, replace with current homedir
+    // (does not resolve to actual user's home dir; requires os.userInfo for full support)
+    const afterTilde = inputPath.slice(1);
+    const slashIdx = afterTilde.indexOf('/');
+    const userPart = slashIdx >= 0 ? afterTilde.slice(0, slashIdx) : afterTilde;
+    const pathPart = slashIdx >= 0 ? afterTilde.slice(slashIdx) : '';
+    expanded = join(homedir(), pathPart);
   } else {
     expanded = inputPath;
   }
