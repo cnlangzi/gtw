@@ -131,7 +131,7 @@ export class ReviewCommand extends Commander {
         prData.baseBranch,
         worktreePath,
         repo,
-        client,
+        prData.pr.headRef,
         this.sessionKey
       );
     } catch (e) {
@@ -158,7 +158,8 @@ export class ReviewCommand extends Commander {
           i.verdict === 'function-deleted' ||
           i.verdict === 'signature-changed' ||
           i.verdict === 'caller-lost' ||
-          i.verdict === 'export-removed') &&
+          i.verdict === 'export-removed' ||
+          i.verdict === 'semantic-change') &&
         ['critical', 'high'].includes(i.severity)
     );
 
@@ -212,6 +213,8 @@ export class ReviewCommand extends Commander {
           summary.push(`  - [Caller Lost] ${item.funcName} in ${item.file}`);
         } else if (item.verdict === 'export-removed') {
           summary.push(`  - [Export Removed] ${item.funcName} in ${item.file}`);
+        } else if (item.verdict === 'semantic-change') {
+          summary.push(`  - [Semantic Change] ${item.funcName} in ${item.file}`);
         }
         summary.push(`    Reason: ${item.reason}`);
       }

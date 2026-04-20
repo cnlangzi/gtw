@@ -2,7 +2,7 @@
  * Break-Change Detection — Review flow Step 2.
  *
  * Detects when PR modifications break existing code that depends on
- * modified functions. Uses on-demand LSP analysis per language.
+ * modified functions. Uses regex+grep-based function analysis.
  *
  * Detection types:
  *   - function-deleted:   function exists in base branch, missing in PR
@@ -13,49 +13,23 @@
  */
 
 import { exec } from './exec.js';
-import {
-  checkIndexFreshness,
-  getOrBuildIndex,
-  loadIndex,
-  searchSymbols,
-  getRemoteBranchHead,
-  getChangedFiles,
-} from './codebase-index.js';
+import { getChangedFiles } from './codebase-index.js';
 import { resolveModel, callAI } from './ai.js';
-import { GitHubClient } from './github.js';
+
 
 // ---------------------------------------------------------------------------
 // LSP Configuration
 // ---------------------------------------------------------------------------
 
-const LSP_CONFIG = {
-  typescript: {
-    extensions: ['ts', 'tsx', 'js', 'jsx', 'mjs'],
-    binary: 'tsserver',
-    initOptions: { useSingleServer: true, verbosity: 'verbose' },
-  },
-  javascript: {
-    extensions: ['js', 'jsx', 'mjs'],
-    binary: 'tsserver',
-    initOptions: { useSingleServer: true, verbosity: 'verbose' },
-  },
-  go: {
-    extensions: ['go'],
-    binary: 'gopls',
-    initOptions: {},
-  },
-  rust: {
-    extensions: ['rs'],
-    binary: 'rust-analyzer',
-    initOptions: {},
-  },
-  python: {
-    extensions: ['py'],
-    binary: 'pylsp',
-    initOptions: {},
-  },
-};
 
+// Language file extensions (used for grep-based call-site search)
+const LANG_EXTENSIONS = {
+  javascript: ['js', 'jsx', 'mjs', 'ts', 'tsx'],
+  typescript: ['ts', 'tsx', 'js', 'jsx', 'mjs'],
+  python: ['py'],
+  go: ['go'],
+  rust: ['rs'],
+};
 // Map file extension to language
 const EXT_TO_LANG = {
   js: 'javascript', mjs: 'javascript', cjs: 'javascript',
@@ -69,8 +43,8 @@ const EXT_TO_LANG = {
 
 // Function definition patterns per language
 const FUNC_PATTERNS = {
-  javascript: /(?:^|[;\n])\s*(?:export\s+)?function\s+(\w+)|(?:^|[;\n])\s*(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|?:^|[;\n])\s*(?:export\s+)?class\s+(\w+)/,
-  typescript: /(?:^|[;\n])\s*(?:export\s+)?function\s+(\w+)|(?:^|[;\n])\s*(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|?:^|[;\n])\s*(?:export\s+)?class\s+(\w+)/,
+  javascript: /\b(?:export\s+)?function\s+(\w+)|\b(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|\b(?:export\s+)?class\s+(\w+)/,
+  typescript: /\b(?:export\s+)?function\s+(\w+)|\b(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|\b(?:export\s+)?class\s+(\w+)/,
   python: /^def\s+(\w+)|^async\s+def\s+(\w+)|^class\s+(\w+)/,
   go: /^func\s+(\w+)|^func\s+\([\w\s]+\*?\w+\)\s+(\w+)/,
   rust: /^pub\s+(?:async\s+)?fn\s+(\w+)|^pub\s+struct\s+(\w+)|^pub\s+enum\s+(\w+)/,
@@ -84,37 +58,6 @@ const SIG_PATTERNS = {
   go: /func\s+\w+\s*\(([^)]*)\)/,
   rust: /fn\s+\w+\s*\(([^)]*)\)/,
 };
-
-// ---------------------------------------------------------------------------
-// LSP Binary Detection
-// ---------------------------------------------------------------------------
-
-/**
- * Check if an LSP binary is available on PATH.
- */
-function isLspAvailable(binary) {
-  try {
-    exec(`which ${binary}`, { stdio: ['pipe', 'pipe', 'pipe'] });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Detect which languages in a set have available LSP support.
- */
-function detectAvailableLsps(languages) {
-  const available = {};
-  for (const lang of languages) {
-    const config = LSP_CONFIG[lang];
-    if (!config) continue;
-    if (isLspAvailable(config.binary)) {
-      available[lang] = config;
-    }
-  }
-  return available;
-}
 
 // ---------------------------------------------------------------------------
 // Extract modified functions from diff
@@ -235,7 +178,7 @@ function findCallSites(worktreePath, funcName, ref, lang) {
   // Search in all files of the same language
   try {
     // Find files of the same language
-    const exts = LSP_CONFIG[lang]?.extensions || [lang];
+    const exts = LANG_EXTENSIONS[lang] || [lang];
     for (const ext of exts) {
       const output = exec(
         `git ls-tree -r --name-only ${ref} | grep '\\.${ext}$'`,
@@ -300,28 +243,6 @@ function isCallSiteModified(worktreePath, callSite, baseRef, headRef) {
   }
 }
 
-/**
- * Check if a function is exported (called from outside its defining file).
- * An export is detected if the function name matches export patterns.
- */
-function isExported(content, funcName, lang) {
-  if (!content) return false;
-
-  // Check for export keyword before function definition
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.includes(`export`) && line.includes(funcName)) {
-      return true;
-    }
-    // Also check for default export
-    if (line.includes(`export default`) && line.includes(funcName)) {
-      return true;
-    }
-  }
-
-  return false;
-}
 
 // ---------------------------------------------------------------------------
 // LLM semantic change detection
@@ -412,8 +333,8 @@ async function analyzeSemanticChange(funcName, file, lang, baseCode, prCode, cal
  * @param {string} sessionKey - Session key for LLM calls
  * @returns {Promise<{ items: BreakChangeItem[] }>}
  */
-export async function detectBreakChange(prNum, baseBranch, worktreePath, repo, client, sessionKey) {
-  console.log(`[break-change] Starting for PR #${prNum} (base: ${baseBranch})`);
+export async function detectBreakChange(prNum, baseBranch, worktreePath, repo, headRef, sessionKey) {
+  console.log(`[break-change] Starting for PR #${prNum} (base: ${baseBranch}, head: ${headRef})`);
 
   const items = [];
 
@@ -421,27 +342,19 @@ export async function detectBreakChange(prNum, baseBranch, worktreePath, repo, c
   const changedFilesByLang = getChangedFilesByLanguage(
     worktreePath,
     `origin/${baseBranch}`,
-    `origin/${prNum}` // head ref name is the PR number as branch name
+    `origin/${headRef}`
   );
 
   if (Object.keys(changedFilesByLang).length === 0) {
     return { items: [] };
   }
 
-  // Detect which languages have LSP available
+  // Process each language
   const languages = Object.keys(changedFilesByLang);
-  const availableLsps = detectAvailableLsps(languages);
   console.log(`[break-change] Languages in PR: ${languages.join(', ')}`);
-  console.log(`[break-change] Available LSPs: ${Object.keys(availableLsps).join(', ')}`);
 
-  // Process each language that has LSP available
   for (const [lang, files] of Object.entries(changedFilesByLang)) {
-    if (!availableLsps[lang]) {
-      console.log(`[break-change] No LSP for ${lang}, skipping`);
-      continue;
-    }
-
-    console.log(`[break-change] Analyzing ${lang} files with LSP`);
+    console.log(`[break-change] Analyzing ${lang} files`);
 
     for (const file of files) {
       const fileItems = await analyzeFileBreakChange(
