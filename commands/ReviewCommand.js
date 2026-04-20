@@ -1,10 +1,11 @@
 /**
  * /gtw review — PR Review Command
  *
- * Step 1 only: Duplicate Detection
- * - Checks if new functions in PR duplicate existing functionality
+ * Two-layer PR review:
+ * - Step 1: Duplicate Detection (review-reuse.js)
+ * - Step 2: Break-Change Detection (review-break-change.js)
  * - Uses git-aware per-branch codebase index
- * - Specialized LLM call for duplicate verdict
+ * - Specialized LLM calls for duplicate and semantic verdicts
  */
 
 import { Commander } from './Commander.js';
@@ -12,6 +13,7 @@ import { getWip, saveWip } from '../utils/wip.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { detectReuse } from '../utils/review-reuse.js';
+import { detectBreakChange } from '../utils/review-break-change.js';
 import { prepareReviewWorktree } from './ReviewWorktree.js';
 
 export class ReviewCommand extends Commander {
@@ -121,8 +123,27 @@ export class ReviewCommand extends Commander {
       duplicateResults = { items: [], newFunctions: [] };
     }
 
+    // Step 2: Break-Change Detection
+    let breakChangeResults;
+    try {
+      breakChangeResults = await detectBreakChange(
+        prNum,
+        prData.baseBranch,
+        worktreePath,
+        repo,
+        client,
+        this.sessionKey
+      );
+    } catch (e) {
+      console.error(`[ReviewCommand] Break-change detection failed: ${e.message}`);
+      breakChangeResults = { items: [] };
+    }
+
+    // Combine all results
+    const allItems = [...(duplicateResults.items || []), ...(breakChangeResults.items || [])];
+
     // Post comment with results
-    const comment = this._buildComment(prNum, prData, duplicateResults);
+    const comment = this._buildComment(prNum, prData, { items: allItems, newFunctions: duplicateResults.newFunctions || [] });
     let commentId;
     try {
       commentId = await this._postComment(prNum, repo, client, comment);
@@ -130,9 +151,15 @@ export class ReviewCommand extends Commander {
       console.error(`[ReviewCommand] Failed to post comment: ${e.message}`);
     }
 
-    // Determine verdict
-    const criticalItems = duplicateResults.items.filter(
-      (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
+    // Determine verdict — check both reuse and break-change critical items
+    const criticalItems = allItems.filter(
+      (i) =>
+        (i.verdict === 'duplicate' ||
+          i.verdict === 'function-deleted' ||
+          i.verdict === 'signature-changed' ||
+          i.verdict === 'caller-lost' ||
+          i.verdict === 'export-removed') &&
+        ['critical', 'high'].includes(i.severity)
     );
 
     let finalLabel = 'gtw/lgtm';
@@ -152,7 +179,7 @@ export class ReviewCommand extends Commander {
       ...(wip.reviewState || {}),
       [thisPrKey]: {
         commentId,
-        items: duplicateResults.items,
+        items: allItems,
         previousLabel: finalLabel,
         round: 1,
       },
@@ -169,13 +196,23 @@ export class ReviewCommand extends Commander {
       prData.pr.title,
       ``,
       `Functions analyzed: ${duplicateResults.newFunctions.length}`,
-      `Duplicates found: ${criticalItems.length}`,
+      `Critical issues: ${criticalItems.length}`,
     ];
 
     if (criticalItems.length > 0) {
-      summary.push(``, `Duplicate functions:`);
+      summary.push(``, `Critical issues:`);
       for (const item of criticalItems) {
-        summary.push(`  - ${item.newFunc} → duplicates ${item.existingFunc}`);
+        if (item.verdict === 'duplicate') {
+          summary.push(`  - [Duplicate] ${item.newFunc} → duplicates ${item.existingFunc}`);
+        } else if (item.verdict === 'function-deleted') {
+          summary.push(`  - [Function Deleted] ${item.funcName} in ${item.file}`);
+        } else if (item.verdict === 'signature-changed') {
+          summary.push(`  - [Signature Changed] ${item.funcName} in ${item.file}`);
+        } else if (item.verdict === 'caller-lost') {
+          summary.push(`  - [Caller Lost] ${item.funcName} in ${item.file}`);
+        } else if (item.verdict === 'export-removed') {
+          summary.push(`  - [Export Removed] ${item.funcName} in ${item.file}`);
+        }
         summary.push(`    Reason: ${item.reason}`);
       }
     }
@@ -184,7 +221,7 @@ export class ReviewCommand extends Commander {
       ok: true,
       claimed: true,
       verdict: finalLabel,
-      items: duplicateResults.items,
+      items: allItems,
       message: summary.join('\n'),
       display: summary.join('\n'),
     };
@@ -193,19 +230,36 @@ export class ReviewCommand extends Commander {
   _buildComment(prNum, prData, results) {
     const items = results.items || [];
 
-    // Categorize items by verdict and severity
-    const criticalItems = items.filter(
+    // Categorize reuse-detection items
+    const criticalDuplicates = items.filter(
       (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
     );
     const similarItems = items.filter((i) => i.verdict === 'similar');
     const internalDuplicates = items.filter((i) => i.verdict === 'internal-duplicate');
     const patternItems = items.filter((i) => i.verdict === 'pattern');
-    const mediumItems = items.filter(
+    const mediumDuplicates = items.filter(
       (i) => i.verdict === 'duplicate' && i.severity === 'medium'
     );
-    const lowItems = items.filter(
+    const lowReuseItems = items.filter(
       (i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict)
     );
+
+    // Categorize break-change items
+    const functionDeleted = items.filter((i) => i.verdict === 'function-deleted');
+    const signatureChanged = items.filter((i) => i.verdict === 'signature-changed');
+    const callerLost = items.filter((i) => i.verdict === 'caller-lost');
+    const exportRemoved = items.filter((i) => i.verdict === 'export-removed');
+    const semanticChanges = items.filter((i) => i.verdict === 'semantic-change');
+
+    // Critical break-changes (combined with duplicates for the critical section)
+    const criticalBreakChanges = items.filter(
+      (i) =>
+        ['function-deleted', 'signature-changed', 'caller-lost', 'export-removed', 'semantic-change'].includes(
+          i.verdict
+        ) &&
+        ['critical', 'high'].includes(i.severity)
+    );
+    const criticalItems = [...criticalDuplicates, ...criticalBreakChanges];
 
     // Summary counts
     const summary = {
@@ -214,34 +268,99 @@ export class ReviewCommand extends Commander {
       medium: items.filter((i) => i.severity === 'medium').length,
       low: items.filter((i) => i.severity === 'low').length,
       internal: internalDuplicates.length,
+      breakChanges: functionDeleted.length + signatureChanged.length + callerLost.length + exportRemoved.length + semanticChanges.length,
     };
 
-    let comment = '## 🔍 Code Reuse Review — PR #' + prNum + '\n\n';
+    let comment = '## 🔍 Code Review — PR #' + prNum + '\n\n';
     comment += '**PR:** #' + prNum + ' — ' + prData.pr.title + '\n';
     comment += '**Base:** ' + prData.baseBranch + '\n\n';
 
     comment += '### 📊 Summary\n\n';
     comment += '| Type | Count |\n';
-    comment += '|------|-------|\n';
+    comment += '|------|-------:|\n';
     comment += '| 🔴 Critical | ' + summary.critical + ' |\n';
     comment += '| 🟠 High | ' + summary.high + ' |\n';
     comment += '| 🟡 Medium | ' + summary.medium + ' |\n';
     comment += '| 🟢 Low | ' + summary.low + ' |\n';
-    comment += '| 💡 Internal Duplicates | ' + summary.internal + ' |\n\n';
+    comment += '| 💡 Internal Duplicates | ' + summary.internal + ' |\n';
+    comment += '| ⚠️ Break-Changes | ' + summary.breakChanges + ' |\n\n';
 
     comment += '### Functions Analyzed: ' + (results.newFunctions?.length || 0) + '\n\n';
 
-    // Critical duplicates
+    // Critical items (duplicates + break-changes)
     if (criticalItems.length > 0) {
-      comment += '### 🚨 Critical Duplicates (' + criticalItems.length + ')\n\n';
+      comment += '### 🚨 Critical Issues (' + criticalItems.length + ')\n\n';
       for (const item of criticalItems) {
         const severityEmoji = item.severity === 'critical' ? '🔴' : '🟠';
-        comment += '**' + severityEmoji + ' `' + item.newFunc + '`** (' + item.existingFunc + ')\n';
-        comment += '> ' + item.reason + '\n\n';
-        if (item.code) {
-          comment += '```\n' + item.code.slice(0, 200) + (item.code.length > 200 ? '...' : '') + '\n```\n\n';
+        if (item.verdict === 'duplicate') {
+          comment += '**' + severityEmoji + ' Duplicate:** `' + item.newFunc + '` → duplicates `' + item.existingFunc + '`\n';
+          comment += '> ' + item.reason + '\n\n';
+          if (item.code) {
+            comment += '```\n' + item.code.slice(0, 200) + (item.code.length > 200 ? '...' : '') + '\n```\n\n';
+          }
+        } else if (item.verdict === 'function-deleted') {
+          comment += '**' + severityEmoji + ' Function Deleted:** `' + item.funcName + '` in `' + item.file + '`\n';
+          comment += '> ' + item.reason + '\n\n';
+        } else if (item.verdict === 'signature-changed') {
+          comment += '**' + severityEmoji + ' Signature Changed:** `' + item.funcName + '` in `' + item.file + '`\n';
+          comment += '> ' + item.reason + '\n\n';
+        } else if (item.verdict === 'caller-lost') {
+          comment += '**' + severityEmoji + ' Caller Lost:** `' + item.funcName + '` in `' + item.file + '`\n';
+          comment += '> ' + item.reason + '\n\n';
+        } else if (item.verdict === 'export-removed') {
+          comment += '**' + severityEmoji + ' Export Removed:** `' + item.funcName + '` in `' + item.file + '`\n';
+          comment += '> ' + item.reason + '\n\n';
+        } else if (item.verdict === 'semantic-change') {
+          comment += '**' + severityEmoji + ' Semantic Change:** `' + item.funcName + '` in `' + item.file + '`\n';
+          comment += '> ' + item.reason + '\n\n';
         }
       }
+    }
+
+    // Break-change sections
+    if (callerLost.length > 0) {
+      comment += '### ⚠️ Caller Lost (' + callerLost.length + ')\n\n';
+      for (const item of callerLost) {
+        comment += '- **`' + item.funcName + '`** in `' + item.file + '`: ' + item.reason + '\n';
+        if (item.callSites) {
+          const sites = item.callSites.map((c) => `${c.file}:${c.line}`).join(', ');
+          comment += '  - Lost call sites: ' + sites + '\n';
+        }
+      }
+      comment += '\n';
+    }
+
+    if (signatureChanged.length > 0) {
+      comment += '### ⚠️ Signature Changed (' + signatureChanged.length + ')\n\n';
+      for (const item of signatureChanged) {
+        comment += '- **`' + item.funcName + '`** in `' + item.file + '`: ' + item.reason + '\n';
+        comment += '  - Old: `' + item.funcSignature + '` → New: `' + item.newSignature + '`\n';
+      }
+      comment += '\n';
+    }
+
+    if (functionDeleted.length > 0) {
+      comment += '### ⚠️ Function Deleted (' + functionDeleted.length + ')\n\n';
+      for (const item of functionDeleted) {
+        comment += '- **`' + item.funcName + '`** in `' + item.file + '`: ' + item.reason + '\n';
+      }
+      comment += '\n';
+    }
+
+    if (exportRemoved.length > 0) {
+      comment += '### ⚠️ Export Removed (' + exportRemoved.length + ')\n\n';
+      for (const item of exportRemoved) {
+        comment += '- **`' + item.funcName + '`** in `' + item.file + '`: ' + item.reason + '\n';
+      }
+      comment += '\n';
+    }
+
+    if (semanticChanges.length > 0) {
+      comment += '### ⚠️ Semantic Changes (' + semanticChanges.length + ')\n\n';
+      for (const item of semanticChanges) {
+        comment += '- **`' + item.funcName + '`** in `' + item.file + '`: ' + item.reason + '\n';
+      }
+      comment += '\n';
     }
 
     // Similar patterns
@@ -273,29 +392,29 @@ export class ReviewCommand extends Commander {
       comment += '\n';
     }
 
-    // Medium severity
-    if (mediumItems.length > 0) {
-      comment += '### 🟡 Medium Priority (' + mediumItems.length + ')\n\n';
-      for (const item of mediumItems) {
+    // Medium severity duplicates
+    if (mediumDuplicates.length > 0) {
+      comment += '### 🟡 Medium Priority (' + mediumDuplicates.length + ')\n\n';
+      for (const item of mediumDuplicates) {
         comment += '- **`' + item.newFunc + '`** → ' + item.existingFunc + ': ' + item.reason + '\n';
       }
       comment += '\n';
     }
 
     // Low priority
-    if (lowItems.length > 0) {
-      comment += '### 🟢 Low Priority (' + lowItems.length + ')\n\n';
-      for (const item of lowItems) {
+    if (lowReuseItems.length > 0) {
+      comment += '### 🟢 Low Priority (' + lowReuseItems.length + ')\n\n';
+      for (const item of lowReuseItems) {
         comment += '- **`' + item.newFunc + '`**: ' + item.reason + '\n';
       }
       comment += '\n';
     }
 
     if (items.length === 0) {
-      comment += '✅ **No duplicates, similar functions, or patterns found.**\n\n';
+      comment += '✅ **No issues found.**\n\n';
     }
 
-    comment += '---\n*Code Reuse detection via SimHash + codebase index + fuzzy search + LLM semantic analysis*';
+    comment += '---\n*Review via codebase index + LSP analysis + LLM semantic analysis*';
 
     return comment;
   }
@@ -304,7 +423,7 @@ export class ReviewCommand extends Commander {
     // Find existing comment by bot
     const comments = await client.request('GET', `/repos/${repo}/issues/${prNum}/comments`);
     const myLogin = (await client.request('GET', '/user')).login;
-    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## 🔍 Code Reuse Review'));
+    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## 🔍 Code Review'));
 
     if (existing) {
       await client.request('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, {
