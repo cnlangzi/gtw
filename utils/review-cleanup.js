@@ -169,7 +169,10 @@ function extractChangedSymbols(diff, file) {
           inFunc = true;
         }
       }
-      if (inFunc) beforeLines.push(trimmed);
+      if (inFunc) {
+        beforeLines.push(trimmed);
+        braceDepth += (trimmed.match(/{/g) || []).length - (trimmed.match(/}/g) || []).length;
+      }
     } else if (line.startsWith('+')) {
       headLineNum++;
       const trimmed = line.slice(1);
@@ -180,7 +183,10 @@ function extractChangedSymbols(diff, file) {
           inFunc = true;
         }
       }
-      if (inFunc) afterLines.push(trimmed);
+      if (inFunc) {
+        afterLines.push(trimmed);
+        braceDepth += (trimmed.match(/{/g) || []).length - (trimmed.match(/}/g) || []).length;
+      }
     } else if (line.startsWith(' ')) {
       baseLineNum++;
       headLineNum++;
@@ -243,7 +249,7 @@ function phaseATriage(changedSymbols, baseIndexData) {
     const symbolId = `${file}:func:${name}`;
 
     if (!refs[symbolId]) {
-      llmCandidates.push({ ...candidate, symbolId, triageReason: 'unresolvable' });
+      skipped.push({ ...candidate, symbolId, triageReason: 'no-external-refs' });
       continue;
     }
 

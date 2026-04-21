@@ -126,7 +126,7 @@ export class ReviewCommand extends Commander {
           );
         } catch (e) {
           console.error(`[ReviewCommand] Duplicate detection failed: ${e.message}`);
-          return { items: [], newFunctions: [] };
+          return { error: e.message, items: [], newFunctions: [] };
         }
       })(),
       (async () => {
@@ -172,7 +172,7 @@ export class ReviewCommand extends Commander {
     );
 
     let finalLabel = 'gtw/lgtm';
-    if (criticalItems.length > 0 || criticalCleanups.length > 0) {
+    if (duplicateResults.error || criticalItems.length > 0 || criticalCleanups.length > 0) {
       finalLabel = 'gtw/revise';
     }
 
@@ -341,7 +341,7 @@ export class ReviewCommand extends Commander {
       comment += '✅ **No duplicates, similar functions, or patterns found.**\n\n';
     }
 
-// Step 2: Unnecessary Cleanup section
+    // Step 2: Unnecessary Cleanup section
     const cleanups = cleanupResults.cleanups || [];
     const skipped = cleanupResults.skipped || [];
     const llmCandidates = cleanupResults.llmCandidates || [];
@@ -368,7 +368,9 @@ export class ReviewCommand extends Commander {
           const severityBadge = c.severity === 'critical' ? '🔴 critical' :
             c.severity === 'high' ? '🟠 high' :
             c.severity === 'medium' ? '🟡 medium' : '🟢 low';
-          comment += `| ${c.file} | ${c.symbol}: ${c.whyCleanup} | ${severityBadge} | ${c.suggestion} |\n`;
+          const whyCleanup = (c.whyCleanup || '').replace(/\|/g, '\\|');
+          const suggestion = (c.suggestion || '').replace(/\|/g, '\\|');
+          comment += `| ${c.file} | ${c.symbol}: ${whyCleanup} | ${severityBadge} | ${suggestion} |\n`;
         }
         comment += '\n';
 
@@ -387,7 +389,7 @@ export class ReviewCommand extends Commander {
       }
     }
 
-    comment += '---\n*Code Reuse detection via SimHash + codebase index + fuzzy search + LLM semantic analysis*';
+        comment += '---\n*Reviewed by gtw*';
 
     return comment;
   }
