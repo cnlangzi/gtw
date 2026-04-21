@@ -234,7 +234,7 @@ function extractChangedSymbols(diff, file) {
  * @returns {{ llmCandidates: Array, skipped: Array }}
  */
 function phaseATriage(changedSymbols, baseIndexData) {
-  const { files: fileIndex, refs } = baseIndexData;
+  const { refs } = baseIndexData;
   const llmCandidates = [];
   const skipped = [];
 
