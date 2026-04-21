@@ -35,7 +35,7 @@ export class CheckoutCommand extends Commander {
   async syncSpecificBranch(workdir, branch) {
     // Step 1: fetch
     try {
-      await fetch(workdir, { remote: 'origin' });
+      await fetch(workdir, { remote: 'origin', ref: branch });
     } catch (e) {
       return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
     }
@@ -56,7 +56,10 @@ export class CheckoutCommand extends Commander {
       };
     } catch (e) {
       const msg = e.message;
-      if (msg.includes('could not find') || msg.includes(`origin/${branch}`)) {
+      if (msg.includes('Your local changes')) {
+        return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+      }
+      if (msg.includes('could not find')) {
         return { ok: false, message: `⚠️ Remote branch origin/${branch} does not exist.` };
       }
       return { ok: false, message: `⚠️ Sync failed:\n${msg}` };
@@ -84,7 +87,7 @@ export class CheckoutCommand extends Commander {
 
     // Step 1: fetch
     try {
-      await fetch(workdir, { remote: 'origin' });
+      await fetch(workdir, { remote: 'origin', ref: currentBranch });
     } catch (e) {
       return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
     }
@@ -103,7 +106,10 @@ export class CheckoutCommand extends Commander {
       };
     } catch (e) {
       const msg = e.message;
-      if (msg.includes('could not find') || msg.includes(`origin/${currentBranch}`)) {
+      if (msg.includes('Your local changes')) {
+        return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+      }
+      if (msg.includes('could not find')) {
         return { ok: false, message: `⚠️ No remote branch found for "${currentBranch}". Push first: /gtw push` };
       }
       return { ok: false, message: `⚠️ Sync failed:\n${msg}` };
