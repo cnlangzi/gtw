@@ -1,10 +1,15 @@
 /**
  * /gtw review — PR Review Command
  *
- * Step 1 only: Duplicate Detection
+ * Step 1: Duplicate Detection (detectReuse)
  * - Checks if new functions in PR duplicate existing functionality
  * - Uses git-aware per-branch codebase index
  * - Specialized LLM call for duplicate verdict
+ *
+ * Step 2: Unnecessary Cleanup Detection (detectUnnecessaryCleanup)
+ * - Detects stylistic/improvement changes to intentionally non-standard code
+ * - Phase A: Ref-based triage using codebase-index refs[]
+ * - Phase B: LLM analysis of filtered candidates
  */
 
 import { Commander } from './Commander.js';
@@ -12,6 +17,7 @@ import { getWip, saveWip } from '../utils/wip.js';
 import { GitHubClient } from '../utils/github.js';
 import { setPrLabel } from '../utils/labels.js';
 import { detectReuse } from '../utils/review-reuse.js';
+import { detectUnnecessaryCleanup } from '../utils/review-cleanup.js';
 import { prepareReviewWorktree } from './ReviewWorktree.js';
 
 export class ReviewCommand extends Commander {
@@ -105,24 +111,51 @@ export class ReviewCommand extends Commander {
       };
     }
 
-    // Step 1: Duplicate Detection
-    let duplicateResults;
-    try {
-      duplicateResults = await detectReuse(
-        prNum,
-        prData.baseBranch,
-        worktreePath,
-        repo,
-        client,
-        this.sessionKey
-      );
-    } catch (e) {
-      console.error(`[ReviewCommand] Duplicate detection failed: ${e.message}`);
-      duplicateResults = { items: [], newFunctions: [] };
-    }
+    // Run Step 1 (detectReuse) and Step 2 (detectUnnecessaryCleanup) in parallel
+    // Step 1 and Step 2 are independent — no shared reasoning
+    const [duplicateResults, cleanupResults] = await Promise.all([
+      (async () => {
+        try {
+          return await detectReuse(
+            prNum,
+            prData.baseBranch,
+            worktreePath,
+            repo,
+            client,
+            this.sessionKey
+          );
+        } catch (e) {
+          console.error(`[ReviewCommand] Duplicate detection failed: ${e.message}`);
+          return { items: [], newFunctions: [] };
+        }
+      })(),
+      (async () => {
+        // Build linked issue description for cleanup detection context
+        let issueDescription = null;
+        if (prData.linkedIssues && prData.linkedIssues.length > 0) {
+          issueDescription = prData.linkedIssues
+            .map(i => `Issue #${i.number}: ${i.title}\n${i.body || ''}`)
+            .join('\n\n');
+        }
+        try {
+          return await detectUnnecessaryCleanup(
+            prNum,
+            prData.baseBranch,
+            worktreePath,
+            repo,
+            client,
+            this.sessionKey,
+            issueDescription
+          );
+        } catch (e) {
+          console.error(`[ReviewCommand] Cleanup detection failed: ${e.message}`);
+          return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+        }
+      })(),
+    ]);
 
-    // Post comment with results
-    const comment = this._buildComment(prNum, prData, duplicateResults);
+    // Post comment with results (both steps)
+    const comment = this._buildComment(prNum, prData, duplicateResults, cleanupResults);
     let commentId;
     try {
       commentId = await this._postComment(prNum, repo, client, comment);
@@ -130,13 +163,16 @@ export class ReviewCommand extends Commander {
       console.error(`[ReviewCommand] Failed to post comment: ${e.message}`);
     }
 
-    // Determine verdict
+    // Determine verdict — both Step 1 and Step 2 verdicts are independent
     const criticalItems = duplicateResults.items.filter(
       (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
     );
+    const criticalCleanups = (cleanupResults.cleanups || []).filter(
+      (c) => ['critical', 'high'].includes(c.severity)
+    );
 
     let finalLabel = 'gtw/lgtm';
-    if (criticalItems.length > 0) {
+    if (criticalItems.length > 0 || criticalCleanups.length > 0) {
       finalLabel = 'gtw/revise';
     }
 
@@ -153,6 +189,7 @@ export class ReviewCommand extends Commander {
       [thisPrKey]: {
         commentId,
         items: duplicateResults.items,
+        cleanups: cleanupResults.cleanups || [],
         previousLabel: finalLabel,
         round: 1,
       },
@@ -168,8 +205,9 @@ export class ReviewCommand extends Commander {
       ``,
       prData.pr.title,
       ``,
-      `Functions analyzed: ${duplicateResults.newFunctions.length}`,
+      `Functions analyzed: ${duplicateResults.newFunctions?.length || 0}`,
       `Duplicates found: ${criticalItems.length}`,
+      `Unnecessary cleanups: ${criticalCleanups.length}`,
     ];
 
     if (criticalItems.length > 0) {
@@ -180,17 +218,25 @@ export class ReviewCommand extends Commander {
       }
     }
 
+    if (criticalCleanups.length > 0) {
+      summary.push(``, `Unnecessary cleanups:`);
+      for (const cleanup of criticalCleanups) {
+        summary.push(`  - ${cleanup.symbol} in ${cleanup.file}: ${cleanup.whyCleanup}`);
+      }
+    }
+
     return {
       ok: true,
       claimed: true,
       verdict: finalLabel,
       items: duplicateResults.items,
+      cleanups: cleanupResults.cleanups || [],
       message: summary.join('\n'),
       display: summary.join('\n'),
     };
   }
 
-  _buildComment(prNum, prData, results) {
+  _buildComment(prNum, prData, results, cleanupResults = {}) {
     const items = results.items || [];
 
     // Categorize items by verdict and severity
@@ -293,6 +339,52 @@ export class ReviewCommand extends Commander {
 
     if (items.length === 0) {
       comment += '✅ **No duplicates, similar functions, or patterns found.**\n\n';
+    }
+
+// Step 2: Unnecessary Cleanup section
+    const cleanups = cleanupResults.cleanups || [];
+    const skipped = cleanupResults.skipped || [];
+    const llmCandidates = cleanupResults.llmCandidates || [];
+    const modifiedFiles = cleanupResults.modifiedFiles || 0;
+    const noLinkedIssue = cleanupResults.noLinkedIssue || false;
+
+    comment += '\n\n### 🧹 Unnecessary Cleanup Check\n\n';
+
+    if (noLinkedIssue) {
+      comment += '*Step 2 skipped: no linked issue found for context.*\n\n';
+    } else {
+      comment += '**Phase A — Ref Triage:**\n';
+      comment += `- Files analyzed: ${modifiedFiles}\n`;
+      comment += `- Sent to LLM: ${llmCandidates.length}\n`;
+      comment += `- Skipped (low risk): ${skipped.length}\n\n`;
+
+      const criticalCleanups = cleanups.filter((c) => ['critical', 'high'].includes(c.severity));
+
+      if (cleanups.length > 0) {
+        comment += '**Findings:**\n\n';
+        comment += '| File | Change | Severity | Suggestion |\n';
+        comment += '|------|--------|----------|------------|\n';
+        for (const c of cleanups) {
+          const severityBadge = c.severity === 'critical' ? '🔴 critical' :
+            c.severity === 'high' ? '🟠 high' :
+            c.severity === 'medium' ? '🟡 medium' : '🟢 low';
+          comment += `| ${c.file} | ${c.symbol}: ${c.whyCleanup} | ${severityBadge} | ${c.suggestion} |\n`;
+        }
+        comment += '\n';
+
+        if (criticalCleanups.length > 0) {
+          comment += '**🚨 Critical/High Cleanups:**\n\n';
+          for (const c of criticalCleanups) {
+            const severityEmoji = c.severity === 'critical' ? '🔴' : '🟠';
+            comment += `**${severityEmoji} \`${c.symbol}\`** in ${c.file}\n`;
+            comment += `> Before: ${c.before?.slice(0, 100) || '(empty)'}${c.before?.length > 100 ? '...' : ''}\n`;
+            comment += `> After: ${c.after?.slice(0, 100) || '(empty)'}${c.after?.length > 100 ? '...' : ''}\n`;
+            comment += `> Why problematic: ${c.whyProblematic}\n\n`;
+          }
+        }
+      } else {
+        comment += '✅ **No unnecessary cleanups detected.**\n\n';
+      }
     }
 
     comment += '---\n*Code Reuse detection via SimHash + codebase index + fuzzy search + LLM semantic analysis*';
