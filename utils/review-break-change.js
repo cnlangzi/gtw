@@ -1,156 +1,342 @@
 /**
  * Break-Change Detection — Review flow Step 2.
  *
- * Detects when PR modifications break existing code that depends on
- * modified functions. Uses regex+grep-based function analysis.
+ * Uses LSP (Language Server Protocol) for accurate function and reference analysis.
+ * - On-demand: Start LSP process when needed, close after use
+ * - No fallback: If LSP for a language is not found, skip entirely
+ * - Supported: TypeScript/JavaScript (tsserver), Go (gopls), Rust (rust-analyzer), Python (pylsp)
  *
  * Detection types:
  *   - function-deleted:   function exists in base branch, missing in PR
  *   - signature-changed:  params/return type changed
  *   - caller-lost:        base has call sites, PR callers are gone or modified
- *   - export-removed:     exported function/variable removed
+ *   - export-removed:    exported function/variable removed
  *   - semantic-change:    LLM judges if logic change affects callers
  */
 
 import { exec } from './exec.js';
 import { getChangedFiles } from './codebase-index.js';
 import { resolveModel, callAI } from './ai.js';
+import { spawn } from 'child_process';
 
 
 // ---------------------------------------------------------------------------
 // LSP Configuration
 // ---------------------------------------------------------------------------
 
-
-// Language file extensions (used for grep-based call-site search)
-const LANG_EXTENSIONS = {
-  javascript: ['js', 'jsx', 'mjs', 'ts', 'tsx'],
-  typescript: ['ts', 'tsx', 'js', 'jsx', 'mjs'],
-  python: ['py'],
-  go: ['go'],
-  rust: ['rs'],
-};
-// Map file extension to language
-const EXT_TO_LANG = {
-  js: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
-  py: 'python',
-  go: 'go',
-  rs: 'rust',
-  java: 'java', rb: 'ruby', cs: 'csharp',
-  cpp: 'cpp', c: 'c', h: 'c', hpp: 'cpp',
+const LSP_BINARIES = {
+  javascript: 'typescript-language-server',
+  typescript: 'typescript-language-server',
+  python: 'pylsp',
+  go: 'gopls',
+  rust: 'rust-analyzer',
 };
 
-// Function definition patterns per language
-const FUNC_PATTERNS = {
-  javascript: /\b(?:export\s+)?function\s+(\w+)|\b(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|\b(?:export\s+)?class\s+(\w+)/,
-  typescript: /\b(?:export\s+)?function\s+(\w+)|\b(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|\b(?:export\s+)?class\s+(\w+)/,
-  python: /^def\s+(\w+)|^async\s+def\s+(\w+)|^class\s+(\w+)/,
-  go: /^func\s+(\w+)|^func\s+\([\w\s]+\*?\w+\)\s+(\w+)/,
-  rust: /^pub\s+(?:async\s+)?fn\s+(\w+)|^pub\s+struct\s+(\w+)|^pub\s+enum\s+(\w+)/,
-};
+const LSP_INIT_TIMEOUT = 15000;
+const LSP_REQUEST_TIMEOUT = 10000;
 
-// Signature extraction patterns
-const SIG_PATTERNS = {
-  javascript: /(?:function\s+\w+\s*\(([^)]*)\)|(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>(?:[^=]|$))/,
-  typescript: /(?:function\s+\w+\s*\(([^)]*)\)|(\w+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>(?:[^=]|$))/,
-  python: /def\s+\w+\s*\(([^)]*)\)/,
-  go: /func\s+\w+\s*\(([^)]*)\)/,
-  rust: /fn\s+\w+\s*\(([^)]*)\)/,
-};
 
 // ---------------------------------------------------------------------------
-// Extract modified functions from diff
+// LSP Session Class
 // ---------------------------------------------------------------------------
 
 /**
- * Get file content at a specific git ref.
+ * LSP session manager — wraps a language server process with RPC semantics.
  */
+class LspSession {
+  constructor(process, lang) {
+    this.process = process;
+    this.lang = lang;
+    this.messageBuffer = '';
+    this.pendingRequests = new Map();
+    this.nextId = 1;
+    this.initialized = false;
+    this._resolveInit = null;
+    this._initPromise = new Promise((r) => { this._resolveInit = r; });
+
+    process.stdout.on('readable', () => this._receive());
+    process.stderr.on('data', () => {}); // Discard stderr
+  }
+
+  /**
+   * Send an LSP request and wait for response.
+   */
+  request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`LSP request '${method}' (id=${id}) timed out`));
+      }, LSP_REQUEST_TIMEOUT);
+
+      this.pendingRequests.set(id, (msg) => {
+        clearTimeout(timer);
+        if (msg.error) reject(new Error(msg.error.message || 'LSP error'));
+        else resolve(msg.result || null);
+      });
+
+      this._send({ jsonrpc: '2.0', id, method, params });
+    });
+  }
+
+  /**
+   * Wait for LSP to be initialized.
+   */
+  waitReady() {
+    return this._initPromise;
+  }
+
+  /**
+   * Send shutdown and kill process.
+   */
+  close() {
+    try {
+      if (this.initialized) {
+        this.request('shutdown', {}).catch(() => {});
+      }
+    } catch {}
+    setTimeout(() => {
+      try { this.process.kill(); } catch {}
+    }, 500);
+  }
+
+  _send(msg) {
+    if (this.process && this.process.stdin && !this.process.stdin.destroyed) {
+      this.process.stdin.write(JSON.stringify(msg) + '\n');
+    }
+  }
+
+  _receive() {
+    let chunk;
+    while ((chunk = this.process.stdout.read()) !== null) {
+      this.messageBuffer += chunk;
+      const lines = this.messageBuffer.split('\n');
+      this.messageBuffer = lines.pop() || '';
+
+      for (const raw of lines) {
+        if (!raw.trim()) continue;
+        try {
+          const msg = JSON.parse(raw);
+          this._handle(msg);
+        } catch {}
+      }
+    }
+  }
+
+  _handle(msg) {
+    // Response to our request
+    if (msg.id !== undefined && this.pendingRequests.has(msg.id)) {
+      const resolve = this.pendingRequests.get(msg.id);
+      this.pendingRequests.delete(msg.id);
+      resolve(msg);
+      return;
+    }
+
+    // Server-initiated message
+    if (msg.method === 'initialized') {
+      this.initialized = true;
+      this._resolveInit(this);
+    } else if (msg.method === 'shutdown') {
+      this._send({ jsonrpc: '2.0', id: msg.id, result: null });
+    }
+  }
+}
+
+/**
+ * Start an LSP server and perform handshake.
+ * Returns ready LspSession or null if failed.
+ */
+async function startLsp(lang, cwd) {
+  const binary = LSP_BINARIES[lang];
+  if (!binary) return null;
+
+  // Check binary exists
+  try {
+    exec(`which ${binary}`, { stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn(binary, ['--stdio'], {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    const session = new LspSession(proc, lang);
+
+    // Initialize handshake
+    session.request('initialize', {
+      processId: proc.pid,
+      rootUri: `file://${cwd}`,
+      capabilities: {},
+    }).then(() => {
+      proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }) + '\n');
+    }).catch(() => {});
+
+    // Timeout if init fails
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch {}
+      resolve(null);
+    }, LSP_INIT_TIMEOUT);
+
+    session.waitReady().then((s) => {
+      clearTimeout(timer);
+      resolve(s);
+    }).catch(() => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// Remote resolution
+// ---------------------------------------------------------------------------
+
+function resolveRemote(worktreePath) {
+  try {
+    const remote = exec('git remote', {
+      cwd: worktreePath,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim().split('\n')[0];
+    return remote || 'origin';
+  } catch {
+    return 'origin';
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// File retrieval
+// ---------------------------------------------------------------------------
+
 function getFileAtRef(worktreePath, filePath, ref) {
   try {
     return exec(
       `git show ${ref}:${filePath}`,
       { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
-  } catch {
+  } catch (e) {
+    if (e.message && (e.message.includes('exists') || e.message.includes('not found'))) {
+      console.warn(`[break-change] File '${filePath}' not found at ref '${ref}'`);
+    }
     return null;
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// LSP-based function analysis
+// ---------------------------------------------------------------------------
+
+const SYMBOL_KINDS = {
+  function: 1, method: 2, class: 5, interface: 11, enum: 9,
+};
+
+function isCallableKind(kind) {
+  return [SYMBOL_KINDS.function, SYMBOL_KINDS.method].includes(kind);
+}
+
 /**
- * Extract all function definitions from file content.
+ * Get document symbols (functions, classes, etc.) via LSP.
  */
-function extractFunctions(content, lang) {
-  if (!content) return [];
-  const pattern = FUNC_PATTERNS[lang] || FUNC_PATTERNS.javascript;
-  const lines = content.split('\n');
-  const functions = [];
+async function getDocumentSymbols(session, filePath, content) {
+  try {
+    const uri = `file://${filePath}`;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    const match = trimmed.match(pattern);
-    if (!match) continue;
-
-    const name = match[1] || match[2] || match[3];
-    if (!name) continue;
-
-    // Extract signature from the line
-    const sigMatch = trimmed.match(SIG_PATTERNS[lang] || SIG_PATTERNS.javascript);
-    let signature = name;
-    if (sigMatch) {
-      const params = sigMatch[1] || sigMatch[2] || sigMatch[3] || '';
-      signature = `${name}(${params})`;
-    }
-
-    functions.push({
-      name,
-      signature,
-      line: i + 1,
-      isExported: trimmed.includes('export'),
+    // Open document
+    await session.request('textDocument/didOpen', {
+      textDocument: { uri, languageId: session.lang, version: 1, text: content || '' },
     });
-  }
 
-  return functions;
+    // Get symbols
+    const symbols = await session.request('textDocument/documentSymbol', {
+      textDocument: { uri },
+    });
+
+    return (symbols || []).map((s) => ({
+      name: s.name,
+      kind: s.kind,
+      line: (s.range?.start?.line ?? 0) + 1,
+      endLine: s.range?.end?.line ? s.range.end.line + 1 : null,
+      isExported: s.name?.[0] === s.name?.[0]?.toUpperCase(),
+    })).filter((s) => s.name);
+  } catch (e) {
+    console.warn(`[break-change] documentSymbol failed for ${filePath}: ${e.message}`);
+    return [];
+  }
 }
 
 /**
- * Find functions that exist in base but are missing in PR (deleted or renamed).
- * Also detect signature changes for functions that exist in both.
+ * Find all references to a position via LSP.
  */
-function diffFunctions(baseFuncs, prFuncs) {
-  const baseMap = new Map(baseFuncs.map((f) => [f.name, f]));
-  const prMap = new Map(prFuncs.map((f) => [f.name, f]));
+async function findReferences(session, filePath, line) {
+  try {
+    const uri = `file://${filePath}`;
+    const refs = await session.request('textDocument/references', {
+      textDocument: { uri },
+      position: { line: Math.max(0, line - 1), character: 0 },
+      context: { includeDeclaration: false },
+    });
 
-  const deleted = [];
-  const signatureChanged = [];
+    return (refs || []).map((r) => ({
+      file: r.uri?.replace(/^file:\/\//, '') || '',
+      line: (r.range?.start?.line ?? 0) + 1,
+    })).filter((r) => r.file);
+  } catch (e) {
+    console.warn(`[break-change] references failed for ${filePath}:${line}: ${e.message}`);
+    return [];
+  }
+}
 
-  for (const [name, baseFn] of baseMap) {
-    const prFn = prMap.get(name);
-    if (!prFn) {
-      // Function exists in base but not in PR
-      deleted.push(baseFn);
-    } else if (baseFn.signature !== prFn.signature) {
-      // Same function but signature changed
-      signatureChanged.push({ base: baseFn, pr: prFn });
+/**
+ * Get hover info (signature/type) for a position.
+ */
+async function getHover(session, filePath, line) {
+  try {
+    const uri = `file://${filePath}`;
+    const hover = await session.request('textDocument/hover', {
+      textDocument: { uri },
+      position: { line: Math.max(0, line - 1), character: 0 },
+    });
+
+    if (hover?.contents) {
+      const text = typeof hover.contents === 'string'
+        ? hover.contents
+        : hover.contents.value || '';
+      return text.split('\n')[0].slice(0, 200);
     }
-  }
-
-  return { deleted, signatureChanged };
+  } catch {}
+  return null;
 }
 
-/**
- * Get all changed files from a PR diff, grouped by language.
- */
+
+// ---------------------------------------------------------------------------
+// Change Detection helpers
+// ---------------------------------------------------------------------------
+
 function getChangedFilesByLanguage(worktreePath, baseRef, headRef) {
   const changedFiles = getChangedFiles(worktreePath, baseRef, headRef);
   const byLang = {};
+  const EXT_TO_LANG = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+    py: 'python', go: 'go', rs: 'rust',
+  };
 
   for (const file of changedFiles) {
     const ext = file.split('.').pop().toLowerCase();
     const lang = EXT_TO_LANG[ext];
     if (!lang) continue;
-
     if (!byLang[lang]) byLang[lang] = [];
     byLang[lang].push(file);
   }
@@ -158,94 +344,37 @@ function getChangedFilesByLanguage(worktreePath, baseRef, headRef) {
   return byLang;
 }
 
-// ---------------------------------------------------------------------------
-// Call-site analysis (using grep-based approach since LSP is complex)
-// ---------------------------------------------------------------------------
-
-/**
- * Find all references to a function in the codebase at a given ref.
- * Uses grep to find call sites.
- */
-function findCallSites(worktreePath, funcName, ref, lang) {
-  // Build search patterns for different call styles
-  const patterns = [
-    new RegExp(`\\b${funcName}\\s*\\(`, 'g'),  // funcName(...)
-    new RegExp(`\\b${funcName}\\b`, 'g'),      // funcName (anywhere)
-  ];
-
-  const callSites = [];
-
-  // Search in all files of the same language
-  try {
-    // Find files of the same language
-    const exts = LANG_EXTENSIONS[lang] || [lang];
-    for (const ext of exts) {
-      const output = exec(
-        `git ls-tree -r --name-only ${ref} | grep '\\.${ext}$'`,
-        { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      const files = output.split('\n').filter(Boolean);
-      for (const file of files) {
-        try {
-          const content = exec(
-            `git show ${ref}:${file}`,
-            { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-          );
-
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            for (const pat of patterns) {
-              pat.lastIndex = 0;
-              if (pat.test(line)) {
-                callSites.push({ file, line: i + 1, text: line.trim() });
-                break;
-              }
-            }
-          }
-        } catch {
-          // File might not exist at this ref
-        }
-      }
-    }
-  } catch {
-    // No files found
-  }
-
-  return callSites;
-}
-
-/**
- * Check if a call site still exists in PR (i.e., is not removed or modified).
- */
 function isCallSiteModified(worktreePath, callSite, baseRef, headRef) {
   try {
     const baseContent = exec(
       `git show ${baseRef}:${callSite.file}`,
       { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
     );
-
     const baseLines = baseContent.split('\n');
     const baseLine = baseLines[callSite.line - 1]?.trim() || '';
 
-    // Check if PR version has the same call
     const prContent = getFileAtRef(worktreePath, callSite.file, headRef);
-    if (!prContent) return true; // File deleted
+    if (!prContent) return true;
 
     const prLines = prContent.split('\n');
     const prLine = prLines[callSite.line - 1]?.trim() || '';
 
-    // If the line content is the same, call site is preserved
     return baseLine !== prLine;
   } catch {
-    return true; // Assume modified if we can't check
+    return true;
   }
+}
+
+function getFunctionBody(lines, startLine, endLine) {
+  if (!lines || startLine < 1) return null;
+  const start = Math.max(0, startLine - 1);
+  const end = endLine ? Math.min(lines.length, endLine) : lines.length;
+  return lines.slice(start, end).join('\n');
 }
 
 
 // ---------------------------------------------------------------------------
-// LLM semantic change detection
+// LLM Semantic Analysis
 // ---------------------------------------------------------------------------
 
 const SEMANTIC_CHANGE_PROMPT = `You are a code break-change analyzer. Your job is to determine whether a modification to an existing function's logic could break its callers.
@@ -284,12 +413,9 @@ Output ONLY valid JSON:
   "affectedCallers": ["caller1", "caller2"] // if breaks=true
 }`;
 
-/**
- * Analyze semantic changes using LLM.
- */
 async function analyzeSemanticChange(funcName, file, lang, baseCode, prCode, callers, sessionKey) {
   const callerList = callers.length > 0
-    ? callers.map((c) => `${c.file}:${c.line} — ${c.text}`).join('\n')
+    ? callers.map((c) => `${c.file}:${c.line}`).join('\n')
     : '(no known callers in base branch)';
 
   const prompt = SEMANTIC_CHANGE_PROMPT
@@ -300,7 +426,7 @@ async function analyzeSemanticChange(funcName, file, lang, baseCode, prCode, cal
     .replace('{prCode}', prCode || '(unavailable)')
     .replace('{callers}', callerList);
 
-  let lastError = null;
+  let lastError;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const { model } = await resolveModel(sessionKey);
@@ -314,22 +440,22 @@ async function analyzeSemanticChange(funcName, file, lang, baseCode, prCode, cal
     }
   }
 
-  console.error(`[break-change] LLM failed: ${lastError.message}`);
   return { breaks: false, severity: 'low', reason: 'LLM analysis failed, assuming safe', affectedCallers: [] };
 }
 
+
 // ---------------------------------------------------------------------------
-// Main detection flow
+// Main Entry Point
 // ---------------------------------------------------------------------------
 
 /**
- * Main entry point: detect break-changes in a PR.
+ * Detect break-changes in a PR using LSP-based analysis.
  *
  * @param {number} prNum - PR number
  * @param {string} baseBranch - Target branch (e.g. 'main')
  * @param {string} worktreePath - Worktree path for git operations
  * @param {string} repo - "owner/repo"
- * @param {GitHubClient} client - GitHub API client
+ * @param {string} headRef - Head branch reference
  * @param {string} sessionKey - Session key for LLM calls
  * @returns {Promise<{ items: BreakChangeItem[] }>}
  */
@@ -337,34 +463,41 @@ export async function detectBreakChange(prNum, baseBranch, worktreePath, repo, h
   console.log(`[break-change] Starting for PR #${prNum} (base: ${baseBranch}, head: ${headRef})`);
 
   const items = [];
+  const remote = resolveRemote(worktreePath);
+  const baseRef = `${remote}/${baseBranch}`;
+  const prRef = 'HEAD';
 
-  // Get changed files grouped by language
-  const changedFilesByLang = getChangedFilesByLanguage(
-    worktreePath,
-    `origin/${baseBranch}`,
-    `origin/${headRef}`
-  );
-
+  const changedFilesByLang = getChangedFilesByLanguage(worktreePath, baseRef, prRef);
   if (Object.keys(changedFilesByLang).length === 0) {
     return { items: [] };
   }
 
-  // Process each language
   const languages = Object.keys(changedFilesByLang);
   console.log(`[break-change] Languages in PR: ${languages.join(', ')}`);
 
   for (const [lang, files] of Object.entries(changedFilesByLang)) {
-    console.log(`[break-change] Analyzing ${lang} files`);
+    if (!LSP_BINARIES[lang]) {
+      console.log(`[break-change] No LSP configured for '${lang}', skipping`);
+      continue;
+    }
 
-    for (const file of files) {
-      const fileItems = await analyzeFileBreakChange(
-        file,
-        lang,
-        baseBranch,
-        worktreePath,
-        sessionKey
-      );
-      items.push(...fileItems);
+    console.log(`[break-change] Starting LSP for '${lang}'...`);
+    const session = await startLsp(lang, worktreePath);
+    if (!session) {
+      console.warn(`[break-change] LSP not available or failed to start for '${lang}', skipping`);
+      continue;
+    }
+    console.log(`[break-change] LSP ready for '${lang}'`);
+
+    try {
+      for (const file of files) {
+        const fileItems = await analyzeFileBreakChange(
+          file, lang, baseRef, prRef, worktreePath, session, sessionKey
+        );
+        items.push(...fileItems);
+      }
+    } finally {
+      session.close();
     }
   }
 
@@ -375,231 +508,117 @@ export async function detectBreakChange(prNum, baseBranch, worktreePath, repo, h
 /**
  * Analyze a single file for break-changes.
  */
-async function analyzeFileBreakChange(file, lang, baseBranch, worktreePath, sessionKey) {
+async function analyzeFileBreakChange(file, lang, baseRef, prRef, worktreePath, session, sessionKey) {
   const items = [];
-  const baseRef = `origin/${baseBranch}`;
-  const headRef = `HEAD`; // Worktree is on PR branch
 
-  // Get base and PR versions of the file
   const baseContent = getFileAtRef(worktreePath, file, baseRef);
-  const prContent = getFileAtRef(worktreePath, file, headRef);
+  const prContent = getFileAtRef(worktreePath, file, prRef);
 
-  // If file is new (no base content), it's not a break-change scenario
   if (!baseContent) {
     console.log(`[break-change] ${file} is new, skipping`);
     return items;
   }
 
-  // If file was deleted in PR
   if (!prContent) {
-    // Check if file had any exported functions that were used elsewhere
-    const baseFuncs = extractFunctions(baseContent, lang);
-    for (const fn of baseFuncs) {
-      if (fn.isExported) {
+    // File deleted — all exported symbols are gone
+    const symbols = await getDocumentSymbols(session, file, baseContent);
+    for (const sym of symbols) {
+      if (sym.isExported) {
         items.push({
           verdict: 'function-deleted',
           severity: 'critical',
-          reason: `exported function '${fn.name}' was deleted (file removed)`,
+          reason: `exported function '${sym.name}' was deleted (file removed)`,
           file,
-          funcName: fn.name,
-          funcSignature: fn.signature,
+          funcName: sym.name,
         });
       }
     }
     return items;
   }
 
-  // Extract functions from both versions
-  const baseFuncs = extractFunctions(baseContent, lang);
-  const prFuncs = extractFunctions(prContent, lang);
+  // Get symbols from both versions
+  const baseSymbols = await getDocumentSymbols(session, file, baseContent);
+  const prSymbols = await getDocumentSymbols(session, file, prContent);
 
-  // Find deleted and signature-changed functions
-  const { deleted, signatureChanged } = diffFunctions(baseFuncs, prFuncs);
+  const baseMap = new Map(baseSymbols.map((s) => [s.name, s]));
+  const prMap = new Map(prSymbols.map((s) => [s.name, s]));
 
-  // Process deleted functions
-  for (const fn of deleted) {
-    // Find call sites in base branch
-    const callers = findCallSites(worktreePath, fn.name, baseRef, lang);
+  const baseLines = baseContent.split('\n');
+  const prLines = prContent.split('\n');
 
-    if (callers.length > 0) {
-      // Check if all callers were also modified in the PR
-      const modifiedCallers = callers.filter((c) => isCallSiteModified(worktreePath, c, baseRef, headRef));
-      const lostCallers = callers.filter((c) => !isCallSiteModified(worktreePath, c, baseRef, headRef));
+  for (const [name, baseSym] of baseMap) {
+    const prSym = prMap.get(name);
+
+    if (!prSym) {
+      // Deleted
+      const callers = await findReferences(session, file, baseSym.line);
+      const lostCallers = callers.filter((c) => !isCallSiteModified(worktreePath, c, baseRef, prRef));
 
       if (lostCallers.length > 0) {
         items.push({
           verdict: 'caller-lost',
           severity: 'critical',
-          reason: `function '${fn.name}' deleted, ${lostCallers.length} call site(s) in base branch are not preserved in PR`,
+          reason: `function '${name}' deleted, ${lostCallers.length} call site(s) in base branch not preserved in PR`,
           file,
-          funcName: fn.name,
-          funcSignature: fn.signature,
+          funcName: name,
+          callSites: lostCallers,
+        });
+      } else if (baseSym.isExported) {
+        items.push({
+          verdict: 'export-removed',
+          severity: 'high',
+          reason: `exported function '${name}' was removed`,
+          file,
+          funcName: name,
+        });
+      }
+    } else if (baseSym.line !== prSym.line || baseSym.kind !== prSym.kind) {
+      // Signature changed (different line or kind)
+      const baseSig = await getHover(session, file, baseSym.line);
+      const prSig = await getHover(session, file, prSym.line);
+
+      const callers = await findReferences(session, file, baseSym.line);
+      const lostCallers = callers.filter((c) => !isCallSiteModified(worktreePath, c, baseRef, prRef));
+
+      if (baseSig && prSig && baseSig !== prSig) {
+        items.push({
+          verdict: 'signature-changed',
+          severity: lostCallers.length > 0 ? 'critical' : 'medium',
+          reason: `function '${name}' signature changed, ${lostCallers.length} call site(s) affected`,
+          file,
+          funcName: name,
+          funcSignature: baseSig,
+          newSignature: prSig,
           callSites: lostCallers,
         });
       }
     } else {
-      // No known call sites but function was exported
-      if (fn.isExported) {
-        items.push({
-          verdict: 'export-removed',
-          severity: 'high',
-          reason: `exported function '${fn.name}' was removed`,
-          file,
-          funcName: fn.name,
-          funcSignature: fn.signature,
-        });
-      }
-    }
-  }
-
-  // Process signature-changed functions
-  for (const { base: baseFn, pr: prFn } of signatureChanged) {
-    // Find call sites in base branch
-    const callers = findCallSites(worktreePath, baseFn.name, baseRef, lang);
-
-    // Check if callers are preserved in PR
-    const lostCallers = callers.filter((c) => !isCallSiteModified(worktreePath, c, baseRef, headRef));
-
-    if (lostCallers.length > 0) {
-      items.push({
-        verdict: 'signature-changed',
-        severity: 'critical',
-        reason: `function '${baseFn.name}' signature changed from '${baseFn.signature}' to '${prFn.signature}', but ${lostCallers.length} call site(s) in base branch still use old signature`,
-        file,
-        funcName: baseFn.name,
-        funcSignature: baseFn.signature,
-        newSignature: prFn.signature,
-        callSites: lostCallers,
-      });
-    } else if (callers.length > 0) {
-      // Callers exist but were all modified in PR — check if they were updated
-      items.push({
-        verdict: 'signature-changed',
-        severity: 'medium',
-        reason: `function '${baseFn.name}' signature changed from '${baseFn.signature}' to '${prFn.signature}', but all existing call sites were also modified`,
-        file,
-        funcName: baseFn.name,
-        funcSignature: baseFn.signature,
-        newSignature: prFn.signature,
-      });
-    }
-  }
-
-  // For semantic changes: find modified functions where signature is the same
-  // but the body changed (logic modification)
-  const baseFuncMap = new Map(baseFuncs.map((f) => [f.name, f]));
-  const prFuncMap = new Map(prFuncs.map((f) => [f.name, f]));
-
-  const semanticChanges = [];
-  for (const [name, baseFn] of baseFuncMap) {
-    const prFn = prFuncMap.get(name);
-    if (!prFn) continue; // Already handled as deleted
-
-    // Signature same but check if body changed
-    if (baseFn.signature === prFn.signature) {
-      // Extract function body from base and PR
-      const baseBody = extractFunctionBody(baseContent, baseFn.line, lang);
-      const prBody = extractFunctionBody(prContent, prFn.line, lang);
+      // Same position — check body for semantic changes
+      const baseBody = getFunctionBody(baseLines, baseSym.line, baseSym.endLine);
+      const prBody = getFunctionBody(prLines, prSym.line, prSym.endLine);
 
       if (baseBody && prBody && baseBody !== prBody) {
-        semanticChanges.push({ baseFn, prFn, baseBody, prBody });
+        const callers = await findReferences(session, file, baseSym.line);
+
+        if (callers.length > 0 || baseSym.isExported) {
+          const llmResult = await analyzeSemanticChange(
+            name, file, lang, baseBody, prBody, callers, sessionKey
+          );
+
+          if (llmResult.breaks) {
+            items.push({
+              verdict: 'semantic-change',
+              severity: llmResult.severity || (baseSym.isExported ? 'high' : 'medium'),
+              reason: llmResult.reason,
+              file,
+              funcName: name,
+              affectedCallers: llmResult.affectedCallers || callers.map((c) => c.file),
+            });
+          }
+        }
       }
-    }
-  }
-
-  // Analyze semantic changes with LLM
-  for (const { baseFn, prFn, baseBody, prBody } of semanticChanges) {
-    const callers = findCallSites(worktreePath, baseFn.name, baseRef, lang);
-
-    if (callers.length === 0) continue; // No known callers, skip
-
-    const llmResult = await analyzeSemanticChange(
-      baseFn.name,
-      file,
-      lang,
-      baseBody,
-      prBody,
-      callers,
-      sessionKey
-    );
-
-    if (llmResult.breaks) {
-      items.push({
-        verdict: 'semantic-change',
-        severity: llmResult.severity || 'high',
-        reason: llmResult.reason,
-        file,
-        funcName: baseFn.name,
-        funcSignature: baseFn.signature,
-        affectedCallers: llmResult.affectedCallers || callers.map((c) => c.file),
-      });
     }
   }
 
   return items;
-}
-
-/**
- * Extract function body from file content given function start line.
- */
-function extractFunctionBody(content, startLine, lang) {
-  if (!content) return null;
-  const lines = content.split('\n');
-  if (startLine < 1 || startLine > lines.length) return null;
-
-  const startIdx = startLine - 1;
-  const firstLine = lines[startIdx];
-
-  // Detect function start patterns
-  const isFuncStart = firstLine.match(/(?:function|def|fn|export\s+(?:async\s+)?function|export\s+(?:async\s+)?const|class)\s+\w+/);
-
-  if (!isFuncStart) return null;
-
-  // Collect the function body
-  // For JS/TS: find matching braces
-  // For Python: indentation-based
-  // For Go/Rust: find matching braces
-
-  if (lang === 'python') {
-    const funcLine = lines[startIdx];
-    const indentMatch = funcLine.match(/^(\s*)/);
-    const baseIndent = indentMatch ? indentMatch[1].length : 0;
-
-    const bodyLines = [];
-    for (let i = startIdx + 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.trim() === '') {
-        bodyLines.push(line);
-        continue;
-      }
-      const indent = line.match(/^(\s*)/)?.[1]?.length || 0;
-      if (indent <= baseIndent && line.trim()) break;
-      bodyLines.push(line);
-    }
-    return bodyLines.join('\n');
-  } else {
-    // Brace-based languages
-    let braceCount = 0;
-    const bodyLines = [];
-    let foundOpenBrace = false;
-
-    for (let i = startIdx; i < lines.length; i++) {
-      const line = lines[i];
-      bodyLines.push(line);
-
-      const openCount = (line.match(/{/g) || []).length;
-      const closeCount = (line.match(/}/g) || []).length;
-
-      if (!foundOpenBrace && openCount > 0) {
-        foundOpenBrace = true;
-        braceCount = openCount - closeCount;
-      } else {
-        braceCount += openCount - closeCount;
-      }
-
-      if (foundOpenBrace && braceCount <= 0) break;
-    }
-
-    return bodyLines.join('\n');
-  }
 }
