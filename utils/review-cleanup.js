@@ -10,7 +10,6 @@ import {
   checkIndexFreshness,
   getOrBuildIndex,
   loadIndex,
-  getRemoteBranchHead,
 } from './codebase-index.js';
 import { resolveModel, callAI } from './ai.js';
 
@@ -124,7 +123,7 @@ function getModifiedFiles(worktreePath, baseRef, headRef) {
 function extractChangedSymbols(diff, file) {
   const ext = file.split('.').pop().toLowerCase();
   const lang = EXT_TO_LANG[ext] || 'javascript';
-  const pattern = FUNC_PATTERNS[lang] || FUNC_PATTERNS.javascript;
+  const pattern = FUNC_PATTERNS[lang] || FUNC_PATTERNS['javascript'];
 
   const changes = [];
   const lines = diff.split('\n');
@@ -371,19 +370,13 @@ export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, 
     return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
   }
 
-  const headRef = await getRemoteBranchHead(worktreePath, baseBranch).then(
-    () => client.request('GET', `/repos/${repo}/pulls/${prNum}`).then(r => r.head?.ref),
-    () => null
-  );
-
-  if (!headRef) {
-    try {
-      const prDetails = await client.request('GET', `/repos/${repo}/pulls/${prNum}`);
-      headRef = prDetails.head?.ref;
-    } catch (e) {
-      console.error(`[review-cleanup] Failed to get PR head ref: ${e.message}`);
-      return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
-    }
+  let headRef;
+  try {
+    const prDetails = await client.request('GET', `/repos/${repo}/pulls/${prNum}`);
+    headRef = prDetails.head?.ref;
+  } catch (e) {
+    console.error(`[review-cleanup] Failed to get PR head ref: ${e.message}`);
+    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
   }
 
   if (!headRef) {
