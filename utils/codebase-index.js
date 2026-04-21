@@ -269,20 +269,23 @@ function renderMarkdownIndex(repo, branch, lastUpdated, lastCommit, files) {
  * Handles both legacy (array) and new ({ definitions: [], localRefs: [] }) formats.
  */
 function normalizeExtractorOutput(raw, filePath) {
-  if (!raw) return { definitions: [], localRefs: [] };
+  if (!raw) return { definitions: [], localRefs: [], imports: [] };
 
-  // New format
+  // Legacy format: just an array of symbols
   if (Array.isArray(raw)) {
-    // Legacy format: just an array of symbols
-    return { definitions: raw, localRefs: [] };
+    return { definitions: raw, localRefs: [], imports: [] };
   }
 
-  // Already new format
+  // New format - ensure all fields present
   if (Array.isArray(raw.definitions)) {
-    return raw;
+    return {
+      definitions: raw.definitions || [],
+      localRefs: raw.localRefs || [],
+      imports: raw.imports || [],
+    };
   }
 
-  return { definitions: [], localRefs: [] };
+  return { definitions: [], localRefs: [], imports: [] };
 }
 
 /**
@@ -313,6 +316,7 @@ export function buildIndex(worktreePath, repo, branch) {
 
   const indexedFiles = {};
   const allLocalRefs = []; // { file, refs: [] }
+  const allImports = [];    // { file, imports: [] }
   let totalFunctions = 0;
   let skippedFiles = 0;
 
@@ -328,10 +332,13 @@ export function buildIndex(worktreePath, repo, branch) {
     if (result && result.localRefs.length > 0) {
       allLocalRefs.push({ file: file.path, refs: result.localRefs });
     }
+    if (result && result.imports && result.imports.length > 0) {
+      allImports.push({ file: file.path, imports: result.imports });
+    }
   }
 
-  // Phase 2: Cross-file reference resolution
-  const { refs, fileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
+  // Phase 2: Cross-file reference resolution (now with import tracking)
+  const { refs, fileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs, allImports, files);
 
   return {
     files: indexedFiles,
@@ -370,6 +377,7 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
   const previousFiles = existingIndex?.files || {};
   const indexedFiles = {};
   const allLocalRefs = [];
+  const allImports = [];
   let totalFunctions = 0;
   let rebuilt = 0;
   let unchanged = 0;
@@ -394,6 +402,9 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
       if (result && result.localRefs.length > 0) {
         allLocalRefs.push({ file: file.path, refs: result.localRefs });
       }
+      if (result && result.imports && result.imports.length > 0) {
+        allImports.push({ file: file.path, imports: result.imports });
+      }
     } else {
       indexedFiles[file.path] = previousFiles[file.path];
       totalFunctions += previousFiles[file.path].length;
@@ -401,8 +412,8 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
     }
   }
 
-  // Phase 2: Cross-file reference resolution
-  const { refs: newRefs, fileDeps: newFileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
+  // Phase 2: Cross-file reference resolution (with import tracking)
+  const { refs: newRefs, fileDeps: newFileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs, allImports, currentFiles);
 
   // Merge new refs with previous refs (unchanged files keep their refs)
   const previousRefs = existingIndex?.refs || {};
@@ -439,19 +450,31 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
  * Build global reference index from per-file local refs.
  * @param {Object} indexedFiles - file -> definitions map
  * @param {Array} allLocalRefs - [{ file, refs: [] }] per-file local references
+ * @param {Array} allImports - [{ file, imports: [] }] per-file imports
+ * @param {Array} files - list of all source files for import path resolution
  * @returns {{ refs: Object, fileDeps: Object }}
  */
-function buildReferenceIndex(indexedFiles, allLocalRefs) {
+function buildReferenceIndex(indexedFiles, allLocalRefs, allImports = [], files = []) {
   const refs = {};    // symbolId -> [{ file, line, col, kind, direct }]
   const fileDeps = {}; // file -> [dependent files]
 
   // Build symbol lookup: name -> symbolId for each file
   const symbolLookup = buildSymbolLookup(indexedFiles);
 
+  // Build import map: file -> resolved source file -> exported names
+  const importMap = buildImportMap(allImports, files);
+
   // Process each file's local refs and resolve to global symbol IDs
   for (const { file: filePath, refs: localRefs } of allLocalRefs) {
     for (const ref of localRefs) {
-      const symbolId = resolveSymbolRef(ref.name, filePath, symbolLookup);
+      // Try local resolution first (same file)
+      let symbolId = resolveSymbolRef(ref.name, filePath, symbolLookup);
+
+      // If not found locally, try resolving via imports
+      if (!symbolId) {
+        symbolId = resolveViaImports(ref.name, filePath, importMap, symbolLookup);
+      }
+
       if (symbolId) {
         // Add to global refs index (deduplicated)
         if (!refs[symbolId]) {
@@ -485,6 +508,122 @@ function buildReferenceIndex(indexedFiles, allLocalRefs) {
   }
 
   return { refs, fileDeps };
+}
+
+/**
+ * Build import resolution map: file -> sourceFile -> exported names.
+ */
+function buildImportMap(allImports, files) {
+  const importMap = {}; // { importingFile: { sourceFile: [exportedNames] } }
+
+  for (const { file: importingFile, imports } of allImports) {
+    if (!importMap[importingFile]) {
+      importMap[importingFile] = {};
+    }
+    for (const imp of imports) {
+      // Resolve the import path to an actual source file
+      const resolvedSource = resolveImportPath(imp.sourceFile, importingFile, files);
+      if (resolvedSource) {
+        if (!importMap[importingFile][resolvedSource]) {
+          importMap[importingFile][resolvedSource] = [];
+        }
+        importMap[importingFile][resolvedSource].push({
+          localName: imp.localName,
+          isNamespace: imp.isNamespace || false,
+          isDefault: imp.isDefault || false,
+        });
+      }
+    }
+  }
+
+  return importMap;
+}
+
+/**
+ * Resolve an import path relative to the importing file.
+ */
+function resolveImportPath(importPath, importingFile, files) {
+  if (!importPath) return null;
+
+  // Get the directory of the importing file
+  const lastSlash = importingFile.lastIndexOf('/');
+  const importingDir = lastSlash > 0 ? importingFile.slice(0, lastSlash + 1) : '';
+
+  // Resolve relative path
+  let resolved = importPath;
+  if (importPath.startsWith('./') || importPath.startsWith('../')) {
+    // Remove ./ prefix
+    resolved = importPath.replace(/^\.\//, '');
+
+    // Handle ../ in the path
+    const parts = (importingDir + resolved).split('/');
+    const normalized = [];
+    for (const part of parts) {
+      if (part === '..') {
+        normalized.pop();
+      } else if (part && part !== '.') {
+        normalized.push(part);
+      }
+    }
+    resolved = normalized.join('/');
+  }
+
+  // Try with common extensions
+  const extensions = ['', '.js', '.mjs', '.ts', '.jsx', '.tsx', '/index.js', '/index.ts'];
+  for (const ext of extensions) {
+    const candidate = resolved + ext;
+    if (files.some((f) => f.path === candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a symbol reference via import chain.
+ */
+function resolveViaImports(refName, currentFile, importMap, symbolLookup) {
+  const fileImports = importMap[currentFile];
+  if (!fileImports) return null;
+
+  // For each imported source file
+  for (const [sourceFile, imports] of Object.entries(fileImports)) {
+    for (const imp of imports) {
+      // Check namespace imports (import * as ns)
+      if (imp.isNamespace && refName.startsWith(imp.localName + '.')) {
+        // e.g., if import * as utils from './utils', then utils.foo -> utils.foo
+        const member = refName.slice(imp.localName.length + 1);
+        const sourceSymbols = symbolLookup[sourceFile];
+        if (sourceSymbols && sourceSymbols[member]) {
+          return sourceSymbols[member];
+        }
+      }
+
+      // Check default imports
+      if (imp.isDefault && refName === imp.localName) {
+        const sourceSymbols = symbolLookup[sourceFile];
+        if (sourceSymbols) {
+          // Try 'default' first, then any exported symbol
+          if (sourceSymbols['default']) return sourceSymbols['default'];
+          // Or return the first exported symbol from that file
+          for (const [, symId] of Object.entries(sourceSymbols)) {
+            return symId;
+          }
+        }
+      }
+
+      // Check named imports
+      if (!imp.isNamespace && !imp.isDefault && refName === imp.localName) {
+        const sourceSymbols = symbolLookup[sourceFile];
+        if (sourceSymbols && sourceSymbols[refName]) {
+          return sourceSymbols[refName];
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -24,8 +24,24 @@ export class JSExtractor {
       const line = lines[i];
       const trimmed = line.trim();
 
-      // Skip import/export statements themselves
+  extractExports(content, filePath) {
+    const symbols = [];
+    const localRefs = [];
+    const imports = []; // { localName, sourceFile, isDefault }
+
+    const lines = content.split('\n');
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      // Track import statements for cross-file resolution
       if (/^import\s+/.test(trimmed)) {
+        const importInfo = this._parseImport(trimmed, lines, i);
+        if (importInfo) {
+          imports.push(...importInfo);
+        }
         i++;
         continue;
       }
@@ -168,10 +184,55 @@ export class JSExtractor {
       i++;
     }
 
-    return { definitions: symbols, localRefs };
+    return { definitions: symbols, localRefs, imports };
   }
 
-  // ---------------------------------------------------------------------------
+  /**
+   * Parse import statements and return { localName, sourceFile, isDefault } entries.
+   */
+  _parseImport(trimmed, lines, lineIndex) {
+    const imports = [];
+
+    // import { name1, name2 } from './module'
+    const namedMatch = trimmed.match(/^import\s+{\s*([^}]+)\s*}\s+from\s+['"]([^'"]+)['"]/);
+    if (namedMatch) {
+      const names = namedMatch[1].split(',').map((s) => s.trim().split(' as ').pop().trim());
+      const sourceFile = this._resolveImportPath(namedMatch[2], lines[lineIndex]);
+      for (const name of names) {
+        if (name) imports.push({ localName: name, sourceFile, isDefault: false });
+      }
+      return imports;
+    }
+
+    // import name from './module'
+    const defaultMatch = trimmed.match(/^import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/);
+    if (defaultMatch) {
+      return [{ localName: defaultMatch[1], sourceFile: this._resolveImportPath(defaultMatch[2], lines[lineIndex]), isDefault: true }];
+    }
+
+    // import * as name from './module'
+    const namespaceMatch = trimmed.match(/^import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/);
+    if (namespaceMatch) {
+      return [{ localName: namespaceMatch[1], sourceFile: this._resolveImportPath(namespaceMatch[2], lines[lineIndex]), isDefault: false, isNamespace: true }];
+    }
+
+    // import './module' (side-effect import)
+    const sideEffectMatch = trimmed.match(/^import\s+['"]([^'"]+)['"]/);
+    if (sideEffectMatch) {
+      return [{ localName: '__default', sourceFile: this._resolveImportPath(sideEffectMatch[1], lines[lineIndex]), isDefault: true }];
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve relative import path to absolute file path.
+   */
+  _resolveImportPath(importPath, line) {
+    // Handle relative paths - just return the import path as-is for now
+    // The actual resolution happens in buildReferenceIndex with file context
+    return importPath;
+  }
 
   /**
    * Extract JSDoc comment block preceding the current line.
