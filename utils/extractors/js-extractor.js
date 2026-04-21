@@ -8,16 +8,15 @@ export class JSExtractor {
 
   /**
    * Extract all exported symbols from JS/TS file content.
+   * Returns { definitions: [], localRefs: [], imports: [] } for two-phase extraction.
    * @param {string} content
    * @param {string} filePath
-   * @returns {ExportSymbol[]}
+   * @returns {{ definitions: ExportSymbol[], localRefs: LocalRef[], imports: Import[] }}
    */
   extractExports(content, filePath) {
     const symbols = [];
-
-    // Named exports: export const/let/var/function/class
-    // export { name }
-    // export default
+    const localRefs = [];
+    const imports = [];
 
     const lines = content.split('\n');
     let i = 0;
@@ -26,8 +25,12 @@ export class JSExtractor {
       const line = lines[i];
       const trimmed = line.trim();
 
-      // Skip import/export statements themselves
+      // Track import statements for cross-file resolution
       if (/^import\s+/.test(trimmed)) {
+        const importInfo = this._parseImport(trimmed, lines, i);
+        if (importInfo) {
+          imports.push(...importInfo);
+        }
         i++;
         continue;
       }
@@ -44,6 +47,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind,
+          symbolId: `${filePath}:${kind}:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -66,6 +70,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'function',
+          symbolId: `${filePath}:func:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -88,6 +93,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'class',
+          symbolId: `${filePath}:class:${name}`,
           signature: `class ${name}`,
           docstring,
           location: { file: filePath, ...location },
@@ -111,6 +117,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'constant',
+          symbolId: `${filePath}:const:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -131,11 +138,12 @@ export class JSExtractor {
           .filter((s) => s);
 
         for (const name of exportedNames) {
-          const docstring = ''; // Inline exports don’t have preceding JSDoc
+          const docstring = '';
           const location = this._extractLocation(lines, i);
           symbols.push({
             name,
             kind: 'export',
+            symbolId: `${filePath}:export:${name}`,
             signature: name,
             docstring,
             location: { file: filePath, ...location },
@@ -148,36 +156,86 @@ export class JSExtractor {
         continue;
       }
 
+      // Track function/class calls and references
+      const callMatch = trimmed.match(/(\w+)\s*\(/);
+      if (callMatch && !trimmed.startsWith('//') && !trimmed.startsWith('*')) {
+        const refName = callMatch[1];
+        if (refName && !['if', 'else', 'for', 'while', 'switch', 'case', 'return', 'throw', 'new', 'typeof', 'delete'].includes(refName)) {
+          localRefs.push({
+            name: refName,
+            line: i + 1,
+            col: trimmed.indexOf(refName) + 1,
+            kind: 'call',
+          });
+        }
+      }
+
       i++;
     }
 
-    return symbols;
+    return { definitions: symbols, localRefs, imports };
   }
 
-  // ---------------------------------------------------------------------------
+  /**
+   * Parse import statements and return { localName, sourceFile, isDefault } entries.
+   */
+  _parseImport(trimmed, lines, lineIndex) {
+    const imports = [];
+
+    // import { name1, name2 } from './module'
+    const namedMatch = trimmed.match(/^import\s+{\s*([^}]+)\s*}\s+from\s+['"]([^'"]+)['"]/);
+    if (namedMatch) {
+      const names = namedMatch[1].split(',').map((s) => s.trim().split(' as ').pop().trim());
+      const sourceFile = this._resolveImportPath(namedMatch[2], lines[lineIndex]);
+      for (const name of names) {
+        if (name) imports.push({ localName: name, sourceFile, isDefault: false });
+      }
+      return imports;
+    }
+
+    // import name from './module'
+    const defaultMatch = trimmed.match(/^import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/);
+    if (defaultMatch) {
+      return [{ localName: defaultMatch[1], sourceFile: this._resolveImportPath(defaultMatch[2], lines[lineIndex]), isDefault: true }];
+    }
+
+    // import * as name from './module'
+    const namespaceMatch = trimmed.match(/^import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/);
+    if (namespaceMatch) {
+      return [{ localName: namespaceMatch[1], sourceFile: this._resolveImportPath(namespaceMatch[2], lines[lineIndex]), isDefault: false, isNamespace: true }];
+    }
+
+    // import './module' (side-effect import)
+    const sideEffectMatch = trimmed.match(/^import\s+['"]([^'"]+)['"]/);
+    if (sideEffectMatch) {
+      return [{ localName: '__default', sourceFile: this._resolveImportPath(sideEffectMatch[1], lines[lineIndex]), isDefault: true }];
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve relative import path to absolute file path.
+   */
+  _resolveImportPath(importPath, line) {
+    return importPath;
+  }
 
   /**
    * Extract JSDoc comment block preceding the current line.
-   * @param {string[]} lines
-   * @param {number} lineIndex
-   * @returns {string}
    */
   _extractJSDoc(lines, lineIndex) {
     let docstring = '';
     let i = lineIndex - 1;
 
-    // Collect /** ... */ block
     while (i >= 0) {
       const prev = lines[i].trim();
       if (prev === '*/') {
-        // Start of JSDoc block found, collect until we hit /*
         let block = '';
         let j = i - 1;
         while (j >= 0) {
           const curr = lines[j].trim();
-          if (curr === '/**') {
-            break;
-          }
+          if (curr === '/**') break;
           block = curr + '\n' + block;
           j--;
         }
@@ -196,10 +254,6 @@ export class JSExtractor {
 
   /**
    * Detect symbol kind from content at line.
-   * @param {string} content
-   * @param {number} lineIndex
-   * @param {string} name
-   * @returns {'function'|'class'|'constant'|'export'}
    */
   _detectKind(content, lineIndex, name) {
     const lines = content.split('\n');
@@ -220,7 +274,6 @@ export class JSExtractor {
       return `class ${name}`;
     }
 
-    // Try to extract parameter list from the same line
     const funcMatch = line.match(/function\s+\w+\s*\(([^)]*)\)/);
     const arrowMatch = line.match(/^\s*(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/);
     const methodMatch = line.match(/\s*\(([^)]*)\)\s*(?::|\{)/);
@@ -238,7 +291,7 @@ export class JSExtractor {
    */
   _extractLocation(lines, lineIndex) {
     return {
-      line: lineIndex + 1, // 1-indexed
+      line: lineIndex + 1,
       endLine: lineIndex + 1,
     };
   }
@@ -250,7 +303,6 @@ export class JSExtractor {
     const lines = content.split('\n');
     const line = lines[lineIndex] || '';
 
-    // Match function(params) or (params) in arrow functions
     const funcMatch = line.match(/function\s+\w+\s*\(([^)]*)\)/);
     const arrowMatch = line.match(/\)\s*=>/);
 
@@ -269,7 +321,6 @@ export class JSExtractor {
 
     return paramStr.split(',').map((p) => {
       p = p.trim();
-      // Handle destructuring: { a, b } or [ a, b ]
       const destructureMatch = p.match(/^[{[]\s*(.+?)\s*[}\]]$/);
       if (destructureMatch) {
         const inner = destructureMatch[1];
@@ -281,7 +332,6 @@ export class JSExtractor {
         };
       }
 
-      // name: type or name?
       const typedMatch = p.match(/^(\w+)(?:\?\s*)?:\s*(.+)/);
       if (typedMatch) {
         return {
@@ -357,8 +407,6 @@ export class JSExtractor {
       if (braceCount === 0) break;
 
       const trimmed = line.trim();
-
-      // Skip access modifiers and decorators
       const cleanLine = trimmed.replace(/^(public|private|protected|async|static)\s+/, '');
 
       const methodMatch = cleanLine.match(/^(\w+)\s*\(([^)]*)\)\s*(?::|\{)/);
@@ -366,9 +414,11 @@ export class JSExtractor {
         const name = methodMatch[1];
         const params = methodMatch[2];
         const docstring = this._extractJSDoc(lines, i);
+        const qualifiedName = `${className}.${name}`;
         symbols.push({
           name,
           kind: 'method',
+          symbolId: `${filePath}:method:${qualifiedName}`,
           signature: `${name}(${params})`,
           docstring,
           location: { file: filePath, line: i + 1, endLine: i + 1 },
