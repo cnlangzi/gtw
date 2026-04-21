@@ -895,7 +895,7 @@ export function getDependents(filepath, indexData, depth = 1) {
   // Recursive lookup for transitive dependencies
   const allDeps = [...direct];
   for (const dep of direct) {
-    const transitive = getDependents(dep, depth - 1, indexData);
+    const transitive = getDependents(dep, indexData, depth - 1);
     for (const t of transitive) {
       if (!allDeps.includes(t)) allDeps.push(t);
     }
