@@ -90,7 +90,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     ``,
     `Please perform the following steps in order:`,
     ``,
-    `1. Spawn a coding subagent (mode=run) in the workdir "${workdir}" with the following task:`,
+    `1. Spawn a coding subagent (mode=run, runTimeoutSeconds=1800) in the workdir "${workdir}" with the following task:`,
     ``,
     `   Task:`,
     `   ===`,
