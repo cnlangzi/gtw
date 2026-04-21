@@ -1,6 +1,22 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { git, currentBranch as getCurrentBranch, fetch, checkout } from '../utils/git.js';
+import { git, currentBranch as getCurrentBranch, fetch, checkout, hasLocalChanges } from '../utils/git.js';
+
+/**
+ * Classify a git error message and return structured result.
+ * @param {string} msg - Error message from git
+ * @param {string} branch - Branch name (used in generic remote-not-found message)
+ * @param {string} [remoteNotFoundMsg] - Override message for remote-not-found case
+ */
+function classifyGitError(msg, branch, remoteNotFoundMsg) {
+  if (msg.includes('Your local changes')) {
+    return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+  }
+  if (msg.includes('could not find')) {
+    return { ok: false, message: remoteNotFoundMsg || `⚠️ Remote branch origin/${branch} does not exist.` };
+  }
+  return { ok: false, message: `⚠️ Sync failed:\n${msg}` };
+}
 
 /**
  * CheckoutCommand — fetch and switch to a branch, pulling the latest from origin.
@@ -33,11 +49,16 @@ export class CheckoutCommand extends Commander {
    * 3. pull
    */
   async syncSpecificBranch(workdir, branch) {
-    // Step 1: fetch
+    // Step 0: proactively detect local changes before touching remote
+    if (hasLocalChanges(workdir)) {
+      return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+    }
+
+    // Step 1: fetch the specific branch
     try {
-      await fetch(workdir, { remote: 'origin' });
+      await fetch(workdir, { remote: 'origin', ref: branch });
     } catch (e) {
-      return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
+      return classifyGitError(e.message, branch);
     }
 
     // Step 2: checkout -B (create or reset) tracking branch to origin/<branch>
@@ -55,11 +76,7 @@ export class CheckoutCommand extends Commander {
         display: `✅ Synced ${finalBranch}${output ? '\n' + output : ''}`,
       };
     } catch (e) {
-      const msg = e.message;
-      if (msg.includes('could not find') || msg.includes(`origin/${branch}`)) {
-        return { ok: false, message: `⚠️ Remote branch origin/${branch} does not exist.` };
-      }
-      return { ok: false, message: `⚠️ Sync failed:\n${msg}` };
+      return classifyGitError(e.message, branch);
     }
   }
 
@@ -82,11 +99,16 @@ export class CheckoutCommand extends Commander {
       return { ok: false, message: '⚠️ Could not determine current branch (empty result).' };
     }
 
-    // Step 1: fetch
+    // Step 0: proactively detect local changes before touching remote
+    if (hasLocalChanges(workdir)) {
+      return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+    }
+
+    // Step 1: fetch the specific branch
     try {
-      await fetch(workdir, { remote: 'origin' });
+      await fetch(workdir, { remote: 'origin', ref: currentBranch });
     } catch (e) {
-      return { ok: false, message: `⚠️ Fetch failed:\n${e.message}` };
+      return classifyGitError(e.message, currentBranch, `⚠️ No remote branch found for "${currentBranch}". Push first: /gtw push`);
     }
 
     // Step 2: checkout -B current origin/current
@@ -102,11 +124,7 @@ export class CheckoutCommand extends Commander {
         display: `✅ Synced ${currentBranch}${output ? '\n' + output : ''}`,
       };
     } catch (e) {
-      const msg = e.message;
-      if (msg.includes('could not find') || msg.includes(`origin/${currentBranch}`)) {
-        return { ok: false, message: `⚠️ No remote branch found for "${currentBranch}". Push first: /gtw push` };
-      }
-      return { ok: false, message: `⚠️ Sync failed:\n${msg}` };
+      return classifyGitError(e.message, currentBranch);
     }
   }
 }
