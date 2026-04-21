@@ -3,27 +3,22 @@
  *
  * Detects whether a PR makes stylistic/improvement changes to code that was
  * intentionally non-standard (historical reasons, performance, compatibility).
- * Runs in parallel with Step 1 (detectReuse).
  */
 
+import { exec } from './exec.js';
 import {
   checkIndexFreshness,
   getOrBuildIndex,
   loadIndex,
-  getChangedFiles,
+  getRemoteBranchHead,
 } from './codebase-index.js';
 import { resolveModel, callAI } from './ai.js';
-import { exec } from './exec.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const INTERNAL_RATIO_THRESHOLD = 0.8;
-
-/**
- * Changes below this confidence are not reported.
- */
 const CONFIDENCE_THRESHOLD = 0.80;
 
 // ---------------------------------------------------------------------------
@@ -73,7 +68,7 @@ Rules:
 - Output empty array if no cleanups found`;
 
 // ---------------------------------------------------------------------------
-// Symbol change detection from diff
+// Language and pattern definitions
 // ---------------------------------------------------------------------------
 
 const EXT_TO_LANG = {
@@ -87,52 +82,49 @@ const EXT_TO_LANG = {
 };
 
 const FUNC_PATTERNS = {
-  js: /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|^(?:export\s+)?class\s+(\w+)/,
-  ts: /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|^(?:export\s+)?class\s+(\w+)/,
-  py: /^def\s+(\w+)|^async\s+def\s+(\w+)|^class\s+(\w+)/,
+  javascript: /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|^(?:export\s+)?class\s+(\w+)/,
+  typescript: /^(?:export\s+)?(?:async\s+)?function\s+(\w+)|^(?:export\s+)?(?:async\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|^(?:export\s+)?class\s+(\w+)/,
+  python: /^def\s+(\w+)|^async\s+def\s+(\w+)|^class\s+(\w+)/,
   go: /^func\s+(\w+)|^func\s+\([\w\s]+\*?\w+\)\s+(\w+)/,
   rust: /^pub\s+(?:async\s+)?fn\s+(\w+)|^pub\s+struct\s+(\w+)|^pub\s+enum\s+(\w+)/,
 };
 
+// ---------------------------------------------------------------------------
+// Git helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Get all modified files in a PR, excluding new files and deletions.
+ * Get only MODIFIED files in a PR (excludes new files and deletions).
  * @param {string} worktreePath
  * @param {string} baseRef
  * @param {string} headRef
- * @returns {string[]} - list of modified file paths
+ * @returns {string[]}
  */
 function getModifiedFiles(worktreePath, baseRef, headRef) {
-  const allChanged = getChangedFiles(worktreePath, `origin/${baseRef}`, `origin/${headRef}`);
-
-  // Get only modified files (not new, not deleted)
-  // We check if file exists in both base and head
-  const modified = [];
-  for (const file of allChanged) {
-    try {
-      // Check if file exists in base (wasn't added)
-      const baseExists = exec(
-        `git show origin/${baseRef}:${file} > /dev/null 2>&1 && echo yes || echo no`,
-        { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-      ).toString().trim();
-
-      if (baseExists === 'yes') {
-        modified.push(file);
-      }
-    } catch {
-      // If we can't check, skip the file
-    }
-  }
-  return modified;
+  const output = exec(
+    `git diff origin/${baseRef}..origin/${headRef} --name-only --diff-filter=M`,
+    { cwd: worktreePath, stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+  return output.toString().split('\n').map(f => f.trim()).filter(Boolean);
 }
 
+// ---------------------------------------------------------------------------
+// Symbol extraction from diff
+// ---------------------------------------------------------------------------
+
 /**
- * Extract changed symbols from a diff for a single file.
- * Returns { before, after, signature, name, line } for each changed function.
+ * Extract changed functions from a unified diff.
+ * Returns [{ name, file, lang, before, after, line }].
+ * Tracks brace depth to know when a function body ends.
+ *
+ * @param {string} diff
+ * @param {string} file
+ * @returns {Array}
  */
 function extractChangedSymbols(diff, file) {
   const ext = file.split('.').pop().toLowerCase();
   const lang = EXT_TO_LANG[ext] || 'javascript';
-  const pattern = FUNC_PATTERNS[lang === 'typescript' ? 'ts' : lang] || FUNC_PATTERNS.js;
+  const pattern = FUNC_PATTERNS[lang] || FUNC_PATTERNS.javascript;
 
   const changes = [];
   const lines = diff.split('\n');
@@ -145,14 +137,10 @@ function extractChangedSymbols(diff, file) {
   let inFunc = false;
   let braceDepth = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Hunk header
+  for (const line of lines) {
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      // Save previous function if any
-      if (currentFunc && (beforeLines.length > 0 || afterLines.length > 0)) {
+      if (currentFunc && braceDepth > 0) {
         changes.push({
           name: currentFunc,
           file,
@@ -175,22 +163,17 @@ function extractChangedSymbols(diff, file) {
     if (line.startsWith('-')) {
       baseLineNum++;
       const trimmed = line.slice(1);
-
-      // Check for function definition
       if (!inFunc) {
         const match = trimmed.match(pattern);
         if (match) {
           currentFunc = match[1] || match[2] || match[3];
           inFunc = true;
-          beforeLines.push(trimmed);
         }
-      } else {
-        beforeLines.push(trimmed);
       }
+      if (inFunc) beforeLines.push(trimmed);
     } else if (line.startsWith('+')) {
       headLineNum++;
       const trimmed = line.slice(1);
-
       if (!inFunc) {
         const match = trimmed.match(pattern);
         if (match) {
@@ -198,29 +181,16 @@ function extractChangedSymbols(diff, file) {
           inFunc = true;
         }
       }
-
-      if (inFunc) {
-        afterLines.push(trimmed);
-        // Track brace depth for function body
-        braceDepth += (trimmed.match(/{/g) || []).length - (trimmed.match(/}/g) || []).length;
-        // Function ends when brace depth goes negative (wasn't in body yet) or
-        // when we see a new function definition
-      }
+      if (inFunc) afterLines.push(trimmed);
     } else if (line.startsWith(' ')) {
       baseLineNum++;
       headLineNum++;
-
-      // Context line — if we're in a function, include it
+      const trimmed = line.slice(1);
       if (inFunc) {
-        const trimmed = line.slice(1);
         beforeLines.push(trimmed);
         afterLines.push(trimmed);
         braceDepth += (trimmed.match(/{/g) || []).length - (trimmed.match(/}/g) || []).length;
-      }
-
-      // End of function body
-      if (inFunc && braceDepth < 0) {
-        if (currentFunc && (beforeLines.length > 0 || afterLines.length > 0)) {
+        if (braceDepth <= 0) {
           changes.push({
             name: currentFunc,
             file,
@@ -229,17 +199,16 @@ function extractChangedSymbols(diff, file) {
             after: afterLines.join('\n'),
             line: headLineNum,
           });
+          currentFunc = null;
+          beforeLines = [];
+          afterLines = [];
+          inFunc = false;
+          braceDepth = 0;
         }
-        currentFunc = null;
-        beforeLines = [];
-        afterLines = [];
-        inFunc = false;
-        braceDepth = 0;
       }
     }
   }
 
-  // Don't forget last function
   if (currentFunc && (beforeLines.length > 0 || afterLines.length > 0)) {
     changes.push({
       name: currentFunc,
@@ -254,40 +223,15 @@ function extractChangedSymbols(diff, file) {
   return changes;
 }
 
-/**
- * Build symbol ID from file path and symbol name.
- * Matches the format used in codebase-index.js.
- */
-function buildSymbolId(file, name) {
-  return `${file}:${name}`;
-}
-
-/**
- * Find symbol in base index by name in a specific file.
- * Returns { symbol, symbolId } or null.
- */
-function findSymbolInIndex(fileIndex, file, name) {
-  const fileSymbols = fileIndex[file];
-  if (!fileSymbols) return null;
-
-  for (const sym of fileSymbols) {
-    if (sym.name === name) {
-      const symbolId = sym.symbolId || `${file}:${sym.kind || 'func'}:${name}`;
-      return { symbol: sym, symbolId };
-    }
-  }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Phase A: Ref-Based Triage
 // ---------------------------------------------------------------------------
 
 /**
- * Phase A triage using codebase-index refs[] data.
+ * Filter changed symbols based on reference data from the base index.
  *
- * @param {Array} changedSymbols - [{name, file, lang, before, after, line}]
- * @param {Object} baseIndexData - loaded index data with refs
+ * @param {Array} changedSymbols
+ * @param {Object} baseIndexData - { files, refs }
  * @returns {{ llmCandidates: Array, skipped: Array }}
  */
 function phaseATriage(changedSymbols, baseIndexData) {
@@ -296,42 +240,11 @@ function phaseATriage(changedSymbols, baseIndexData) {
   const skipped = [];
 
   for (const candidate of changedSymbols) {
-    const { name, file, before, after, lang } = candidate;
+    const { name, file } = candidate;
+    const symbolId = `${file}:func:${name}`;
 
-    // Build possible symbol IDs to look up
-    const possibleIds = [
-      `${file}:${name}`,
-      `${file}:func:${name}`,
-      `${file}:${lang}:${name}`,
-    ];
-
-    let symbolId = null;
-    let symbolData = null;
-
-    for (const sid of possibleIds) {
-      if (refs[sid]) {
-        symbolId = sid;
-        symbolData = { symbolId: sid };
-        break;
-      }
-    }
-
-    // Also try searching by name in the file's symbols
-    if (!symbolId) {
-      const found = findSymbolInIndex(fileIndex, file, name);
-      if (found) {
-        symbolId = found.symbolId;
-        symbolData = found;
-      }
-    }
-
-    if (!symbolId || !refs[symbolId]) {
-      // Cannot resolve to base index → send to LLM (conservative)
-      llmCandidates.push({
-        ...candidate,
-        symbolId: symbolId || `unresolved:${file}:${name}`,
-        triageReason: 'unresolvable',
-      });
+    if (!refs[symbolId]) {
+      llmCandidates.push({ ...candidate, symbolId, triageReason: 'unresolvable' });
       continue;
     }
 
@@ -339,29 +252,17 @@ function phaseATriage(changedSymbols, baseIndexData) {
     const totalRefs = symbolRefs.length;
 
     if (totalRefs === 0) {
-      // No external callers → low risk, SKIP
       skipped.push({ ...candidate, symbolId, triageReason: 'no-external-refs' });
       continue;
     }
 
-    // Count refs inside PR (we can't know exactly, so estimate based on file)
-    // For triage: if internalRatio > 0.8, skip
-    // We approximate internalRatio by counting refs to the same file
     const internalRefs = symbolRefs.filter(r => r.file === file).length;
-    const internalRatio = internalRefs / totalRefs;
+    const internalRatio = totalRefs > 0 ? internalRefs / totalRefs : 0;
 
     if (internalRatio > INTERNAL_RATIO_THRESHOLD) {
-      // Overwhelmingly self-contained → low risk, SKIP
       skipped.push({ ...candidate, symbolId, internalRatio, triageReason: 'low-external-impact' });
     } else {
-      // External callers exist → needs LLM check
-      llmCandidates.push({
-        ...candidate,
-        symbolId,
-        internalRatio,
-        totalRefs,
-        triageReason: 'external-callers',
-      });
+      llmCandidates.push({ ...candidate, symbolId, internalRatio, totalRefs, triageReason: 'external-callers' });
     }
   }
 
@@ -373,12 +274,16 @@ function phaseATriage(changedSymbols, baseIndexData) {
 // ---------------------------------------------------------------------------
 
 /**
- * Call LLM to detect unnecessary cleanups in filtered candidates.
+ * Send candidates to LLM for unnecessary cleanup analysis.
+ *
+ * @param {Array} llmCandidates
+ * @param {string} issueDescription
+ * @param {string} sessionKey
+ * @returns {Promise<Array>}
  */
 async function phaseBLLMAnalysis(llmCandidates, issueDescription, sessionKey) {
   if (llmCandidates.length === 0) return [];
 
-  // Build prompt with before/after snippets
   const changesText = llmCandidates
     .map(c => {
       let entry = `File: ${c.file}\nSymbol: ${c.name}\n`;
@@ -390,7 +295,6 @@ async function phaseBLLMAnalysis(llmCandidates, issueDescription, sessionKey) {
     .join('\n---\n\n');
 
   const systemPrompt = CLEANUP_SYSTEM_PROMPT.replace('{issue_description}', issueDescription || '(no linked issue)');
-
   const userPrompt = `Review these code changes for unnecessary cleanup:\n\n${changesText}\n\nOutput JSON with your findings.`;
 
   let lastError = null;
@@ -436,25 +340,23 @@ async function phaseBLLMAnalysis(llmCandidates, issueDescription, sessionKey) {
 /**
  * Main entry point: detect unnecessary cleanup in a PR.
  *
- * @param {number} prNum - PR number
- * @param {string} baseBranch - Target branch (e.g. 'main')
- * @param {string} worktreePath - Worktree path for git operations
+ * @param {number} prNum
+ * @param {string} baseBranch
+ * @param {string} worktreePath
  * @param {string} repo - "owner/repo"
- * @param {GitHubClient} client - GitHub API client
- * @param {string} sessionKey - Session key for LLM calls
- * @param {string|null} issueDescription - Linked issue description (for LLM context)
- * @returns {Promise<{ cleanups: Array, llmCandidates: Array, skipped: Array, modifiedFiles: number }>}
+ * @param {object} client - GitHub API client
+ * @param {string} sessionKey
+ * @param {string|null} issueDescription
+ * @returns {Promise<{ cleanups: Array, llmCandidates: Array, skipped: Array, modifiedFiles: number, noLinkedIssue: boolean }>}
  */
 export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, repo, client, sessionKey, issueDescription = null) {
   console.log(`[review-cleanup] Starting for PR #${prNum} (base: ${baseBranch})`);
 
-  // If no linked issue, skip (not a real PR for cleanup detection purposes)
   if (!issueDescription) {
     console.log(`[review-cleanup] No linked issue — skipping Step 2`);
     return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: true };
   }
 
-  // Ensure base branch index is fresh
   const freshness = checkIndexFreshness(repo, baseBranch, worktreePath);
   console.log(`[review-cleanup] Freshness: ${freshness.fresh} (indexed: ${freshness.indexedCommit?.slice(0, 7)}, current: ${freshness.currentCommit?.slice(0, 7)})`);
 
@@ -463,34 +365,37 @@ export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, 
     getOrBuildIndex(worktreePath, repo, baseBranch);
   }
 
-  // Load base branch index
   const baseIndexData = loadIndex(repo, baseBranch);
   if (!baseIndexData || !baseIndexData.files || Object.keys(baseIndexData.files).length === 0) {
     console.log(`[review-cleanup] No index found for ${repo}@${baseBranch}`);
-    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
   }
 
-  // Get PR head ref
-  let headRef;
-  try {
-    const prDetails = await client.request('GET', `/repos/${repo}/pulls/${prNum}`);
-    headRef = prDetails.head?.ref;
-  } catch (e) {
-    console.error(`[review-cleanup] Failed to get PR head ref: ${e.message}`);
-    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+  const headRef = await getRemoteBranchHead(worktreePath, baseBranch).then(
+    () => client.request('GET', `/repos/${repo}/pulls/${prNum}`).then(r => r.head?.ref),
+    () => null
+  );
+
+  if (!headRef) {
+    try {
+      const prDetails = await client.request('GET', `/repos/${repo}/pulls/${prNum}`);
+      headRef = prDetails.head?.ref;
+    } catch (e) {
+      console.error(`[review-cleanup] Failed to get PR head ref: ${e.message}`);
+      return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
+    }
   }
 
   if (!headRef) {
     console.log(`[review-cleanup] No head ref for PR #${prNum}`);
-    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
   }
 
-  // Phase A: Get modified files and extract changed symbols
   const modifiedFiles = getModifiedFiles(worktreePath, baseBranch, headRef);
   console.log(`[review-cleanup] Modified files (excluding new): ${modifiedFiles.length}`);
 
   if (modifiedFiles.length === 0) {
-    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0, noLinkedIssue: false };
   }
 
   const allChangedSymbols = [];
@@ -498,9 +403,9 @@ export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, 
     try {
       const diff = exec(
         `git diff origin/${baseBranch}..origin/${headRef} -- "${file}"`,
-        { cwd: worktreePath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+        { cwd: worktreePath, stdio: ['pipe', 'pipe', 'pipe'] }
       );
-      const symbols = extractChangedSymbols(diff, file);
+      const symbols = extractChangedSymbols(diff.toString(), file);
       allChangedSymbols.push(...symbols);
     } catch (e) {
       console.error(`[review-cleanup] Failed to diff ${file}: ${e.message}`);
@@ -510,14 +415,12 @@ export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, 
   console.log(`[review-cleanup] Changed symbols extracted: ${allChangedSymbols.length}`);
 
   if (allChangedSymbols.length === 0) {
-    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: modifiedFiles.length };
+    return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: modifiedFiles.length, noLinkedIssue: false };
   }
 
-  // Phase A: Ref-based triage
   const { llmCandidates, skipped } = phaseATriage(allChangedSymbols, baseIndexData);
   console.log(`[review-cleanup] Phase A triage: ${llmCandidates.length} → LLM, ${skipped.length} skipped`);
 
-  // Phase B: LLM Analysis
   const cleanups = await phaseBLLMAnalysis(llmCandidates, issueDescription, sessionKey);
   console.log(`[review-cleanup] Phase B LLM found ${cleanups.length} cleanups`);
 
@@ -526,5 +429,6 @@ export async function detectUnnecessaryCleanup(prNum, baseBranch, worktreePath, 
     llmCandidates,
     skipped,
     modifiedFiles: modifiedFiles.length,
+    noLinkedIssue: false,
   };
 }
