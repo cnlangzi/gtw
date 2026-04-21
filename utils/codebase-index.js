@@ -5,6 +5,7 @@
  * - Per-branch index: ~/.gtw/codebase-index/{owner}/{repo}@{branch}.json
  * - Git-aware incremental updates (commit hash based)
  * - Fuzzy search via Fuse.js
+ * - Reference tracking for impact analysis
  */
 
 import fs from 'fs';
@@ -66,7 +67,7 @@ function getLocalBranchHead(worktreePath, branch) {
 }
 
 /**
- * Get the commit hash of a remote branch (origin/<branch>).
+ * Get the commit hash of the remote branch (origin/<branch>).
  * Fetches origin first to ensure we have the latest.
  * @param {string} worktreePath
  * @param {string} branch
@@ -184,15 +185,13 @@ function getIndexMarkdownPath(repo, branch) {
  * Replaces or removes characters that are invalid in filenames.
  */
 function sanitizeBranch(branch) {
-  // Replace / with _ (common in branch names)
-  // Remove other invalid filename characters
   return branch
     .replace(/\//g, '_')
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
-    .replace(/\.+$/, '')       // no leading/trailing dots
+    .replace(/\.+$/, '')
     .replace(/^\.+/, '')
-    .replace(/_{2,}/g, '_')    // no consecutive underscores
-    .slice(0, 200);            // max length 200 chars
+    .replace(/_{2,}/g, '_')
+    .slice(0, 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,15 +261,40 @@ function renderMarkdownIndex(repo, branch, lastUpdated, lastCommit, files) {
 }
 
 // ---------------------------------------------------------------------------
-// Index build
+// Index build - two-phase extraction
 // ---------------------------------------------------------------------------
 
+/**
+ * Normalize extractor output to { definitions: [], localRefs: [] }.
+ * Handles both legacy (array) and new ({ definitions: [], localRefs: [] }) formats.
+ */
+function normalizeExtractorOutput(raw, filePath) {
+  if (!raw) return { definitions: [], localRefs: [] };
+
+  // New format
+  if (Array.isArray(raw)) {
+    // Legacy format: just an array of symbols
+    return { definitions: raw, localRefs: [] };
+  }
+
+  // Already new format
+  if (Array.isArray(raw.definitions)) {
+    return raw;
+  }
+
+  return { definitions: [], localRefs: [] };
+}
+
+/**
+ * Index a single file, returning normalized output.
+ */
 function indexFile(fullPath, relativePath) {
   const extractor = getExtractor(fullPath);
   if (!extractor) return null;
   try {
     const content = fs.readFileSync(fullPath, 'utf8');
-    return extractor.extractExports(content, relativePath);
+    const result = extractor.extractExports(content, relativePath);
+    return normalizeExtractorOutput(result, relativePath);
   } catch (e) {
     console.error(`[codebase-index] Failed to index ${relativePath}: ${e.message}`);
     return null;
@@ -279,6 +303,8 @@ function indexFile(fullPath, relativePath) {
 
 /**
  * Build full index for a worktree on a given branch.
+ * Phase 1: Per-file extraction (definitions + local refs)
+ * Phase 2: Cross-file reference resolution
  */
 export function buildIndex(worktreePath, repo, branch) {
   const startTime = Date.now();
@@ -286,21 +312,31 @@ export function buildIndex(worktreePath, repo, branch) {
   const files = collectFiles(worktreePath);
 
   const indexedFiles = {};
+  const allLocalRefs = []; // { file, refs: [] }
   let totalFunctions = 0;
   let skippedFiles = 0;
 
+  // Phase 1: Per-file extraction
   for (const file of files) {
-    const symbols = indexFile(file.fullPath, file.path);
-    if (symbols && symbols.length > 0) {
-      indexedFiles[file.path] = symbols;
-      totalFunctions += symbols.length;
+    const result = indexFile(file.fullPath, file.path);
+    if (result && result.definitions.length > 0) {
+      indexedFiles[file.path] = result.definitions;
+      totalFunctions += result.definitions.length;
     } else {
       skippedFiles++;
     }
+    if (result && result.localRefs.length > 0) {
+      allLocalRefs.push({ file: file.path, refs: result.localRefs });
+    }
   }
+
+  // Phase 2: Cross-file reference resolution
+  const { refs, fileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
 
   return {
     files: indexedFiles,
+    refs,
+    fileDeps,
     meta: {
       repo,
       branch,
@@ -324,7 +360,6 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
   const lastCommit = getBranchHead(worktreePath, branch);
   const previousCommit = existingIndex?.meta?.lastCommit;
 
-  // If commit hash changed, find what files changed
   let changedFiles = new Set();
   if (previousCommit && previousCommit !== lastCommit) {
     const changed = getChangedFiles(worktreePath, previousCommit, lastCommit);
@@ -334,29 +369,30 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
 
   const previousFiles = existingIndex?.files || {};
   const indexedFiles = {};
+  const allLocalRefs = [];
   let totalFunctions = 0;
   let rebuilt = 0;
   let unchanged = 0;
 
-  // If no previous index, do full build
   if (!existingIndex || !previousFiles || Object.keys(previousFiles).length === 0) {
     console.log('[codebase-index] No existing index, doing full build');
-    const fullResult = buildIndex(worktreePath, repo, branch);
-    return fullResult;
+    return buildIndex(worktreePath, repo, branch);
   }
 
-  // Collect all current source files
   const currentFiles = collectFiles(worktreePath);
 
   for (const file of currentFiles) {
     const needsRebuild = changedFiles.has(file.path) || !previousFiles[file.path];
 
     if (needsRebuild) {
-      const symbols = indexFile(file.fullPath, file.path);
-      if (symbols && symbols.length > 0) {
-        indexedFiles[file.path] = symbols;
-        totalFunctions += symbols.length;
+      const result = indexFile(file.fullPath, file.path);
+      if (result && result.definitions.length > 0) {
+        indexedFiles[file.path] = result.definitions;
+        totalFunctions += result.definitions.length;
         rebuilt++;
+      }
+      if (result && result.localRefs.length > 0) {
+        allLocalRefs.push({ file: file.path, refs: result.localRefs });
       }
     } else {
       indexedFiles[file.path] = previousFiles[file.path];
@@ -365,8 +401,13 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
     }
   }
 
+  // Phase 2: Cross-file reference resolution
+  const { refs, fileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
+
   return {
     files: indexedFiles,
+    refs,
+    fileDeps,
     meta: {
       repo,
       branch,
@@ -382,6 +423,110 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
       },
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Reference index building (Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build global reference index from per-file local refs.
+ * @param {Object} indexedFiles - file -> definitions map
+ * @param {Array} allLocalRefs - [{ file, refs: [] }] per-file local references
+ * @returns {{ refs: Object, fileDeps: Object }}
+ */
+function buildReferenceIndex(indexedFiles, allLocalRefs) {
+  const refs = {};    // symbolId -> [{ file, line, col, kind, direct }]
+  const fileDeps = {}; // file -> [dependent files]
+
+  // Build symbol lookup: name -> symbolId for each file
+  const symbolLookup = buildSymbolLookup(indexedFiles);
+
+  // Process each file's local refs and resolve to global symbol IDs
+  for (const { file: filePath, refs: localRefs } of allLocalRefs) {
+    const resolvedRefs = [];
+
+    for (const ref of localRefs) {
+      const symbolId = resolveSymbolRef(ref.name, filePath, symbolLookup);
+      if (symbolId) {
+        resolvedRefs.push({
+          file: filePath,
+          line: ref.line,
+          col: ref.col,
+          kind: ref.kind,
+          direct: true,
+        });
+
+        // Add to global refs index
+        if (!refs[symbolId]) {
+          refs[symbolId] = [];
+        }
+        refs[symbolId].push({
+          file: filePath,
+          line: ref.line,
+          col: ref.col,
+          kind: ref.kind,
+          direct: true,
+        });
+
+        // Track file dependencies
+        const defFile = symbolId.split(':')[0];
+        if (defFile !== filePath) {
+          if (!fileDeps[defFile]) {
+            fileDeps[defFile] = [];
+          }
+          if (!fileDeps[defFile].includes(filePath)) {
+            fileDeps[defFile].push(filePath);
+          }
+        }
+      }
+    }
+  }
+
+  return { refs, fileDeps };
+}
+
+/**
+ * Build a lookup table: file -> { symbolName -> symbolId }
+ */
+function buildSymbolLookup(indexedFiles) {
+  const lookup = {};
+
+  for (const [filePath, symbols] of Object.entries(indexedFiles)) {
+    lookup[filePath] = {};
+    for (const symbol of symbols) {
+      // Use symbolId if available (new format), otherwise build from name
+      const symbolId = symbol.symbolId || `${filePath}:${symbol.kind}:${symbol.name}`;
+      lookup[filePath][symbol.name] = symbolId;
+
+      // Also index methods under qualified names
+      if (symbol.methods) {
+        for (const method of symbol.methods) {
+          const methodId = method.symbolId || symbolId.replace(/:method:/, ':method:');
+          lookup[filePath][method.name] = methodId;
+          lookup[filePath][`${symbol.name}.${method.name}`] = methodId;
+        }
+      }
+    }
+  }
+
+  return lookup;
+}
+
+/**
+ * Resolve a local reference name to its global symbolId.
+ * Searches in order: current file -> imported files (simplified)
+ */
+function resolveSymbolRef(refName, currentFile, symbolLookup) {
+  // First check current file
+  const currentSymbols = symbolLookup[currentFile];
+  if (currentSymbols && currentSymbols[refName]) {
+    return currentSymbols[refName];
+  }
+
+  // TODO: resolve imports (requires more complex import tracking)
+  // For now, return null for cross-file refs that can't be resolved locally
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,11 +546,13 @@ function saveIndexToDisk(repo, branch, indexData) {
   const jsonPayload = {
     repo: indexData.meta.repo,
     branch: indexData.meta.branch,
-    schemaVersion: '1.0',
+    schemaVersion: '2.0',
     lastCommit: indexData.meta.lastCommit,
     lastUpdated: indexData.meta.lastUpdated,
     stats: indexData.meta.stats,
     files: indexData.files,
+    refs: indexData.refs || {},
+    fileDeps: indexData.fileDeps || {},
   };
   fs.writeFileSync(jsonPath, JSON.stringify(jsonPayload, null, 2), 'utf8');
 
@@ -429,7 +576,7 @@ function saveIndexToDisk(repo, branch, indexData) {
 
 /**
  * Load index for a specific branch.
- * @returns {{ files: Record<string, object[]>, meta: object } | null}
+ * @returns {{ files: Record<string, object[]>, meta: object, refs?: object, fileDeps?: object } | null}
  */
 export function loadIndex(repo, branch) {
   const jsonPath = getIndexJsonPath(repo, branch);
@@ -439,6 +586,8 @@ export function loadIndex(repo, branch) {
     const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     return {
       files: data.files || {},
+      refs: data.refs || {},
+      fileDeps: data.fileDeps || {},
       meta: {
         repo: data.repo,
         branch: data.branch,
@@ -536,6 +685,81 @@ export function listIndexedBranches(repo) {
   return fs.readdirSync(repoDir)
     .filter((f) => f.startsWith(prefix) && f.endsWith('.json'))
     .map((f) => f.replace(prefix, '').replace('.json', ''));
+}
+
+// ---------------------------------------------------------------------------
+// Impact Analysis API
+// ---------------------------------------------------------------------------
+
+/**
+ * Get all references for a symbol.
+ * @param {string} symbolId - e.g., "src/auth.js:func:validateToken"
+ * @param {Object} indexData - loaded index data
+ * @returns {Array} - reference locations
+ */
+export function getSymbolReferences(symbolId, indexData) {
+  if (!indexData || !indexData.refs) return [];
+  return indexData.refs[symbolId] || [];
+}
+
+/**
+ * Analyze potential impact of changes.
+ * @param {Array} changes - [{symbolId, oldSig, newSig}]
+ * @param {Object} indexData - loaded index data
+ * @returns {Array} - impact reports per change
+ */
+export function analyzeImpact(changes, indexData) {
+  if (!changes || !Array.isArray(changes)) return [];
+  if (!indexData || !indexData.refs) {
+    return changes.map(c => ({ symbolId: c.symbolId, impact: 'unknown', references: [] }));
+  }
+
+  return changes.map(change => {
+    const { symbolId, oldSig, newSig } = change;
+    const references = indexData.refs[symbolId] || [];
+
+    // Determine impact level based on number of references and signature change
+    let impact = 'low';
+    if (references.length > 10) impact = 'high';
+    else if (references.length > 0) impact = 'medium';
+
+    // Check if it's a breaking change
+    const isBreaking = oldSig && newSig && oldSig !== newSig;
+
+    return {
+      symbolId,
+      oldSig,
+      newSig,
+      impact,
+      isBreaking,
+      referenceCount: references.length,
+      references,
+    };
+  });
+}
+
+/**
+ * Get all dependents of a file.
+ * @param {string} filepath
+ * @param {number} depth - recursion depth (default 1)
+ * @param {Object} indexData - loaded index data
+ * @returns {Array} - dependent files
+ */
+export function getDependents(filepath, depth = 1, indexData) {
+  if (!indexData || !indexData.fileDeps) return [];
+  const direct = indexData.fileDeps[filepath] || [];
+
+  if (depth <= 1) return direct;
+
+  // Recursive lookup for transitive dependencies
+  const allDeps = [...direct];
+  for (const dep of direct) {
+    const transitive = getDependents(dep, depth - 1, indexData);
+    for (const t of transitive) {
+      if (!allDeps.includes(t)) allDeps.push(t);
+    }
+  }
+  return allDeps;
 }
 
 // ---------------------------------------------------------------------------

@@ -8,16 +8,14 @@ export class JSExtractor {
 
   /**
    * Extract all exported symbols from JS/TS file content.
+   * Returns { definitions: [], localRefs: [] } for two-phase extraction.
    * @param {string} content
    * @param {string} filePath
-   * @returns {ExportSymbol[]}
+   * @returns {{ definitions: ExportSymbol[], localRefs: LocalRef[] }}
    */
   extractExports(content, filePath) {
     const symbols = [];
-
-    // Named exports: export const/let/var/function/class
-    // export { name }
-    // export default
+    const localRefs = [];
 
     const lines = content.split('\n');
     let i = 0;
@@ -44,6 +42,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind,
+          symbolId: `${filePath}:${kind}:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -66,6 +65,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'function',
+          symbolId: `${filePath}:func:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -88,6 +88,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'class',
+          symbolId: `${filePath}:class:${name}`,
           signature: `class ${name}`,
           docstring,
           location: { file: filePath, ...location },
@@ -111,6 +112,7 @@ export class JSExtractor {
         symbols.push({
           name,
           kind: 'constant',
+          symbolId: `${filePath}:const:${name}`,
           signature,
           docstring,
           location: { file: filePath, ...location },
@@ -131,11 +133,12 @@ export class JSExtractor {
           .filter((s) => s);
 
         for (const name of exportedNames) {
-          const docstring = ''; // Inline exports don’t have preceding JSDoc
+          const docstring = ''; // Inline exports don't have preceding JSDoc
           const location = this._extractLocation(lines, i);
           symbols.push({
             name,
             kind: 'export',
+            symbolId: `${filePath}:export:${name}`,
             signature: name,
             docstring,
             location: { file: filePath, ...location },
@@ -148,10 +151,24 @@ export class JSExtractor {
         continue;
       }
 
+      // Track function/class calls and references
+      const callMatch = trimmed.match(/(\w+)\s*\(/);
+      if (callMatch && !trimmed.startsWith('//') && !trimmed.startsWith('*')) {
+        const refName = callMatch[1];
+        if (refName && !['if', 'else', 'for', 'while', 'switch', 'case', 'return', 'throw', 'new', 'typeof', 'delete'].includes(refName)) {
+          localRefs.push({
+            name: refName,
+            line: i + 1,
+            col: trimmed.indexOf(refName) + 1,
+            kind: 'call',
+          });
+        }
+      }
+
       i++;
     }
 
-    return symbols;
+    return { definitions: symbols, localRefs };
   }
 
   // ---------------------------------------------------------------------------
@@ -366,9 +383,11 @@ export class JSExtractor {
         const name = methodMatch[1];
         const params = methodMatch[2];
         const docstring = this._extractJSDoc(lines, i);
+        const qualifiedName = `${className}.${name}`;
         symbols.push({
           name,
           kind: 'method',
+          symbolId: `${filePath}:method:${qualifiedName}`,
           signature: `${name}(${params})`,
           docstring,
           location: { file: filePath, line: i + 1, endLine: i + 1 },
