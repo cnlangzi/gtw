@@ -1,6 +1,6 @@
 import { Commander } from './Commander.js';
 import { getWip } from '../utils/wip.js';
-import { git, currentBranch as getCurrentBranch, fetch, checkout } from '../utils/git.js';
+import { git, currentBranch as getCurrentBranch, fetch, checkout, hasLocalChanges } from '../utils/git.js';
 
 /**
  * Classify a git error message and return structured result.
@@ -49,6 +49,11 @@ export class CheckoutCommand extends Commander {
    * 3. pull
    */
   async syncSpecificBranch(workdir, branch) {
+    // Step 0: proactively detect local changes before touching remote
+    if (hasLocalChanges(workdir)) {
+      return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
+    }
+
     // Step 1: fetch the specific branch
     try {
       await fetch(workdir, { remote: 'origin', ref: branch });
@@ -92,6 +97,11 @@ export class CheckoutCommand extends Commander {
 
     if (!currentBranch) {
       return { ok: false, message: '⚠️ Could not determine current branch (empty result).' };
+    }
+
+    // Step 0: proactively detect local changes before touching remote
+    if (hasLocalChanges(workdir)) {
+      return { ok: false, message: '⚠️ Your local changes would be overwritten by checkout. Please commit or stash your changes first.' };
     }
 
     // Step 1: fetch the specific branch

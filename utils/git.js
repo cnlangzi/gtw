@@ -268,6 +268,19 @@ export async function addAll(workdir) {
 }
 
 // ---------------------------------------------------------------------------
+// hasLocalChanges — check for uncommitted working tree changes
+// ---------------------------------------------------------------------------
+
+export function hasLocalChanges(workdir) {
+  try {
+    const output = execGit('git status --porcelain', workdir);
+    return output.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // getStagedFiles — returns list of staged file paths
 // ---------------------------------------------------------------------------
 
