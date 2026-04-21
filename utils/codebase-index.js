@@ -402,7 +402,13 @@ export function buildIncrementalIndex(worktreePath, repo, branch, existingIndex)
   }
 
   // Phase 2: Cross-file reference resolution
-  const { refs, fileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
+  const { refs: newRefs, fileDeps: newFileDeps } = buildReferenceIndex(indexedFiles, allLocalRefs);
+
+  // Merge new refs with previous refs (unchanged files keep their refs)
+  const previousRefs = existingIndex?.refs || {};
+  const previousFileDeps = existingIndex?.fileDeps || {};
+  const refs = { ...previousRefs, ...newRefs };
+  const fileDeps = { ...previousFileDeps, ...newFileDeps };
 
   return {
     files: indexedFiles,
@@ -444,30 +450,25 @@ function buildReferenceIndex(indexedFiles, allLocalRefs) {
 
   // Process each file's local refs and resolve to global symbol IDs
   for (const { file: filePath, refs: localRefs } of allLocalRefs) {
-    const resolvedRefs = [];
-
     for (const ref of localRefs) {
       const symbolId = resolveSymbolRef(ref.name, filePath, symbolLookup);
       if (symbolId) {
-        resolvedRefs.push({
-          file: filePath,
-          line: ref.line,
-          col: ref.col,
-          kind: ref.kind,
-          direct: true,
-        });
-
-        // Add to global refs index
+        // Add to global refs index (deduplicated)
         if (!refs[symbolId]) {
           refs[symbolId] = [];
         }
-        refs[symbolId].push({
-          file: filePath,
-          line: ref.line,
-          col: ref.col,
-          kind: ref.kind,
-          direct: true,
-        });
+        const isDuplicate = refs[symbolId].some(
+          (r) => r.file === filePath && r.line === ref.line && r.col === ref.col
+        );
+        if (!isDuplicate) {
+          refs[symbolId].push({
+            file: filePath,
+            line: ref.line,
+            col: ref.col,
+            kind: ref.kind,
+            direct: true,
+          });
+        }
 
         // Track file dependencies
         const defFile = symbolId.split(':')[0];
@@ -502,9 +503,10 @@ function buildSymbolLookup(indexedFiles) {
       // Also index methods under qualified names
       if (symbol.methods) {
         for (const method of symbol.methods) {
-          const methodId = method.symbolId || symbolId.replace(/:method:/, ':method:');
+          const qualifiedName = `${symbol.name}.${method.name}`;
+          const methodId = method.symbolId || `${filePath}:method:${qualifiedName}`;
           lookup[filePath][method.name] = methodId;
-          lookup[filePath][`${symbol.name}.${method.name}`] = methodId;
+          lookup[filePath][qualifiedName] = methodId;
         }
       }
     }
@@ -745,7 +747,7 @@ export function analyzeImpact(changes, indexData) {
  * @param {Object} indexData - loaded index data
  * @returns {Array} - dependent files
  */
-export function getDependents(filepath, depth = 1, indexData) {
+export function getDependents(filepath, indexData, depth = 1) {
   if (!indexData || !indexData.fileDeps) return [];
   const direct = indexData.fileDeps[filepath] || [];
 
