@@ -368,8 +368,9 @@ export class ReviewCommand extends Commander {
           const severityBadge = c.severity === 'critical' ? '🔴 critical' :
             c.severity === 'high' ? '🟠 high' :
             c.severity === 'medium' ? '🟡 medium' : '🟢 low';
-          const whyCleanup = (c.whyCleanup || '').replace(/\|/g, '\\|');
-          const suggestion = (c.suggestion || '').replace(/\|/g, '\\|');
+          const toCell = (v) => String(v || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+          const whyCleanup = toCell(c.whyCleanup);
+          const suggestion = toCell(c.suggestion);
           comment += `| ${c.file} | ${c.symbol}: ${whyCleanup} | ${severityBadge} | ${suggestion} |\n`;
         }
         comment += '\n';
