@@ -260,10 +260,10 @@ export class ReviewCommand extends Commander {
     // Separator
     comment += '---\n\n';
 
-    // Reuse Review findings grouped by severity
-    const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
+    // Reuse Review findings grouped by severity (all verdict types grouped by severity only)
+    const criticalItems = items.filter((i) => i.severity === 'critical');
     const highItems = items.filter((i) => i.severity === 'high');
-    const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
+    const mediumItems = items.filter((i) => i.severity === 'medium');
     const lowItems = items.filter((i) => i.severity === 'low');
 
     if (criticalItems.length > 0 || highItems.length > 0 || mediumItems.length > 0 || lowItems.length > 0) {
