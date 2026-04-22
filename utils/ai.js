@@ -90,17 +90,18 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main', 
       return await _callAIOnce(model, systemPrompt, userPrompt, agentId, timeout);
     } catch (err) {
       const isAbort = err.name === 'AbortError' || err.code === 'ETIMEDOUT' || err.message?.includes('network timeout');
-      if (isAbort && attempt === 1) {
-        console.log(`[gtw] AI request timed out after ${timeout}s (attempt 1/2), retrying…`);
-        lastError = err;
-        continue;
+      if (isAbort) {
+        if (attempt === 1) {
+          console.log(`[gtw] AI request timed out after ${timeout}s (attempt 1/2), retrying…`);
+          lastError = err;
+          continue;
+        }
+        // Second attempt also timed out — throw with cause
+        throw new TimeoutError(timeout, 2, lastError ?? err);
       }
       throw err;
     }
   }
-
-  // Second attempt also timed out — include original error as cause
-  throw new TimeoutError(timeout, 2, lastError);
 }
 
 /**
