@@ -149,7 +149,7 @@ export class ReviewCommand extends Commander {
           );
         } catch (e) {
           console.error(`[ReviewCommand] Cleanup detection failed: ${e.message}`);
-          return { cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
+          return { error: e.message, cleanups: [], llmCandidates: [], skipped: [], modifiedFiles: 0 };
         }
       })(),
     ]);
@@ -172,7 +172,7 @@ export class ReviewCommand extends Commander {
     );
 
     let finalLabel = 'gtw/lgtm';
-    if (duplicateResults.error || criticalItems.length > 0 || criticalCleanups.length > 0) {
+    if (duplicateResults.error || cleanupResults.error || criticalItems.length > 0 || criticalCleanups.length > 0) {
       finalLabel = 'gtw/revise';
     }
 

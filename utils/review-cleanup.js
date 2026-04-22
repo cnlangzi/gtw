@@ -64,7 +64,7 @@ Rules:
 - high = clearly unnecessary with potential hidden behavior change
 - medium = stylistic cleanup, low risk
 - low = minor cleanup, likely safe but still unnecessary
-- Output empty array if no cleanups found`;
+- Output an object with an empty cleanups array if no cleanups found`;
 
 // ---------------------------------------------------------------------------
 // Language and pattern definitions
@@ -139,7 +139,7 @@ function extractChangedSymbols(diff, file) {
   for (const line of lines) {
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      if (currentFunc && braceDepth > 0) {
+      if (currentFunc && (braceDepth > 0 || beforeLines.length > 0 || afterLines.length > 0)) {
         changes.push({
           name: currentFunc,
           file,
