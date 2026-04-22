@@ -164,15 +164,16 @@ export class ReviewCommand extends Commander {
     }
 
     // Determine verdict — both Step 1 and Step 2 verdicts are independent
-    const criticalItems = duplicateResults.items.filter(
-      (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
-    );
-    const criticalCleanups = (cleanupResults.cleanups || []).filter(
-      (c) => ['critical', 'high'].includes(c.severity)
-    );
+    // NOTE: We base the verdict ONLY on actual findings (items.length, cleanups.length),
+    // NOT on the presence of an error field. Detection functions may error without
+    // producing any findings (e.g., API timeout returns { error, items: [] }), and
+    // such errors should NOT flip the label to gtw/revise. This ensures the published
+    // comment (which uses the same totals for icons) is always consistent with the label.
+    const totalReuseIssues = (duplicateResults.items || []).length;
+    const totalCleanupIssues = (cleanupResults.cleanups || []).length;
 
     let finalLabel = 'gtw/lgtm';
-    if (duplicateResults.error || cleanupResults.error || criticalItems.length > 0 || criticalCleanups.length > 0) {
+    if (totalReuseIssues > 0 || totalCleanupIssues > 0) {
       finalLabel = 'gtw/revise';
     }
 
@@ -197,6 +198,14 @@ export class ReviewCommand extends Commander {
     saveWip({ ...wip, reviewState: newReviewState });
 
     // Build response
+    // Recompute critical findings for summary display (only duplicate verdicts at critical/high severity block)
+    const summaryCriticalItems = (duplicateResults.items || []).filter(
+      (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
+    );
+    const summaryCriticalCleanups = (cleanupResults.cleanups || []).filter(
+      (c) => ['critical', 'high'].includes(c.severity)
+    );
+
     const verdictEmoji = finalLabel === 'gtw/lgtm' ? '✅' : '⚠️';
     const verdictText = finalLabel === 'gtw/lgtm' ? 'APPROVED' : 'CHANGES NEEDED';
 
@@ -206,21 +215,21 @@ export class ReviewCommand extends Commander {
       prData.pr.title,
       ``,
       `Functions analyzed: ${duplicateResults.newFunctions?.length || 0}`,
-      `Duplicates found: ${criticalItems.length}`,
-      `Unnecessary cleanups: ${criticalCleanups.length}`,
+      `Reuse issues: ${totalReuseIssues}`,
+      `Cleanup issues: ${totalCleanupIssues}`,
     ];
 
-    if (criticalItems.length > 0) {
-      summary.push(``, `Duplicate functions:`);
-      for (const item of criticalItems) {
+    if (summaryCriticalItems.length > 0) {
+      summary.push(``, `Duplicate functions (critical/high):`);
+      for (const item of summaryCriticalItems) {
         summary.push(`  - ${item.newFunc} → duplicates ${item.existingFunc}`);
         summary.push(`    Reason: ${item.reason}`);
       }
     }
 
-    if (criticalCleanups.length > 0) {
-      summary.push(``, `Unnecessary cleanups:`);
-      for (const cleanup of criticalCleanups) {
+    if (summaryCriticalCleanups.length > 0) {
+      summary.push(``, `Cleanup issues (critical/high):`);
+      for (const cleanup of summaryCriticalCleanups) {
         summary.push(`  - ${cleanup.symbol} in ${cleanup.file}: ${cleanup.whyCleanup}`);
       }
     }
