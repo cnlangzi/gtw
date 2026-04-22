@@ -238,159 +238,147 @@ export class ReviewCommand extends Commander {
 
   _buildComment(prNum, prData, results, cleanupResults = {}) {
     const items = results.items || [];
+    const cleanups = cleanupResults.cleanups || [];
 
-    // Categorize items by verdict and severity
-    const criticalItems = items.filter(
-      (i) => i.verdict === 'duplicate' && ['critical', 'high'].includes(i.severity)
-    );
-    const similarItems = items.filter((i) => i.verdict === 'similar');
-    const internalDuplicates = items.filter((i) => i.verdict === 'internal-duplicate');
-    const patternItems = items.filter((i) => i.verdict === 'pattern');
-    const mediumItems = items.filter(
-      (i) => i.verdict === 'duplicate' && i.severity === 'medium'
-    );
-    const lowItems = items.filter(
-      (i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict)
-    );
-
-    // Summary counts
-    const summary = {
-      critical: items.filter((i) => i.severity === 'critical').length,
-      high: items.filter((i) => i.severity === 'high').length,
-      medium: items.filter((i) => i.severity === 'medium').length,
-      low: items.filter((i) => i.severity === 'low').length,
-      internal: internalDuplicates.length,
+    // Count duplicates by severity
+    const duplicateCounts = {
+      critical: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical').length,
+      high: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high').length,
+      medium: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium').length,
+      low: items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict)).length,
     };
 
-    let comment = '## 🔍 Code Reuse Review — PR #' + prNum + '\n\n';
-    comment += '**PR:** #' + prNum + ' — ' + prData.pr.title + '\n';
-    comment += '**Base:** ' + prData.baseBranch + '\n\n';
+    // Count cleanups by severity
+    const cleanupCounts = {
+      critical: cleanups.filter((c) => c.severity === 'critical').length,
+      high: cleanups.filter((c) => c.severity === 'high').length,
+      medium: cleanups.filter((c) => c.severity === 'medium').length,
+      low: cleanups.filter((c) => c.severity === 'low').length,
+    };
 
-    comment += '### 📊 Summary\n\n';
-    comment += '| Type | Count |\n';
-    comment += '|------|-------|\n';
-    comment += '| 🔴 Critical | ' + summary.critical + ' |\n';
-    comment += '| 🟠 High | ' + summary.high + ' |\n';
-    comment += '| 🟡 Medium | ' + summary.medium + ' |\n';
-    comment += '| 🟢 Low | ' + summary.low + ' |\n';
-    comment += '| 💡 Internal Duplicates | ' + summary.internal + ' |\n\n';
+    const totalDuplicateIssues = items.filter((i) => i.verdict === 'duplicate').length;
+    const totalCleanupIssues = cleanups.length;
 
-    comment += '### Functions Analyzed: ' + (results.newFunctions?.length || 0) + '\n\n';
+    let comment = '## GTW Code Review\n\n';
 
-    // Critical duplicates
-    if (criticalItems.length > 0) {
-      comment += '### 🚨 Critical Duplicates (' + criticalItems.length + ')\n\n';
-      for (const item of criticalItems) {
-        const severityEmoji = item.severity === 'critical' ? '🔴' : '🟠';
-        comment += '**' + severityEmoji + ' `' + item.newFunc + '`** (' + item.existingFunc + ')\n';
-        comment += '> ' + item.reason + '\n\n';
-        if (item.code) {
-          comment += '```\n' + item.code.slice(0, 200) + (item.code.length > 200 ? '...' : '') + '\n```\n\n';
-        }
-      }
-    }
+    // Status line: ☑️ when no issues, ❌ when issues present
+    const reuseIcon = totalDuplicateIssues === 0 ? '☑️' : '❌';
+    const cleanupIcon = totalCleanupIssues === 0 ? '☑️' : '❌';
+    const reuseCount = totalDuplicateIssues > 0 ? ` (${totalDuplicateIssues})` : '';
+    const cleanupCount = totalCleanupIssues > 0 ? ` (${totalCleanupIssues})` : '';
+    comment += `${reuseIcon} Reuse Review${reuseCount} | ${cleanupIcon} Cleanup Review${cleanupCount}\n\n`;
 
-    // Similar patterns
-    if (similarItems.length > 0) {
-      comment += '### ⚠️ Similar Patterns (' + similarItems.length + ')\n\n';
-      for (const item of similarItems) {
-        comment += '- **`' + item.newFunc + '`** → similar to **`' + item.existingFunc + '`**: ' + item.reason + '\n';
-      }
-      comment += '\n';
-    }
+    // Separator
+    comment += '---\n\n';
 
-    // Internal duplicates
-    if (internalDuplicates.length > 0) {
-      comment += '### 💡 Internal Duplicates (' + internalDuplicates.length + ')\n\n';
-      for (const item of internalDuplicates) {
-        const occurrences = item.occurrences || [{ file: 'unknown', line: 0 }];
-        const locList = occurrences.map((o) => '  - ' + o.file + ':' + o.line).join('\n');
-        comment += '**`' + item.newFunc + '`** appears ' + occurrences.length + '× in this PR:\n' + locList + '\n';
-        comment += '> ' + item.reason + '\n\n';
-      }
-    }
+    // Reuse Review findings grouped by severity
+    if (items.length > 0) {
+      comment += '### Reuse\n\n';
 
-    // Pattern anti-patterns
-    if (patternItems.length > 0) {
-      comment += '### 🔧 Pattern Anti-Patterns (' + patternItems.length + ')\n\n';
-      for (const item of patternItems) {
-        comment += '- **`' + item.newFunc + '`**: ' + item.reason + '\n';
-      }
-      comment += '\n';
-    }
-
-    // Medium severity
-    if (mediumItems.length > 0) {
-      comment += '### 🟡 Medium Priority (' + mediumItems.length + ')\n\n';
-      for (const item of mediumItems) {
-        comment += '- **`' + item.newFunc + '`** → ' + item.existingFunc + ': ' + item.reason + '\n';
-      }
-      comment += '\n';
-    }
-
-    // Low priority
-    if (lowItems.length > 0) {
-      comment += '### 🟢 Low Priority (' + lowItems.length + ')\n\n';
-      for (const item of lowItems) {
-        comment += '- **`' + item.newFunc + '`**: ' + item.reason + '\n';
-      }
-      comment += '\n';
-    }
-
-    if (items.length === 0) {
-      comment += '✅ **No duplicates, similar functions, or patterns found.**\n\n';
-    }
-
-    // Step 2: Unnecessary Cleanup section
-    const cleanups = cleanupResults.cleanups || [];
-    const skipped = cleanupResults.skipped || [];
-    const llmCandidates = cleanupResults.llmCandidates || [];
-    const modifiedFiles = cleanupResults.modifiedFiles || 0;
-    const noLinkedIssue = cleanupResults.noLinkedIssue || false;
-
-    comment += '\n\n### 🧹 Unnecessary Cleanup Check\n\n';
-
-    if (noLinkedIssue) {
-      comment += '*Step 2 skipped: no linked issue found for context.*\n\n';
-    } else {
-      comment += '**Phase A — Ref Triage:**\n';
-      comment += `- Files analyzed: ${modifiedFiles}\n`;
-      comment += `- Sent to LLM: ${llmCandidates.length}\n`;
-      comment += `- Skipped (low risk): ${skipped.length}\n\n`;
-
-      const criticalCleanups = cleanups.filter((c) => ['critical', 'high'].includes(c.severity));
-
-      if (cleanups.length > 0) {
-        comment += '**Findings:**\n\n';
-        comment += '| File | Change | Severity | Suggestion |\n';
-        comment += '|------|--------|----------|------------|\n';
-        for (const c of cleanups) {
-          const severityBadge = c.severity === 'critical' ? '🔴 critical' :
-            c.severity === 'high' ? '🟠 high' :
-            c.severity === 'medium' ? '🟡 medium' : '🟢 low';
-          const toCell = (v) => String(v || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
-          const whyCleanup = toCell(c.whyCleanup);
-          const suggestion = toCell(c.suggestion);
-          comment += `| ${c.file} | ${c.symbol}: ${whyCleanup} | ${severityBadge} | ${suggestion} |\n`;
+      // Critical
+      const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
+      if (criticalItems.length > 0) {
+        comment += '#### Critical\n\n';
+        comment += '| Function | File | Symbol | Reason |\n';
+        comment += '|----------|------|--------|--------|\n';
+        for (const item of criticalItems) {
+          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
         }
         comment += '\n';
+      }
 
-        if (criticalCleanups.length > 0) {
-          comment += '**🚨 Critical/High Cleanups:**\n\n';
-          for (const c of criticalCleanups) {
-            const severityEmoji = c.severity === 'critical' ? '🔴' : '🟠';
-            comment += `**${severityEmoji} \`${c.symbol}\`** in ${c.file}\n`;
-            comment += `> Before: ${c.before?.slice(0, 100) || '(empty)'}${c.before?.length > 100 ? '...' : ''}\n`;
-            comment += `> After: ${c.after?.slice(0, 100) || '(empty)'}${c.after?.length > 100 ? '...' : ''}\n`;
-            comment += `> Why problematic: ${c.whyProblematic}\n\n`;
-          }
+      // High
+      const highItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high');
+      if (highItems.length > 0) {
+        comment += '#### High\n\n';
+        comment += '| Function | File | Symbol | Reason |\n';
+        comment += '|----------|------|--------|--------|\n';
+        for (const item of highItems) {
+          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
         }
-      } else {
-        comment += '✅ **No unnecessary cleanups detected.**\n\n';
+        comment += '\n';
+      }
+
+      // Medium
+      const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
+      if (mediumItems.length > 0) {
+        comment += '#### Medium\n\n';
+        comment += '| Function | File | Symbol | Reason |\n';
+        comment += '|----------|------|--------|--------|\n';
+        for (const item of mediumItems) {
+          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
+        }
+        comment += '\n';
+      }
+
+      // Low
+      const lowItems = items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict));
+      if (lowItems.length > 0) {
+        comment += '#### Low\n\n';
+        comment += '| Function | File | Symbol | Reason |\n';
+        comment += '|----------|------|--------|--------|\n';
+        for (const item of lowItems) {
+          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc || '-'} | ${item.reason} |\n`;
+        }
+        comment += '\n';
       }
     }
 
-        comment += '---\n*Reviewed by gtw*';
+    // Cleanup Review findings grouped by severity
+    if (cleanups.length > 0) {
+      comment += '### Cleanup\n\n';
+
+      // Critical
+      const criticalCleanups = cleanups.filter((c) => c.severity === 'critical');
+      if (criticalCleanups.length > 0) {
+        comment += '#### Critical\n\n';
+        comment += '| File | Symbol | Reason |\n';
+        comment += '|------|--------|--------|\n';
+        for (const c of criticalCleanups) {
+          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
+        }
+        comment += '\n';
+      }
+
+      // High
+      const highCleanups = cleanups.filter((c) => c.severity === 'high');
+      if (highCleanups.length > 0) {
+        comment += '#### High\n\n';
+        comment += '| File | Symbol | Reason |\n';
+        comment += '|------|--------|--------|\n';
+        for (const c of highCleanups) {
+          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
+        }
+        comment += '\n';
+      }
+
+      // Medium
+      const mediumCleanups = cleanups.filter((c) => c.severity === 'medium');
+      if (mediumCleanups.length > 0) {
+        comment += '#### Medium\n\n';
+        comment += '| File | Symbol | Reason |\n';
+        comment += '|------|--------|--------|\n';
+        for (const c of mediumCleanups) {
+          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
+        }
+        comment += '\n';
+      }
+
+      // Low
+      const lowCleanups = cleanups.filter((c) => c.severity === 'low');
+      if (lowCleanups.length > 0) {
+        comment += '#### Low\n\n';
+        comment += '| File | Symbol | Reason |\n';
+        comment += '|------|--------|--------|\n';
+        for (const c of lowCleanups) {
+          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
+        }
+        comment += '\n';
+      }
+    }
+
+    // Reviewer tag
+    comment += '*Reviewed by gtw*';
 
     return comment;
   }
@@ -399,7 +387,7 @@ export class ReviewCommand extends Commander {
     // Find existing comment by bot
     const comments = await client.request('GET', `/repos/${repo}/issues/${prNum}/comments`);
     const myLogin = (await client.request('GET', '/user')).login;
-    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## 🔍 Code Reuse Review'));
+    const existing = comments.find((c) => c.user?.login === myLogin && c.body?.includes('## GTW Code Review'));
 
     if (existing) {
       await client.request('PATCH', `/repos/${repo}/issues/comments/${existing.id}`, {
