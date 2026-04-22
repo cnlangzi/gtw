@@ -262,7 +262,7 @@ export class ReviewCommand extends Commander {
 
     // Reuse Review findings grouped by severity
     const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
-    const highItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high');
+    const highItems = items.filter((i) => i.severity === 'high');
     const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
     const lowItems = items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict));
 
