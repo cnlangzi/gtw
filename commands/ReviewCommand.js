@@ -20,6 +20,52 @@ import { detectReuse } from '../utils/review-reuse.js';
 import { detectUnnecessaryCleanup } from '../utils/review-cleanup.js';
 import { prepareReviewWorktree } from './ReviewWorktree.js';
 
+/**
+ * Compute verdict and PR label from detection results.
+ * Exported for unit testing — mirrors the inline logic in _reviewPr.
+ *
+ * NOTE: Verdict is based ONLY on items.length and cleanups.length.
+ * Error fields are intentionally ignored (detection may error with zero findings).
+ */
+export function computeReviewVerdict(duplicateResults, cleanupResults) {
+  const items = duplicateResults?.items || [];
+  const cleanups = cleanupResults?.cleanups || [];
+
+  const totalReuseIssues = items.length;
+  const totalCleanupIssues = cleanups.length;
+
+  let finalLabel = 'gtw/lgtm';
+  if (totalReuseIssues > 0 || totalCleanupIssues > 0) {
+    finalLabel = 'gtw/revise';
+  }
+
+  return {
+    finalLabel,
+    totalReuseIssues,
+    totalCleanupIssues,
+    verdictText: finalLabel === 'gtw/lgtm' ? 'APPROVED' : 'CHANGES NEEDED',
+  };
+}
+
+/**
+ * Compute comment icons from detection results.
+ * Exported for unit testing — mirrors the icon logic in _buildComment.
+ */
+export function computeReviewIcons(duplicateResults, cleanupResults) {
+  const items = duplicateResults?.items || [];
+  const cleanups = cleanupResults?.cleanups || [];
+
+  const totalReuseIssues = items.length;
+  const totalCleanupIssues = cleanups.length;
+
+  return {
+    reuseIcon: totalReuseIssues === 0 ? '☑️' : '❌',
+    cleanupIcon: totalCleanupIssues === 0 ? '☑️' : '❌',
+    totalReuseIssues,
+    totalCleanupIssues,
+  };
+}
+
 export class ReviewCommand extends Commander {
   constructor(context) {
     super(context);
@@ -169,13 +215,10 @@ export class ReviewCommand extends Commander {
     // producing any findings (e.g., API timeout returns { error, items: [] }), and
     // such errors should NOT flip the label to gtw/revise. This ensures the published
     // comment (which uses the same totals for icons) is always consistent with the label.
-    const totalReuseIssues = (duplicateResults.items || []).length;
-    const totalCleanupIssues = (cleanupResults.cleanups || []).length;
-
-    let finalLabel = 'gtw/lgtm';
-    if (totalReuseIssues > 0 || totalCleanupIssues > 0) {
-      finalLabel = 'gtw/revise';
-    }
+    const { finalLabel, totalReuseIssues, totalCleanupIssues } = computeReviewVerdict(
+      duplicateResults,
+      cleanupResults
+    );
 
     try {
       await setPrLabel({ prNum, repo, client, isPR: true }, finalLabel);

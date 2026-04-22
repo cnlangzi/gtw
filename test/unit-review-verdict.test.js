@@ -11,50 +11,7 @@
  */
 
 import { strict as assert } from 'assert';
-
-// ---------------------------------------------------------------------------
-// Pure verdict computation (mirrors the logic in ReviewCommand._reviewPr)
-// ---------------------------------------------------------------------------
-
-/**
- * Compute the verdict and label based on detection results.
- * This is extracted logic for testability.
- */
-function computeVerdict(duplicateResults, cleanupResults) {
-  const items = duplicateResults?.items || [];
-  const cleanups = cleanupResults?.cleanups || [];
-
-  const totalReuseIssues = items.length;
-  const totalCleanupIssues = cleanups.length;
-
-  let finalLabel = 'gtw/lgtm';
-  if (totalReuseIssues > 0 || totalCleanupIssues > 0) {
-    finalLabel = 'gtw/revise';
-  }
-
-  return {
-    finalLabel,
-    totalReuseIssues,
-    totalCleanupIssues,
-    verdictText: finalLabel === 'gtw/lgtm' ? 'APPROVED' : 'CHANGES NEEDED',
-  };
-}
-
-/**
- * Build comment icons (mirrors ReviewCommand._buildComment icon logic)
- */
-function computeCommentIcons(duplicateResults, cleanupResults) {
-  const items = duplicateResults?.items || [];
-  const cleanups = cleanupResults?.cleanups || [];
-
-  const totalReuseIssues = items.length;
-  const totalCleanupIssues = cleanups.length;
-
-  const reuseIcon = totalReuseIssues === 0 ? '☑️' : '❌';
-  const cleanupIcon = totalCleanupIssues === 0 ? '☑️' : '❌';
-
-  return { reuseIcon, cleanupIcon, totalReuseIssues, totalCleanupIssues };
-}
+import { computeReviewVerdict, computeReviewIcons } from '../commands/ReviewCommand.js';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -85,7 +42,7 @@ test('No issues: verdict is APPROVED and label is gtw/lgtm', () => {
   const duplicateResults = { items: [], newFunctions: [] };
   const cleanupResults = { cleanups: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/lgtm', 'Label should be gtw/lgtm');
   assert.strictEqual(result.verdictText, 'APPROVED', 'Verdict should be APPROVED');
@@ -97,7 +54,7 @@ test('No issues: comment icons are both ☑️', () => {
   const duplicateResults = { items: [], newFunctions: [] };
   const cleanupResults = { cleanups: [] };
 
-  const icons = computeCommentIcons(duplicateResults, cleanupResults);
+  const icons = computeReviewIcons(duplicateResults, cleanupResults);
 
   assert.strictEqual(icons.reuseIcon, '☑️', 'Reuse icon should be ☑️');
   assert.strictEqual(icons.cleanupIcon, '☑️', 'Cleanup icon should be ☑️');
@@ -107,8 +64,8 @@ test('No issues: comment icons and label are consistent', () => {
   const duplicateResults = { items: [], newFunctions: [] };
   const cleanupResults = { cleanups: [] };
 
-  const verdict = computeVerdict(duplicateResults, cleanupResults);
-  const icons = computeCommentIcons(duplicateResults, cleanupResults);
+  const verdict = computeReviewVerdict(duplicateResults, cleanupResults);
+  const icons = computeReviewIcons(duplicateResults, cleanupResults);
 
   // If icons are both ☑️, label must be gtw/lgtm
   if (icons.reuseIcon === '☑️' && icons.cleanupIcon === '☑️') {
@@ -135,7 +92,7 @@ test('Reuse issues present: verdict is CHANGES NEEDED and label is gtw/revise', 
   };
   const cleanupResults = { cleanups: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/revise', 'Label should be gtw/revise');
   assert.strictEqual(result.verdictText, 'CHANGES NEEDED', 'Verdict should be CHANGES NEEDED');
@@ -156,7 +113,7 @@ test('Cleanup issues present: verdict is CHANGES NEEDED and label is gtw/revise'
     ],
   };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/revise', 'Label should be gtw/revise');
   assert.strictEqual(result.verdictText, 'CHANGES NEEDED', 'Verdict should be CHANGES NEEDED');
@@ -173,7 +130,7 @@ test('Both issues present: verdict is CHANGES NEEDED and label is gtw/revise', (
     cleanups: [{ symbol: 'x', file: 'y', severity: 'low', whyCleanup: 'z' }],
   };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/revise', 'Label should be gtw/revise');
   assert.strictEqual(result.verdictText, 'CHANGES NEEDED', 'Verdict should be CHANGES NEEDED');
@@ -189,7 +146,7 @@ test('Issues present: comment icons are both ❌', () => {
     cleanups: [{ symbol: 'x', file: 'y', severity: 'low', whyCleanup: 'z' }],
   };
 
-  const icons = computeCommentIcons(duplicateResults, cleanupResults);
+  const icons = computeReviewIcons(duplicateResults, cleanupResults);
 
   assert.strictEqual(icons.reuseIcon, '❌', 'Reuse icon should be ❌');
   assert.strictEqual(icons.cleanupIcon, '❌', 'Cleanup icon should be ❌');
@@ -201,8 +158,8 @@ test('Issues present: comment icons and label are consistent', () => {
   };
   const cleanupResults = { cleanups: [] };
 
-  const verdict = computeVerdict(duplicateResults, cleanupResults);
-  const icons = computeCommentIcons(duplicateResults, cleanupResults);
+  const verdict = computeReviewVerdict(duplicateResults, cleanupResults);
+  const icons = computeReviewIcons(duplicateResults, cleanupResults);
 
   // If reuse icon is ❌, label must be gtw/revise
   if (icons.reuseIcon === '❌') {
@@ -220,7 +177,7 @@ test('detectReuse errors with zero findings: verdict is APPROVED (not CHANGES NE
   const duplicateResults = { error: 'API timeout', items: [], newFunctions: [] };
   const cleanupResults = { cleanups: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   // BUG: Old code would set gtw/revise because duplicateResults.error was truthy
   // FIX: Should be gtw/lgtm because items.length === 0
@@ -233,7 +190,7 @@ test('detectUnnecessaryCleanup errors with zero findings: verdict is APPROVED', 
   const duplicateResults = { items: [], newFunctions: [] };
   const cleanupResults = { error: 'Network error', cleanups: [], llmCandidates: [], skipped: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/lgtm', 'Label should be gtw/lgtm even with error');
   assert.strictEqual(result.verdictText, 'APPROVED', 'Verdict should be APPROVED even with error');
@@ -244,7 +201,7 @@ test('Both detection functions error with zero findings: verdict is APPROVED', (
   const duplicateResults = { error: 'timeout', items: [], newFunctions: [] };
   const cleanupResults = { error: 'network', cleanups: [], llmCandidates: [], skipped: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/lgtm', 'Label should be gtw/lgtm when both error with zero findings');
   assert.strictEqual(result.verdictText, 'APPROVED', 'Verdict should be APPROVED');
@@ -254,8 +211,8 @@ test('Error with zero findings: comment icons remain ☑️ (consistent with lab
   const duplicateResults = { error: 'timeout', items: [], newFunctions: [] };
   const cleanupResults = { error: 'network', cleanups: [] };
 
-  const verdict = computeVerdict(duplicateResults, cleanupResults);
-  const icons = computeCommentIcons(duplicateResults, cleanupResults);
+  const verdict = computeReviewVerdict(duplicateResults, cleanupResults);
+  const icons = computeReviewIcons(duplicateResults, cleanupResults);
 
   // Both icons should be ☑️ because items.length and cleanups.length are 0
   assert.strictEqual(icons.reuseIcon, '☑️', 'Reuse icon should be ☑️');
@@ -273,7 +230,7 @@ test('Error with actual findings also present: verdict is CHANGES NEEDED', () =>
   };
   const cleanupResults = { cleanups: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   // Error + findings = gtw/revise (correctly based on findings)
   assert.strictEqual(result.finalLabel, 'gtw/revise', 'Label should be gtw/revise when findings exist');
@@ -289,7 +246,7 @@ test('Null/undefined items treated as empty array', () => {
   const duplicateResults = { items: null };
   const cleanupResults = { cleanups: undefined };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   assert.strictEqual(result.finalLabel, 'gtw/lgtm', 'Null/undefined items should be treated as empty');
   assert.strictEqual(result.totalReuseIssues, 0, 'Null items should count as 0');
@@ -297,8 +254,8 @@ test('Null/undefined items treated as empty array', () => {
 });
 
 test('Empty items arrays are distinct from missing items property', () => {
-  const results1 = computeVerdict({}, {});
-  const results2 = computeVerdict({ items: [] }, { cleanups: [] });
+  const results1 = computeReviewVerdict({}, {});
+  const results2 = computeReviewVerdict({ items: [] }, { cleanups: [] });
 
   // Both should be APPROVED
   assert.strictEqual(results1.finalLabel, 'gtw/lgtm');
@@ -313,7 +270,7 @@ test('Low severity items still trigger gtw/revise (all items count)', () => {
   };
   const cleanupResults = { cleanups: [] };
 
-  const result = computeVerdict(duplicateResults, cleanupResults);
+  const result = computeReviewVerdict(duplicateResults, cleanupResults);
 
   // The issue says verdict is based on totals, so any item should trigger revise
   assert.strictEqual(result.finalLabel, 'gtw/revise', 'Any item (even low severity) should trigger revise');
