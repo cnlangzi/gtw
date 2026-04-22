@@ -294,17 +294,16 @@ export class ReviewCommand extends Commander {
   }
 
   _buildComment(prNum, prData, results, cleanupResults = {}) {
+    const { reuseIcon, cleanupIcon, totalReuseIssues, totalCleanupIssues } = computeReviewIcons(
+      results,
+      cleanupResults
+    );
     const items = results.items || [];
     const cleanups = cleanupResults.cleanups || [];
-
-    const totalReuseIssues = items.length;
-    const totalCleanupIssues = cleanups.length;
 
     let comment = '## GTW Code Review\n\n';
 
     // Status line: ☑️ when no issues, ❌ when issues present
-    const reuseIcon = totalReuseIssues === 0 ? '☑️' : '❌';
-    const cleanupIcon = totalCleanupIssues === 0 ? '☑️' : '❌';
     const reuseCount = totalReuseIssues > 0 ? ` (${totalReuseIssues})` : '';
     const cleanupCount = totalCleanupIssues > 0 ? ` (${totalCleanupIssues})` : '';
     comment += `${reuseIcon} Reuse Review${reuseCount} | ${cleanupIcon} Cleanup Review${cleanupCount}\n\n`;
