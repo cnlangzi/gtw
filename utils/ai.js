@@ -64,8 +64,8 @@ export function findModelProviderConfig(model, agentId = 'main') {
  * @returns {Promise<string>} - Response text
  */
 export class TimeoutError extends Error {
-  constructor(timeoutSeconds, attempt) {
-    super(`LLM request timed out after ${timeoutSeconds}s (attempt ${attempt} of 2)`);
+  constructor(timeoutSeconds, attempt, cause) {
+    super(`LLM request timed out after ${timeoutSeconds}s (attempt ${attempt} of 2)`, { cause });
     this.name = 'TimeoutError';
     this.timeoutSeconds = timeoutSeconds;
     this.attempt = attempt;
@@ -99,8 +99,8 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main', 
     }
   }
 
-  // Second attempt also timed out
-  throw new TimeoutError(timeout, 2);
+  // Second attempt also timed out — include original error as cause
+  throw new TimeoutError(timeout, 2, lastError);
 }
 
 /**
@@ -124,7 +124,6 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
     const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
     const authData = JSON.parse(readFileSync(authPath, 'utf8'));
     const profile = authData.profiles?.[authKey];
-    // OpenClaw stores tokens under "access" (PAT/device flow) or "key" (api_key type)
     token = profile?.access || profile?.key || null;
   } catch { /* no auth profile */ }
 
@@ -148,10 +147,12 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
   let endpoint;
   let body;
 
+  // Read models.json once for both api-specific config and maxTokens
+  const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
+
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
-    const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
         .find((m) => m.id === modelId)
