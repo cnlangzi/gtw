@@ -236,35 +236,24 @@ export class ReviewCommand extends Commander {
     };
   }
 
+  _sanitizeCell(value) {
+    if (value == null) return '';
+    return String(value).replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+  }
+
   _buildComment(prNum, prData, results, cleanupResults = {}) {
     const items = results.items || [];
     const cleanups = cleanupResults.cleanups || [];
 
-    // Count duplicates by severity
-    const duplicateCounts = {
-      critical: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical').length,
-      high: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high').length,
-      medium: items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium').length,
-      low: items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict)).length,
-    };
-
-    // Count cleanups by severity
-    const cleanupCounts = {
-      critical: cleanups.filter((c) => c.severity === 'critical').length,
-      high: cleanups.filter((c) => c.severity === 'high').length,
-      medium: cleanups.filter((c) => c.severity === 'medium').length,
-      low: cleanups.filter((c) => c.severity === 'low').length,
-    };
-
-    const totalDuplicateIssues = items.filter((i) => i.verdict === 'duplicate').length;
+    const totalReuseIssues = items.length;
     const totalCleanupIssues = cleanups.length;
 
     let comment = '## GTW Code Review\n\n';
 
     // Status line: ☑️ when no issues, ❌ when issues present
-    const reuseIcon = totalDuplicateIssues === 0 ? '☑️' : '❌';
+    const reuseIcon = totalReuseIssues === 0 ? '☑️' : '❌';
     const cleanupIcon = totalCleanupIssues === 0 ? '☑️' : '❌';
-    const reuseCount = totalDuplicateIssues > 0 ? ` (${totalDuplicateIssues})` : '';
+    const reuseCount = totalReuseIssues > 0 ? ` (${totalReuseIssues})` : '';
     const cleanupCount = totalCleanupIssues > 0 ? ` (${totalCleanupIssues})` : '';
     comment += `${reuseIcon} Reuse Review${reuseCount} | ${cleanupIcon} Cleanup Review${cleanupCount}\n\n`;
 
@@ -272,109 +261,110 @@ export class ReviewCommand extends Commander {
     comment += '---\n\n';
 
     // Reuse Review findings grouped by severity
-    if (items.length > 0) {
+    const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
+    const highItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high');
+    const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
+    const lowItems = items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict));
+
+    if (criticalItems.length > 0 || highItems.length > 0 || mediumItems.length > 0 || lowItems.length > 0) {
       comment += '### Reuse\n\n';
 
       // Critical
-      const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
       if (criticalItems.length > 0) {
         comment += '#### Critical\n\n';
         comment += '| Function | File | Symbol | Reason |\n';
         comment += '|----------|------|--------|--------|\n';
         for (const item of criticalItems) {
-          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
+          comment += `| ${this._sanitizeCell(item.newFunc)} | ${this._sanitizeCell(item.existingFile || '-')} | ${this._sanitizeCell(item.existingFunc)} | ${this._sanitizeCell(item.reason)} |\n`;
         }
         comment += '\n';
       }
 
       // High
-      const highItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'high');
       if (highItems.length > 0) {
         comment += '#### High\n\n';
         comment += '| Function | File | Symbol | Reason |\n';
         comment += '|----------|------|--------|--------|\n';
         for (const item of highItems) {
-          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
+          comment += `| ${this._sanitizeCell(item.newFunc)} | ${this._sanitizeCell(item.existingFile || '-')} | ${this._sanitizeCell(item.existingFunc)} | ${this._sanitizeCell(item.reason)} |\n`;
         }
         comment += '\n';
       }
 
       // Medium
-      const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
       if (mediumItems.length > 0) {
         comment += '#### Medium\n\n';
         comment += '| Function | File | Symbol | Reason |\n';
         comment += '|----------|------|--------|--------|\n';
         for (const item of mediumItems) {
-          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc} | ${item.reason} |\n`;
+          comment += `| ${this._sanitizeCell(item.newFunc)} | ${this._sanitizeCell(item.existingFile || '-')} | ${this._sanitizeCell(item.existingFunc)} | ${this._sanitizeCell(item.reason)} |\n`;
         }
         comment += '\n';
       }
 
       // Low
-      const lowItems = items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict));
       if (lowItems.length > 0) {
         comment += '#### Low\n\n';
         comment += '| Function | File | Symbol | Reason |\n';
         comment += '|----------|------|--------|--------|\n';
         for (const item of lowItems) {
-          comment += `| ${item.newFunc} | ${item.existingFile || '-'} | ${item.existingFunc || '-'} | ${item.reason} |\n`;
+          comment += `| ${this._sanitizeCell(item.newFunc)} | ${this._sanitizeCell(item.existingFile || '-')} | ${this._sanitizeCell(item.existingFunc || '-')} | ${this._sanitizeCell(item.reason)} |\n`;
         }
         comment += '\n';
       }
     }
 
     // Cleanup Review findings grouped by severity
-    if (cleanups.length > 0) {
+    const criticalCleanups = cleanups.filter((c) => c.severity === 'critical');
+    const highCleanups = cleanups.filter((c) => c.severity === 'high');
+    const mediumCleanups = cleanups.filter((c) => c.severity === 'medium');
+    const lowCleanups = cleanups.filter((c) => c.severity === 'low');
+
+    if (criticalCleanups.length > 0 || highCleanups.length > 0 || mediumCleanups.length > 0 || lowCleanups.length > 0) {
       comment += '### Cleanup\n\n';
+    }
 
-      // Critical
-      const criticalCleanups = cleanups.filter((c) => c.severity === 'critical');
-      if (criticalCleanups.length > 0) {
-        comment += '#### Critical\n\n';
-        comment += '| File | Symbol | Reason |\n';
-        comment += '|------|--------|--------|\n';
-        for (const c of criticalCleanups) {
-          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
-        }
-        comment += '\n';
+    if (criticalCleanups.length > 0) {
+      comment += '#### Critical\n\n';
+      comment += '| File | Symbol | Reason |\n';
+      comment += '|------|--------|--------|\n';
+      for (const c of criticalCleanups) {
+        comment += `| ${this._sanitizeCell(c.file)} | ${this._sanitizeCell(c.symbol)} | ${this._sanitizeCell(c.whyCleanup)} |\n`;
       }
+      comment += '\n';
+    }
 
-      // High
-      const highCleanups = cleanups.filter((c) => c.severity === 'high');
-      if (highCleanups.length > 0) {
-        comment += '#### High\n\n';
-        comment += '| File | Symbol | Reason |\n';
-        comment += '|------|--------|--------|\n';
-        for (const c of highCleanups) {
-          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
-        }
-        comment += '\n';
+    // High
+    if (highCleanups.length > 0) {
+      comment += '#### High\n\n';
+      comment += '| File | Symbol | Reason |\n';
+      comment += '|------|--------|--------|\n';
+      for (const c of highCleanups) {
+        comment += `| ${this._sanitizeCell(c.file)} | ${this._sanitizeCell(c.symbol)} | ${this._sanitizeCell(c.whyCleanup)} |\n`;
       }
+      comment += '\n';
+    }
 
-      // Medium
-      const mediumCleanups = cleanups.filter((c) => c.severity === 'medium');
-      if (mediumCleanups.length > 0) {
-        comment += '#### Medium\n\n';
-        comment += '| File | Symbol | Reason |\n';
-        comment += '|------|--------|--------|\n';
-        for (const c of mediumCleanups) {
-          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
-        }
-        comment += '\n';
+    // Medium
+    if (mediumCleanups.length > 0) {
+      comment += '#### Medium\n\n';
+      comment += '| File | Symbol | Reason |\n';
+      comment += '|------|--------|--------|\n';
+      for (const c of mediumCleanups) {
+        comment += `| ${this._sanitizeCell(c.file)} | ${this._sanitizeCell(c.symbol)} | ${this._sanitizeCell(c.whyCleanup)} |\n`;
       }
+      comment += '\n';
+    }
 
-      // Low
-      const lowCleanups = cleanups.filter((c) => c.severity === 'low');
-      if (lowCleanups.length > 0) {
-        comment += '#### Low\n\n';
-        comment += '| File | Symbol | Reason |\n';
-        comment += '|------|--------|--------|\n';
-        for (const c of lowCleanups) {
-          comment += `| ${c.file} | ${c.symbol} | ${c.whyCleanup} |\n`;
-        }
-        comment += '\n';
+    // Low
+    if (lowCleanups.length > 0) {
+      comment += '#### Low\n\n';
+      comment += '| File | Symbol | Reason |\n';
+      comment += '|------|--------|--------|\n';
+      for (const c of lowCleanups) {
+        comment += `| ${this._sanitizeCell(c.file)} | ${this._sanitizeCell(c.symbol)} | ${this._sanitizeCell(c.whyCleanup)} |\n`;
       }
+      comment += '\n';
     }
 
     // Reviewer tag
