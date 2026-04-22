@@ -264,7 +264,7 @@ export class ReviewCommand extends Commander {
     const criticalItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'critical');
     const highItems = items.filter((i) => i.severity === 'high');
     const mediumItems = items.filter((i) => i.verdict === 'duplicate' && i.severity === 'medium');
-    const lowItems = items.filter((i) => i.severity === 'low' && ['similar', 'pattern'].includes(i.verdict));
+    const lowItems = items.filter((i) => i.severity === 'low');
 
     if (criticalItems.length > 0 || highItems.length > 0 || mediumItems.length > 0 || lowItems.length > 0) {
       comment += '### Reuse\n\n';
