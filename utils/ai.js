@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync } from 'fs';
-import { getConfig, CONFIG_FILE } from './config.js';
+import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
 import { getSessionEntry } from './session.js';
 
 /**
@@ -63,7 +63,52 @@ export function findModelProviderConfig(model, agentId = 'main') {
  * @param {string} [agentId='main'] - Agent ID for models.json lookup
  * @returns {Promise<string>} - Response text
  */
-export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') {
+export class TimeoutError extends Error {
+  constructor(timeoutSeconds, attempt, cause) {
+    super(`LLM request timed out after ${timeoutSeconds}s (attempt ${attempt} of 2)`, { cause });
+    this.name = 'TimeoutError';
+    this.timeoutSeconds = timeoutSeconds;
+    this.attempt = attempt;
+  }
+}
+
+/**
+ * Make an LLM API call with timeout and one automatic retry on timeout.
+ * @param {string} model
+ * @param {string} systemPrompt
+ * @param {string} userPrompt
+ * @param {string} [agentId='main']
+ * @param {number} [timeoutSeconds] - Override default timeout; uses getLLMTimeoutSeconds() if not provided
+ * @returns {Promise<string>}
+ */
+export async function callAI(model, systemPrompt, userPrompt, agentId = 'main', timeoutSeconds) {
+  const timeout = timeoutSeconds ?? getLLMTimeoutSeconds();
+  let lastError;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await _callAIOnce(model, systemPrompt, userPrompt, agentId, timeout);
+    } catch (err) {
+      const isAbort = err.name === 'AbortError' || err.code === 'ETIMEDOUT' || err.message?.includes('network timeout');
+      if (isAbort) {
+        if (attempt === 1) {
+          console.log(`[gtw] AI request timed out after ${timeout}s (attempt 1/2), retrying…`);
+          lastError = err;
+          continue;
+        }
+        // Second attempt also timed out — throw with cause
+        throw new TimeoutError(timeout, 2, lastError ?? err);
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Internal: single LLM API call with AbortController timeout.
+ * @private
+ */
+async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeconds) {
   const providerConfig = findModelProviderConfig(model, agentId);
   if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
 
@@ -80,7 +125,6 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
     const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
     const authData = JSON.parse(readFileSync(authPath, 'utf8'));
     const profile = authData.profiles?.[authKey];
-    // OpenClaw stores tokens under "access" (PAT/device flow) or "key" (api_key type)
     token = profile?.access || profile?.key || null;
   } catch { /* no auth profile */ }
 
@@ -104,10 +148,12 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
   let endpoint;
   let body;
 
+  // Read models.json once for both api-specific config and maxTokens
+  const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
+
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
-    const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
     const maxTokens = (
       (modelConf.providers?.[provider]?.models || [])
         .find((m) => m.id === modelId)
@@ -123,7 +169,17 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main') 
   }
 
   console.log(`[gtw] AI request → ${endpoint}`);
-  const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  // Apply timeout via AbortController
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+  let res;
+  try {
+    res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+
   console.log(`[gtw] AI response ← ${endpoint} [${res.status}]`);
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
 

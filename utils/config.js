@@ -46,6 +46,24 @@ export function getConfigKey(key) {
 }
 
 /**
+ * Timeout in seconds for LLM API calls.
+ * Priority: GTW_LLM_TIMEOUT_SECONDS env var > config.llmTimeoutSeconds > 60.
+ */
+export function getLLMTimeoutSeconds() {
+  const envVal = process.env.GTW_LLM_TIMEOUT_SECONDS;
+  if (envVal !== undefined) {
+    const n = parseInt(envVal, 10);
+    if (!isNaN(n) && n > 0) return n;
+  }
+  const c = getConfig();
+  if (c.llmTimeoutSeconds !== undefined) {
+    const n = parseInt(c.llmTimeoutSeconds, 10);
+    if (!isNaN(n) && n > 0) return n;
+  }
+  return 60;
+}
+
+/**
  * Set a single config key.
  * @param {string} key
  * @param {string} value

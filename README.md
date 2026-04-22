@@ -162,6 +162,7 @@ Check auth status anytime:
 | `model` | session default | AI model used for issue/PR generation and review. Use `github/<model>` for Copilot models, `minimax/<model>` for MiniMax, etc. |
 | `watchList` | `[]` | Watch list of repos scanned by `/gtw review` (no-arg) for `gtw/ready` PRs. |
 | `maxReviewRounds` | `5` | Maximum review rounds before a PR is marked `gtw/stuck`. Set to `0` to disable. |
+| `llmTimeoutSeconds` | `60` | Timeout in seconds for LLM API calls. If a request times out, it is retried once. If both attempts time out, a `TimeoutError` is thrown. Can be overridden with the `GTW_LLM_TIMEOUT_SECONDS` environment variable (takes precedence). |
 
 View/edit via:
 
