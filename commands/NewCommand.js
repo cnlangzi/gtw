@@ -56,23 +56,46 @@ export class NewCommand extends Commander {
     // Clean messages: strip role prefixes and any JSON-like metadata from discussion
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-    // Language-aware prompt — generates issue in the configured language
-    const prompt = `Write a GitHub issue from this discussion. Output ONLY valid JSON, nothing else.
-Generate the issue title and body in ${langLabel}.
+    // Structured prompt — generates Implementation Brief (premise-driven, not rule-based)
+    const prompt = `Extract from this discussion and generate an Implementation Brief.
 
 Discussion:
 ${cleanMessages}
 
-JSON:`;
+Extract:
+1. Decisions already made (solution, constraints)
+2. Rejected alternatives (and why)
+3. Compatibility requirements
+4. Verifiable acceptance conditions
+
+Output format (strict JSON only):
+{
+  "title": "brief title",
+  "target": "file/module to modify",
+  "goal": "expected outcome",
+  "context": "why this change is needed",
+  "consequence": "risk or cost of not doing it",
+  "decided": {
+    "solution": "chosen solution (specific, not directional)",
+    "reason": "why this was chosen"
+  },
+  "rejected": {
+    "option": "rejected alternative",
+    "reason": "why rejected"
+  },
+  "constraints": ["constraint 1", "constraint 2"],
+  "outOfScope": ["explicitly not in scope"],
+  "verify": ["condition 1", "condition 2"]
+}
+JSON：`;
 
     // Ensure base dir exists for session file
     mkdirSync(BASE_DIR, { recursive: true });
 
-    const systemPrompt = `You write GitHub issues from discussions. You ONLY output valid JSON. No markdown. No explanation. No text outside the JSON object.
-Generate the issue title and body in ${langLabel}.
-
-JSON format:
-{"title":"fix: short description","body":"## Background\\n\\n## Changes\\n\\n## Acceptance Criteria\\n"}`;
+    // langLabel controls output language only; prompt is always English
+    const systemPrompt = `You extract implementation decisions from a discussion and output ONLY valid JSON.
+Output exactly the JSON structure described. No markdown. No explanation.
+Generate all output content (title, solution, reason, constraints, etc.) in ${langLabel}.`;
 
     const agentId = realSessionKey?.split(':')[1] || 'main';
     let rawText;
@@ -83,79 +106,51 @@ JSON format:
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
-    // Extract JSON with multiple fallback strategies
-    let title = '', body = '';
-
-    // Strategy 0: rawText is a bare JSON object {"title":...,"body":...}
-    try {
-      const parsed = JSON.parse(rawText);
-      console.error('[gtw DEBUG] Strategy 0 parse OK, parsed type:', typeof parsed, 'keys:', Object.keys(parsed).join(','));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed.title || parsed.body)) {
-        title = parsed.title || '';
-        body = parsed.body || '';
-        console.error('[gtw DEBUG] Strategy 0 matched, title:', title.slice(0, 80));
-      } else {
-        console.error('[gtw DEBUG] Strategy 0 condition failed: parsed type:', typeof parsed, 'isArray:', Array.isArray(parsed), 'hasTitle:', !!(parsed && parsed.title), 'hasBody:', !!(parsed && parsed.body));
-      }
-    } catch (e) {
-      console.error('[gtw DEBUG] Strategy 0 failed:', e.message);
-    }
-
-    // Strategy 1: rawText is a JSON string "{\"title\":...}" (starts with outer quotes)
-    if (!title) {
+    // Parse new structured format with all fields
+    let parsed = null;
+    for (const strategy of [
+      () => JSON.parse(rawText),
+      () => { const inner = JSON.parse(rawText); return typeof inner === 'string' ? JSON.parse(inner) : inner; },
+      () => { const match = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim().match(/\{[\s\S]*?\}/); return match ? JSON.parse(match[0]) : null; },
+    ]) {
       try {
-        const inner = JSON.parse(rawText);
-        // inner is the parsed JSON — if it's a string (JSON string in JSON), parse again
-        const obj = typeof inner === 'string' ? JSON.parse(inner) : inner;
-        console.error('[gtw DEBUG] Strategy 1 parse OK, keys:', Object.keys(obj).join(','));
-        if (obj && (obj.title || obj.body)) {
-          title = obj.title || '';
-          body = obj.body || '';
-          console.error('[gtw DEBUG] Strategy 1 matched, title:', title.slice(0, 80));
+        const result = strategy();
+        if (result && typeof result === 'object' && !Array.isArray(result) && (result.title || result.target)) {
+          parsed = result;
+          break;
         }
-      } catch (e) {
-        console.error('[gtw DEBUG] Strategy 1 failed:', e.message);
-      }
+      } catch {}
     }
 
-    // Strategy 2: Strip markdown code fences, then find JSON object
-    if (!title) {
-      let cleanText = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-      console.error('[gtw DEBUG] Strategy 2 cleanText starts with:', cleanText.slice(0, 50).replace(/\n/g, '\\n'));
-      const match = cleanText.match(/\{[\s\S]*?\}/);
-      if (match) {
-        try {
-          const parsed = JSON.parse(match[0]);
-          console.error('[gtw DEBUG] Strategy 2 parse OK, keys:', Object.keys(parsed).join(','));
-          if (parsed && (parsed.title || parsed.body)) {
-            title = parsed.title || '';
-            body = parsed.body || '';
-            console.error('[gtw DEBUG] Strategy 2 matched, title:', title.slice(0, 80));
-          }
-        } catch (e) {
-          console.error('[gtw DEBUG] Strategy 2 JSON parse failed:', e.message);
-        }
-      }
-    }
-
-    // Strategy 3: Plain text fallback — split by newlines, take first meaningful line as title
-    if (!title) {
-      const text = rawText.replace(/\r/g, '');
-      const parts = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      if (parts.length > 0) {
-        title = parts[0].replace(/^#+ /, '');
-        if (title.length < 5 || title.length > 100) title = '';
-      }
-    }
-    if (!title) {
+    if (!parsed) {
       const preview = rawText.slice(0, 200).replace(/\n/g, ' ');
-      return {
-        ok: false,
-        message: `⚠️ AI didn't return valid JSON. Raw response (${rawText.length} chars): ${preview}`,
-      };
+      return { ok: false, message: `⚠️ AI didn't return valid JSON. Raw (${rawText.length} chars): ${preview}` };
     }
 
-    const updated = { ...wip, issue: { action: 'create', id: null, title, body }, updatedAt: new Date().toISOString() };
+    const title = parsed.title || '';
+    // Build structured markdown body for AI readability and GitHub issue
+    const body = [
+      parsed.context ? `## Context\n${parsed.context}` : '',
+      parsed.goal ? `## Goal\n${parsed.goal}` : '',
+      parsed.target ? `## Target\n${parsed.target}` : '',
+      parsed.consequence ? `## Consequence\n${parsed.consequence}` : '',
+      parsed.decided?.solution ? `## Decided Solution\n${parsed.decided.solution}\n\n**Reason:** ${parsed.decided.reason || 'N/A'}` : '',
+      parsed.rejected?.option ? `## Rejected Alternative\n**Option:** ${parsed.rejected.option}\n**Reason:** ${parsed.rejected.reason || 'N/A'}` : '',
+      parsed.constraints?.length ? `## Constraints\n${parsed.constraints.map(c => `- ${c}`).join('\n')}` : '',
+      parsed.outOfScope?.length ? `## Out of Scope\n${parsed.outOfScope.map(s => `- ${s}`).join('\n')}` : '',
+      parsed.verify?.length ? `## Verification\n${parsed.verify.map(v => `- ${v}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    const updated = {
+      ...wip,
+      issue: {
+        action: 'create',
+        id: null,
+        title,
+        body,
+      },
+      updatedAt: new Date().toISOString(),
+    };
     saveWip(updated);
 
     return {

@@ -99,7 +99,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     `   Repository: ${workdir}`,
     `   Branch: ${branchName}`,
     ``,
-    `   Issue description:`,
+    `   Issue description (Implementation Brief):`,
     `   ${issueBody || '(no description)'}`,
     ``,
     `   Your job:`,
@@ -292,7 +292,7 @@ export class FixCommand extends Commander {
         workdir,
         branchName,
         issueTitle,
-        issueBody,
+        wip.issue?.body || '',
       );
       if (!injected) {
         console.error('[FixCommand] Warning: failed to inject directive into main session');
