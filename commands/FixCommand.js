@@ -285,7 +285,7 @@ export class FixCommand extends Commander {
     // Step 7: Inject directive into main session to trigger subagent workflow
     const sessionFile = getSessionFile(this.sessionKey);
     if (sessionFile) {
-    const injected = injectFixDirective(
+      const injected = injectFixDirective(
         this.sessionKey,
         sessionFile,
         issueId,
