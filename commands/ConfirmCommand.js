@@ -143,11 +143,24 @@ export class ConfirmCommand extends Commander {
 
     const token = await getValidToken();
     const client = new GitHubClient(token);
-    const { title, body } = wip.issue;
+    const { title, body, target, goal, context, consequence, decided, rejected, constraints, outOfScope, verify } = wip.issue;
+
+    // Build structured body from new fields (for AI readability and context)
+    const issueBody = (body && !target) ? body : [
+      target ? `## Target\n${target}` : '',
+      goal ? `## Goal\n${goal}` : '',
+      context ? `## Context\n${context}` : '',
+      consequence ? `## Consequence\n${consequence}` : '',
+      decided?.solution ? `## Decided Solution\n${decided.solution}\n\n**Reason:** ${decided.reason || 'N/A'}` : '',
+      rejected?.option ? `## Rejected Alternative\n**Option:** ${rejected.option}\n**Reason:** ${rejected.reason || 'N/A'}` : '',
+      constraints?.length ? `## Constraints\n${constraints.map(c => `- ${c}`).join('\n')}` : '',
+      outOfScope?.length ? `## Out of Scope\n${outOfScope.map(s => `- ${s}`).join('\n')}` : '',
+      verify?.length ? `## Verification\n${verify.map(v => `- ${v}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
 
     const data = await client.request('POST', `/repos/${wip.repo}/issues`, {
       title,
-      body: body || 'Created via gtw',
+      body: issueBody || 'Created via gtw',
     });
 
     clearWip();
