@@ -157,7 +157,7 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
       ok: true,
       wip: updated,
       message: `Issue draft generated: "${title}"`,
-      display: `Draft saved:\n\nTitle: ${title}\n\nTarget: ${parsed.target || '-'}\nGoal: ${parsed.goal || '-'}\nContext: ${parsed.context || '-'}\n\nRun /gtw confirm to create the issue.`,
+      display: `Draft saved:\n\nTitle: ${title}\n\nBody:\n${body}\n\nRun /gtw confirm to create the issue.`,
     };
   }
 }
