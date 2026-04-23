@@ -128,7 +128,18 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     }
 
     const title = parsed.title || '';
-    const body = parsed.body || parsed.context || '';
+    // Build structured markdown body for AI readability and GitHub issue
+    const body = [
+      parsed.context ? `## Context\n${parsed.context}` : '',
+      parsed.goal ? `## Goal\n${parsed.goal}` : '',
+      parsed.target ? `## Target\n${parsed.target}` : '',
+      parsed.consequence ? `## Consequence\n${parsed.consequence}` : '',
+      parsed.decided?.solution ? `## Decided Solution\n${parsed.decided.solution}\n\n**Reason:** ${parsed.decided.reason || 'N/A'}` : '',
+      parsed.rejected?.option ? `## Rejected Alternative\n**Option:** ${parsed.rejected.option}\n**Reason:** ${parsed.rejected.reason || 'N/A'}` : '',
+      parsed.constraints?.length ? `## Constraints\n${parsed.constraints.map(c => `- ${c}`).join('\n')}` : '',
+      parsed.outOfScope?.length ? `## Out of Scope\n${parsed.outOfScope.map(s => `- ${s}`).join('\n')}` : '',
+      parsed.verify?.length ? `## Verification\n${parsed.verify.map(v => `- ${v}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
 
     const updated = {
       ...wip,
@@ -137,15 +148,6 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
         id: null,
         title,
         body,
-        target: parsed.target || '',
-        goal: parsed.goal || '',
-        context: parsed.context || '',
-        consequence: parsed.consequence || '',
-        decided: parsed.decided || { solution: '', reason: '' },
-        rejected: parsed.rejected || { option: '', reason: '' },
-        constraints: parsed.constraints || [],
-        outOfScope: parsed.outOfScope || [],
-        verify: parsed.verify || [],
       },
       updatedAt: new Date().toISOString(),
     };

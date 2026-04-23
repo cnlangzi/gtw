@@ -81,21 +81,7 @@ async function unclaimIssue(issueId, repo, client) {
 
 // Get the main agent session file path
 // Inject a directive message into the main session transcript
-function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchName, issueTitle, issueData) {
-  // issueData may contain new structured fields: target, goal, context, consequence,
-  // decided, rejected, constraints, outOfScope, verify
-  const {
-    body,
-    target,
-    goal,
-    context,
-    consequence,
-    decided,
-    rejected,
-    constraints,
-    outOfScope,
-    verify,
-  } = issueData;
+function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchName, issueTitle, issueBody) {
   const directive = [
     `📋 [gtw fix] Subagent fix workflow triggered for issue #${issueId}`,
     ``,
@@ -114,28 +100,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
     `   Branch: ${branchName}`,
     ``,
     `   Issue description (Implementation Brief):`,
-    body && !target ? `   ${body}` : [
-      target ? `   ## Target` : '',
-      target ? `   ${target}` : '',
-      goal ? `   ## Goal` : '',
-      goal ? `   ${goal}` : '',
-      context ? `   ## Context` : '',
-      context ? `   ${context}` : '',
-      consequence ? `   ## Consequence` : '',
-      consequence ? `   ${consequence}` : '',
-      decided?.solution ? `   ## Decided Solution` : '',
-      decided?.solution ? `   ${decided.solution}` : '',
-      decided?.reason ? `   Reason: ${decided.reason}` : '',
-      rejected?.option ? `   ## Rejected Alternative` : '',
-      rejected?.option ? `   ${rejected.option}` : '',
-      rejected?.reason ? `   Rejected because: ${rejected.reason}` : '',
-      constraints?.length ? `   ## Constraints` : '',
-      ...(constraints || []).map(c => `   - ${c}`),
-      outOfScope?.length ? `   ## Out of Scope` : '',
-      ...(outOfScope || []).map(s => `   - ${s}`),
-      verify?.length ? `   ## Verification` : '',
-      ...(verify || []).map(v => `   - ${v}`),
-    ].filter(Boolean).join('\n'),
+    `   ${issueBody || '(no description)'}`,
     ``,
     `   Your job:`,
     `   - Read and understand the issue description above`,
@@ -320,19 +285,6 @@ export class FixCommand extends Commander {
     // Step 7: Inject directive into main session to trigger subagent workflow
     const sessionFile = getSessionFile(this.sessionKey);
     if (sessionFile) {
-      const issueData = {
-      body: wip.issue?.body || '',
-      target: wip.issue?.target || '',
-      goal: wip.issue?.goal || '',
-      context: wip.issue?.context || '',
-      consequence: wip.issue?.consequence || '',
-      decided: wip.issue?.decided || {},
-      rejected: wip.issue?.rejected || {},
-      constraints: wip.issue?.constraints || [],
-      outOfScope: wip.issue?.outOfScope || [],
-      verify: wip.issue?.verify || [],
-    };
-
     const injected = injectFixDirective(
         this.sessionKey,
         sessionFile,
@@ -340,7 +292,7 @@ export class FixCommand extends Commander {
         workdir,
         branchName,
         issueTitle,
-        issueData,
+        wip.issue?.body || '',
       );
       if (!injected) {
         console.error('[FixCommand] Warning: failed to inject directive into main session');
