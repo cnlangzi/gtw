@@ -5,6 +5,9 @@ import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 const MAX_DIFF_LEN = 8000;
 
@@ -249,6 +252,21 @@ export class PrCommand extends Commander {
     }
 
     if (!prData.title) {
+      // Log raw response for debugging
+      const logDir = join(homedir(), '.gtw', 'logs');
+      mkdirSync(logDir, { recursive: true });
+      const logFile = join(logDir, `pr-fail-${Date.now()}.json`);
+      const logData = {
+        timestamp: new Date().toISOString(),
+        branch: headBranch,
+        baseBranch,
+        issueId,
+        rawTextLength: prData.rawText?.length,
+        rawText: prData.rawText,
+      };
+      writeFileSync(logFile, JSON.stringify(logData, null, 2));
+      console.error(`[gtw] JSON parse failed, logged to ${logFile}`);
+
       const preview = prData.rawText?.slice(0, 300).replace(/\n/g, ' ') || '(empty)';
       return {
         ok: false,

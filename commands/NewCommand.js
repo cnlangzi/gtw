@@ -1,5 +1,7 @@
 import { Commander } from './Commander.js';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { homedir } from 'os';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 import { getConfig, getLangLabel, BASE_DIR } from '../utils/config.js';
@@ -123,6 +125,21 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     }
 
     if (!parsed) {
+      // Log raw response for debugging
+      const logDir = join(homedir(), '.gtw', 'logs');
+      mkdirSync(logDir, { recursive: true });
+      const logFile = join(logDir, `new-fail-${Date.now()}.json`);
+      const logData = {
+        timestamp: new Date().toISOString(),
+        model,
+        lang,
+        rawTextLength: rawText.length,
+        rawText: rawText,
+        parseStrategiesAttempted: 3,
+      };
+      writeFileSync(logFile, JSON.stringify(logData, null, 2));
+      console.error(`[gtw] JSON parse failed, logged to ${logFile}`);
+
       const preview = rawText.slice(0, 200).replace(/\n/g, ' ');
       return { ok: false, message: `⚠️ AI didn't return valid JSON. Raw (${rawText.length} chars): ${preview}` };
     }
