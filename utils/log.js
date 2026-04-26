@@ -2,12 +2,11 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-// Unified log file in ~/.gtw/logs/
-const LOG_DIR = join(homedir(), '.gtw', 'logs');
-const LOG_FILE = join(LOG_DIR, 'gtw.log');
+// Unified log file in ~/.gtw/
+const LOG_FILE = join(homedir(), '.gtw', 'gtw.log');
 
-// Ensure log directory exists
-mkdirSync(LOG_DIR, { recursive: true });
+// Ensure .gtw directory exists
+mkdirSync(join(homedir(), '.gtw'), { recursive: true });
 
 /**
  * Write a log message to the unified log file.
@@ -40,4 +39,4 @@ export function logParseFailure(type, data) {
   log('[parse-fail]', JSON.stringify(entry));
 }
 
-export { LOG_FILE, LOG_DIR };
+export { LOG_FILE };
