@@ -1,14 +1,7 @@
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
-import { writeFileSync } from 'fs';
 import { CommanderFactory } from './commands/CommanderFactory.js';
 import { extractMessages, injectMessage } from './utils/session.js';
-
-const DEBUG_FILE = '/tmp/gtw-plugin.log';
-
-function dbg(...args) {
-  const msg = '[' + new Date().toISOString() + '] ' + args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ') + '\n';
-  try { writeFileSync(DEBUG_FILE, msg); } catch { /* ignore */ }
-}
+import { log } from './utils/log.js';
 
 const USAGE = `gtw - GitHub Team Workflow
 
@@ -51,7 +44,7 @@ const gtw = definePluginEntry({
       acceptsArgs: true,
       handler: async (ctx) => {
         try {
-          dbg('[gtw] handler entered, args=', ctx.args);
+          log('[gtw] handler entered, args=', ctx.args);
 
           const rawArgs = (ctx.args || '').trim();
           if (!rawArgs) {
@@ -62,7 +55,7 @@ const gtw = definePluginEntry({
           const cmd = parts[0].toLowerCase();
           const args = parts.slice(1);
 
-          dbg('[gtw] cmd=', cmd, 'args=', args, 'sessionKey=', ctx.sessionKey);
+          log('[gtw] cmd=', cmd, 'args=', args, 'sessionKey=', ctx.sessionKey);
 
           // Build factory with API context + session helpers
           const factory = new CommanderFactory({
@@ -86,7 +79,7 @@ const gtw = definePluginEntry({
 
           return { text: result.display || result.message || 'OK' };
         } catch (err) {
-          dbg('[gtw] handler exception:', err.message, err.stack);
+          log('[gtw] handler exception:', err.message, err.stack);
           return { text: `❌ ${err.message}` };
         }
       },

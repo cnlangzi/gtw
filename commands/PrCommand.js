@@ -5,7 +5,7 @@ import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
-import { logParseFailure } from '../utils/debug-log.js';
+import { logParseFailure } from '../utils/log.js';
 
 const MAX_DIFF_LEN = 8000;
 

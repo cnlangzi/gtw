@@ -2,7 +2,7 @@ import { Commander } from './Commander.js';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
-import { logParseFailure } from '../utils/debug-log.js';
+import { logParseFailure } from '../utils/log.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 import { getConfig, getLangLabel, BASE_DIR } from '../utils/config.js';

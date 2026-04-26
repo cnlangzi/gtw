@@ -2,7 +2,7 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { git, getCurrentBranch, addAll, getStagedDiff, getStagedStats, getStagedNumstat } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
-import { logParseFailure } from '../utils/debug-log.js';
+import { logParseFailure } from '../utils/log.js';
 
 const MAX_DIFF_LEN = 8000;
 
