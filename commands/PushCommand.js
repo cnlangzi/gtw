@@ -2,6 +2,9 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { git, getCurrentBranch, addAll, getStagedDiff, getStagedStats, getStagedNumstat } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 const MAX_DIFF_LEN = 8000;
 
@@ -127,6 +130,20 @@ export class PushCommand extends Commander {
     }
 
     if (!msg.title) {
+      // Log raw response for debugging
+      const logDir = join(homedir(), '.gtw', 'logs');
+      mkdirSync(logDir, { recursive: true });
+      const logFile = join(logDir, `push-fail-${Date.now()}.json`);
+      const logData = {
+        timestamp: new Date().toISOString(),
+        branch,
+        diffLength: diff.length,
+        rawTextLength: msg.rawText?.length,
+        rawText: msg.rawText,
+      };
+      writeFileSync(logFile, JSON.stringify(logData, null, 2));
+      console.error(`[gtw] JSON parse failed, logged to ${logFile}`);
+
       const preview = msg.rawText?.slice(0, 300).replace(/\n/g, ' ') || '(empty)';
       return {
         ok: false,
