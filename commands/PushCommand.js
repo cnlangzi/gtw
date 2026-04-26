@@ -2,6 +2,7 @@ import { Commander } from './Commander.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { git, getCurrentBranch, addAll, getStagedDiff, getStagedStats, getStagedNumstat } from '../utils/git.js';
 import { callAI, resolveModel } from '../utils/ai.js';
+import { log } from '../utils/log.js';
 
 const MAX_DIFF_LEN = 8000;
 
@@ -127,6 +128,9 @@ export class PushCommand extends Commander {
     }
 
     if (!msg.title) {
+      // Log raw response for debugging
+      log('[parse-fail]', JSON.stringify({ timestamp: new Date().toISOString(), branch, diffLength: diff.length, rawTextLength: msg.rawText?.length, rawText: msg.rawText }));
+
       const preview = msg.rawText?.slice(0, 300).replace(/\n/g, ' ') || '(empty)';
       return {
         ok: false,
