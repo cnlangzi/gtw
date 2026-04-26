@@ -5,7 +5,7 @@ import { callAI, resolveModel } from '../utils/ai.js';
 import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { getConfig, getLangLabel } from '../utils/config.js';
-import { logParseFailure } from '../utils/log.js';
+import { log } from '../utils/log.js';
 
 const MAX_DIFF_LEN = 8000;
 
@@ -251,7 +251,7 @@ export class PrCommand extends Commander {
 
     if (!prData.title) {
       // Log raw response for debugging
-      logParseFailure('pr', { branch: headBranch, baseBranch, issueId, rawTextLength: prData.rawText?.length, rawText: prData.rawText });
+      log('[parse-fail]', JSON.stringify({ timestamp: new Date().toISOString(), branch: headBranch, baseBranch, issueId, rawTextLength: prData.rawText?.length, rawText: prData.rawText }));
 
       const preview = prData.rawText?.slice(0, 300).replace(/\n/g, ' ') || '(empty)';
       return {
