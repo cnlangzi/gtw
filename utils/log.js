@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, appendFileSync } from 'fs';
+import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -25,23 +25,19 @@ export function log(...args) {
 
 /**
  * Log raw AI response when JSON parsing fails.
+ * Writes to main log file.
  * @param {'new' | 'pr' | 'push'} type - Command type
  * @param {object} data - Data to log
  */
 export function logParseFailure(type, data) {
-  const failFile = join(LOG_DIR, `${type}-fail-${Date.now()}.json`);
-  const logData = {
+  const entry = {
     timestamp: new Date().toISOString(),
+    type: 'parse-fail',
+    command: type,
     ...data,
   };
   
-  try {
-    writeFileSync(failFile, JSON.stringify(logData, null, 2));
-    // Also log to main log file
-    appendFileSync(LOG_FILE, `[${new Date().toISOString()}] [parse-fail] ${type} failed, logged to ${failFile}\n`);
-  } catch { /* ignore */ }
-  
-  console.error(`[gtw] JSON parse failed, logged to ${failFile}`);
+  log('[parse-fail]', JSON.stringify(entry));
 }
 
 export { LOG_FILE, LOG_DIR };
