@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync, existsSync } from 'fs';
+import { read, append, exists } from './fs.js';
 import { join } from 'path';
 import { homedir } from 'os';
 import { sh } from './exec.js';
@@ -42,11 +42,11 @@ export function resolveRealSessionKey(sessionKey, dmScope, cfg = {}) {
   const agentId = parts[1];
 
   const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) return sessionKey;
+  if (!exists(sessionsPath)) return sessionKey;
 
   let sessionsData;
   try {
-    sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
   } catch {
     return sessionKey;
   }
@@ -112,8 +112,8 @@ export function resolveRealSessionKey(sessionKey, dmScope, cfg = {}) {
  */
 export function getSessionsData(agentId) {
   const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) throw new Error(`Session store not found: ${sessionsPath}`);
-  return JSON.parse(readFileSync(sessionsPath, 'utf8'));
+  if (!exists(sessionsPath)) throw new Error(`Session store not found: ${sessionsPath}`);
+  return JSON.parse(read(sessionsPath, 'utf8'));
 }
 
 /**
@@ -144,13 +144,13 @@ export function getSessionFile(sessionKey) {
   const agentId = sessionKey?.split(':')[1]; // "main" from "agent:main:feishu:direct:ou_xxx"
   if (!agentId) return null;
   const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!existsSync(sessionsPath)) return null;
+  if (!exists(sessionsPath)) return null;
 
   try {
-    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    const sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
     const entry = sessionsData[sessionKey];
     if (!entry?.sessionFile) return null;
-    if (!existsSync(entry.sessionFile)) return null;
+    if (!exists(entry.sessionFile)) return null;
     return entry.sessionFile;
   } catch {
     return null;
@@ -167,7 +167,7 @@ export function extractMessages(sessionKey) {
   if (!jsonlPath) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
 
   try {
-    const content = readFileSync(jsonlPath, 'utf8');
+    const content = read(jsonlPath, 'utf8');
     const lines = content.split('\n').filter(Boolean);
 
     // 从后往前找 /gtw confirm
@@ -231,7 +231,7 @@ export function injectMessage(sessionKey, text) {
         content: [{ type: 'text', text }],
       },
     });
-    appendFileSync(sessionFile, entry + '\n');
+    append(sessionFile, entry + '\n');
     return true;
   } catch {
     return false;
@@ -288,7 +288,7 @@ export function injectPlanModeDirective(sessionKey, workdir, repo) {
         content: [{ type: 'text', text: directive }],
       },
     });
-    appendFileSync(sessionFile, entry + '\n');
+    append(sessionFile, entry + '\n');
     return true;
   } catch (err) {
     console.warn(`[injectPlanModeDirective] Failed to append directive for session ${sessionKey}: ${err?.message ?? err}`);

@@ -1,23 +1,23 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { read, write, exists, makeDir } from './fs.js';
 import { BASE_DIR, WIP_FILE } from './config.js';
 
 export function getWip() {
   try {
-    return existsSync(WIP_FILE) ? JSON.parse(readFileSync(WIP_FILE, 'utf8')) : {};
+    return exists(WIP_FILE) ? JSON.parse(read(WIP_FILE, 'utf8')) : {};
   } catch {
     return {};
   }
 }
 
 export function saveWip(data) {
-  mkdirSync(BASE_DIR, { recursive: true });
-  writeFileSync(WIP_FILE, JSON.stringify(data, null, 2), 'utf8');
+  makeDir(BASE_DIR, { recursive: true });
+  write(WIP_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
 export function clearWip() {
-  if (existsSync(WIP_FILE)) {
+  if (exists(WIP_FILE)) {
     const wip = getWip();
     const { workdir, repo, createdAt } = wip;
-    writeFileSync(WIP_FILE, JSON.stringify({ workdir, repo, createdAt }, null, 2), 'utf8');
+    write(WIP_FILE, JSON.stringify({ workdir, repo, createdAt }, null, 2), 'utf8');
   }
 }

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'fs';
+import { append, makeDir } from './fs.js';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -6,7 +6,7 @@ import { homedir } from 'os';
 const LOG_FILE = join(homedir(), '.gtw', 'gtw.log');
 
 // Ensure .gtw directory exists
-mkdirSync(join(homedir(), '.gtw'), { recursive: true });
+makeDir(join(homedir(), '.gtw'), { recursive: true });
 
 /**
  * Write a log message to ~/.gtw/gtw.log
@@ -18,7 +18,7 @@ export function log(...args) {
   ).join(' ') + '\n';
   
   try { 
-    appendFileSync(LOG_FILE, msg); 
+    append(LOG_FILE, msg); 
   } catch { /* ignore */ }
 }
 

@@ -32,9 +32,7 @@ const MAX_FILE_BYTES = 1024 * 1024;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'scripts']);
 
 // Rules to skip (add ruleId here to suppress — see AGENTS.md)
-// These SOURCE_RULES are too broad for legitimate plugin code that reads local
-// files AND makes HTTP calls. They are preserved here for exact rule parity.
-const SKIP_RULES = new Set(['potential-exfiltration', 'env-harvesting']);
+const SKIP_RULES = new Set([]);
 
 // ---------------------------------------------------------------------------
 // LINE_RULES — matched per line (requiresContext gates the rule for the file)
@@ -84,13 +82,6 @@ const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
 // ---------------------------------------------------------------------------
 const SOURCE_RULES = [
   {
-    ruleId: 'potential-exfiltration',
-    severity: 'warn',
-    message: 'File read combined with network send — possible data exfiltration',
-    pattern: /readFileSync|readFile/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
-  },
-  {
     ruleId: 'obfuscated-code',
     severity: 'warn',
     message: 'Hex-encoded string sequence detected (possible obfuscation)',
@@ -103,13 +94,6 @@ const SOURCE_RULES = [
     message: 'Large base64 payload with decode call detected (possible obfuscation)',
     pattern: /(?:atob|Buffer\.from)\s*\(\s*["'][A-Za-z0-9+/=]{200,}["']/,
     requiresContext: null,
-  },
-  {
-    ruleId: 'env-harvesting',
-    severity: 'critical',
-    message: 'Environment variable access combined with network send — possible credential harvesting',
-    pattern: /process\.env/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
 ];
 

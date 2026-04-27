@@ -17,6 +17,7 @@
     "test:watch": "node --test --watch test/*.test.js"
   },
   "dependencies": {
-    "fuse.js": "^7.3.0"
+    "fuse.js": "^7.3.0",
+    "jsonrepair": "^3.14.0"
   }
 }

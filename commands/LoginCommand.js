@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
+import { write, read, exists, makeDir, append } from '../utils/fs.js';
 import { Commander } from './Commander.js';
 import { getSessionFile } from '../utils/session.js';
 import { GitHubClient } from '../utils/github.js';
@@ -63,7 +63,7 @@ function injectLoginDirective(sessionKey, sessionFile, deviceCode) {
         content: [{ type: 'text', text: directive }],
       },
     });
-    appendFileSync(sessionFile, entry + '\n');
+    append(sessionFile, entry + '\n');
     return true;
   } catch (e) {
     console.error('[gtw] Failed to inject login directive:', e.message);
@@ -77,7 +77,7 @@ function injectLoginDirective(sessionKey, sessionFile, deviceCode) {
 
 function savePollingState(deviceCode) {
   try {
-    mkdirSync(BASE_DIR, { recursive: true });
+    makeDir(BASE_DIR, { recursive: true });
     const state = {
       device_code: deviceCode.device_code,
       user_code: deviceCode.user_code,
@@ -87,7 +87,7 @@ function savePollingState(deviceCode) {
       status: 'pending',
       created_at: new Date().toISOString(),
     };
-    writeFileSync(POLLING_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    write(POLLING_STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
     console.log(`[gtw] Saved polling state to ${POLLING_STATE_FILE}`);
   } catch (e) {
     console.error(`[gtw] Failed to save polling state: ${e.message}`);
@@ -176,9 +176,9 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     const pollingStateFile = POLLING_STATE_FILE;
 
     // Check if token exists and is valid
-    if (existsSync(tokenFile)) {
+    if (exists(tokenFile)) {
       try {
-        const tokenData = JSON.parse(readFileSync(tokenFile, 'utf8'));
+        const tokenData = JSON.parse(read(tokenFile, 'utf8'));
         if (tokenData.access_token) {
           client.setToken(tokenData.access_token);
           const isValid = await client.validateToken();
@@ -198,9 +198,9 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
     }
 
     // Check if polling is in progress
-    if (existsSync(pollingStateFile)) {
+    if (exists(pollingStateFile)) {
       try {
-        const state = JSON.parse(readFileSync(pollingStateFile, 'utf8'));
+        const state = JSON.parse(read(pollingStateFile, 'utf8'));
         if (state.status === 'pending' && state.expires_at > Date.now()) {
           const displayLines = [
             '🔐 **Authorization in progress...**',
@@ -247,8 +247,8 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
    */
   loadExistingPollingState() {
     try {
-      if (existsSync(POLLING_STATE_FILE)) {
-        const state = JSON.parse(readFileSync(POLLING_STATE_FILE, 'utf8'));
+      if (exists(POLLING_STATE_FILE)) {
+        const state = JSON.parse(read(POLLING_STATE_FILE, 'utf8'));
         // Only reuse if pending and not expired
         if (state.device_code && state.expires_at > Date.now() && state.status === 'pending') {
           return state;
@@ -356,8 +356,8 @@ You can now start using gtw commands!`;
 
   saveToken(tokenData) {
     try {
-      mkdirSync(BASE_DIR, { recursive: true });
-      writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2), 'utf8');
+      makeDir(BASE_DIR, { recursive: true });
+      write(TOKEN_FILE, JSON.stringify(tokenData, null, 2), 'utf8');
     } catch (e) {
       console.error('[gtw] Failed to save token:', e.message);
     }

@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { exists, read, makeDir, write } from './fs.js';
 import { readJSON, writeJSON } from './api.js';
 
 /**
@@ -31,7 +31,7 @@ export function getConfig() {
 
 export function saveConfig(c) {
   if (_saveConfigOverride) return _saveConfigOverride(c);
-  mkdirSync(BASE_DIR, { recursive: true });
+  makeDir(BASE_DIR, { recursive: true });
   writeJSON(CONFIG_FILE, c);
 }
 

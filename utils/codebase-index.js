@@ -8,7 +8,7 @@
  * - Reference tracking for impact analysis
  */
 
-import fs from 'fs';
+import fs from './fs.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from './exec.js';

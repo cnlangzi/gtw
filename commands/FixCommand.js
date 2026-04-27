@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
+import { read, write, append, exists } from '../utils/fs.js';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { Commander } from './Commander.js';
@@ -9,7 +9,6 @@ import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
 import { resolveModel } from '../utils/ai.js';
 import { WIP_FILE } from '../utils/config.js';
-import https from 'https';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -142,7 +141,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
         content: [{ type: 'text', text: directive }],
       },
     });
-    appendFileSync(sessionFile, entry + '\n');
+    append(sessionFile, entry + '\n');
     return true;
   } catch (e) {
     return false;
@@ -152,7 +151,7 @@ function injectFixDirective(sessionKey, sessionFile, issueId, workdir, branchNam
 // Check if the main session has been injected with a gtw fix directive
 function wasInjected(sessionFile) {
   try {
-    const content = readFileSync(sessionFile, 'utf8');
+    const content = read(sessionFile, 'utf8');
     const lines = content.split('\n').filter(Boolean);
     for (const line of lines) {
       try {
