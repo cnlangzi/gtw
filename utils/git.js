@@ -5,10 +5,10 @@
  * Uses execGit (spawnSync) internally — no isomorphic-git dependency.
  */
 import { exec } from './exec.js';
-import fs from 'fs';
+import fs from '../utils/fs.js';
 import path from 'path';
 import { join, resolve, dirname, basename } from 'path';
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from 'fs';
+import { read, write, exists, readDir, makeDir, remove } from '../utils/fs.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync
 function findGitRoot(workdir) {
   let dir = resolve(workdir);
   while (dir !== dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) return dir;
+    if (!exists(join(dir, '.git'))) return dir;
     dir = dirname(dir);
   }
   return workdir;
@@ -93,14 +93,14 @@ export { currentBranch as getCurrentBranch };
 export function getDefaultBranch(workdir) {
   try {
     const packedRefs = join(findGitRoot(workdir), '.git', 'packed-refs');
-    if (existsSync(packedRefs)) {
-      const content = readFileSync(packedRefs, 'utf8');
+    if (exists(packedRefs)) {
+      const content = read(packedRefs, 'utf8');
       const m = content.match(/^ref: refs\/remotes\/origin\/HEAD\s+([a-f0-9]+)/);
       if (m) {
         const refsDir = join(findGitRoot(workdir), '.git', 'refs', 'remotes', 'origin');
         const headFile = join(refsDir, 'HEAD');
-        if (existsSync(headFile)) {
-          const line = readFileSync(headFile, 'utf8').trim();
+        if (exists(headFile)) {
+          const line = read(headFile, 'utf8').trim();
           const parts = line.split('/');
           return parts[parts.length - 1];
         }
@@ -356,19 +356,19 @@ function validateWorktreeName(name) {
 
 export function worktreeList(workdir) {
   const wtDir = worktreeDir(workdir);
-  if (!existsSync(wtDir)) return [];
-  const entries = readdirSync(wtDir).filter(n => n !== 'maint');
+  if (!exists(wtDir)) return [];
+  const entries = readDir(wtDir).filter(n => n !== 'maint');
   const result = [];
   for (const name of entries) {
     const wtPathFile = join(wtDir, name, 'gitdir');
     const wtCommitsFile = join(wtDir, name, 'commits');
     let path = null;
     try {
-      const link = readFileSync(wtPathFile, 'utf8').trim();
+      const link = read(wtPathFile, 'utf8').trim();
       path = dirname(link.replace(/\/\.git$/, ''));
     } catch {}
-    const head = existsSync(wtCommitsFile)
-      ? readFileSync(wtCommitsFile, 'utf8').trim().split('\n')[0]?.split(' ')[1] || null
+    const head = exists(wtCommitsFile)
+      ? read(wtCommitsFile, 'utf8').trim().split('\n')[0]?.split(' ')[1] || null
       : null;
     result.push({ name, path, head });
   }
@@ -378,14 +378,14 @@ export function worktreeList(workdir) {
 export function worktreeAdd(workdir, name, path) {
   validateWorktreeName(name);
   const wtDir = worktreeDir(workdir);
-  if (!existsSync(wtDir)) mkdirSync(wtDir, { recursive: true });
+  if (!exists(wtDir)) makeDir(wtDir, { recursive: true });
   const wtPath = join(wtDir, name);
-  if (existsSync(wtPath)) {
+  if (exists(wtPath)) {
     throw new Error(`Worktree "${name}" already exists`);
   }
-  mkdirSync(wtPath, { recursive: true });
-  writeFileSync(join(wtPath, 'gitdir'), join(path, '.git') + '\n');
-  writeFileSync(join(wtPath, 'commits'), `1 ${execGit('git rev-parse HEAD', workdir)}\n`);
+  makeDir(wtPath, { recursive: true });
+  write(join(wtPath, 'gitdir'), join(path, '.git') + '\n');
+  write(join(wtPath, 'commits'), `1 ${execGit('git rev-parse HEAD', workdir)}\n`);
   execGit(`git worktree add "${path}" "${name}"`, workdir);
 }
 
@@ -411,11 +411,11 @@ export function worktreeRemoveByPath(worktreePath, gitRoot) {
   } catch {}
 
   // Step 2: git remove failed — manually clean up registry entry + directory
-  if (existsSync(wtEntry)) {
-    try { rmSync(wtEntry, { recursive: true, force: true }); } catch {}
+  if (exists(wtEntry)) {
+    try { remove(wtEntry, { recursive: true, force: true }); } catch {}
   }
-  if (existsSync(worktreePath)) {
-    try { rmSync(worktreePath, { recursive: true, force: true }); } catch {}
+  if (exists(worktreePath)) {
+    try { remove(worktreePath, { recursive: true, force: true }); } catch {}
   }
   // Step 3: git prune cleans up any other orphaned registry entries
   try { execGit('git worktree prune', gitRoot); } catch {}

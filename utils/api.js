@@ -1,20 +1,20 @@
 import https from 'https';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { exists, read, makeDir, write } from './fs.js';
 import { dirname } from 'path';
 import { GitHubClient } from './github.js';
 import { TOKEN_FILE } from './config.js';
 
 export function readJSON(file) {
   try {
-    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
+    return exists(file) ? JSON.parse(read(file, 'utf8')) : null;
   } catch (e) {
     return null;
   }
 }
 
 export function writeJSON(file, data) {
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  makeDir(dirname(file), { recursive: true });
+  write(file, JSON.stringify(data, null, 2), 'utf8');
 }
 
 /**

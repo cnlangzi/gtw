@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { homedir } from 'os';
-import { existsSync, readFileSync } from 'fs';
+import { exists, read } from './fs.js';
+import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
 import { getSessionEntry } from './session.js';
 
@@ -13,9 +14,9 @@ import { getSessionEntry } from './session.js';
  */
 export function findModelProviderConfig(model, agentId = 'main') {
   const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
-  if (!existsSync(modelsPath)) return null;
+  if (!exists(modelsPath)) return null;
   try {
-    const data = JSON.parse(readFileSync(modelsPath, 'utf8'));
+    const data = JSON.parse(read(modelsPath, 'utf8'));
 
     // Direct lookup: "provider/model-id"
     if (model.includes('/')) {
@@ -123,7 +124,7 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
   // Priority 1+2: auth-profiles.json (access or key field)
   try {
     const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
-    const authData = JSON.parse(readFileSync(authPath, 'utf8'));
+    const authData = JSON.parse(read(authPath, 'utf8'));
     const profile = authData.profiles?.[authKey];
     token = profile?.access || profile?.key || null;
   } catch { /* no auth profile */ }
@@ -131,7 +132,7 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
   // Priority 3: models.json inline apiKey (e.g. minimax configured in openclaw.json)
   if (!token) {
     try {
-      const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
+      const modelConf = JSON.parse(read(modelsPath, 'utf8'));
       token = modelConf.providers?.[provider]?.apiKey || null;
     } catch { /* no inline key */ }
   }
@@ -149,7 +150,7 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
   let body;
 
   // Read models.json once for both api-specific config and maxTokens
-  const modelConf = JSON.parse(readFileSync(modelsPath, 'utf8'));
+  const modelConf = JSON.parse(read(modelsPath, 'utf8'));
 
   if (api === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
@@ -213,8 +214,8 @@ export async function resolveModel(sessionKey = null) {
 
   // 2. gtw/config.json override (always checked; applies on top of session model)
   try {
-    if (existsSync(CONFIG_FILE)) {
-      const gtwConfig = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
+    if (exists(CONFIG_FILE)) {
+      const gtwConfig = JSON.parse(read(CONFIG_FILE, 'utf8'));
       if (gtwConfig.model) model = gtwConfig.model;
     }
   } catch {}
@@ -229,4 +230,57 @@ export async function resolveModel(sessionKey = null) {
   }
 
   return { model, modelProvider };
+}
+
+/**
+ * Parse LLM response text as JSON.
+ * Uses jsonrepair to handle malformed JSON common in LLM outputs:
+ * - Markdown code blocks (```json ... ```)
+ * - Trailing commas, single quotes, unquoted keys
+ * - Python keywords (True/False/None), unclosed quotes, missing colons
+ * @param {string} text - Raw response text from LLM
+ * @returns {object} Parsed JSON object
+ * @throws {Error} If JSON cannot be repaired or result is not an object
+ */
+export function parseAIResponse(text) {
+  // Step 1: Try jsonrepair
+  try {
+    const repaired = jsonrepair(text);
+    let parsed = JSON.parse(repaired);
+
+    // jsonrepair may return a string (double-encoded) or array (multi-object)
+    // Handle double-encoded: string containing JSON object
+    if (typeof parsed === 'string') {
+      try {
+        const reparsed = JSON.parse(parsed);
+        if (typeof reparsed === 'object' && !Array.isArray(reparsed)) {
+          return reparsed;
+        }
+      } catch {}
+    }
+
+    // Handle array from jsonrepair (e.g., text before/after JSON or multi-object)
+    // Extract object if array contains exactly one object element
+    if (Array.isArray(parsed)) {
+      // Find first object element (skip string elements like "comment" or "text before")
+      const obj = parsed.find(el => typeof el === 'object' && !Array.isArray(el));
+      if (obj) return obj;
+    }
+
+    // If parsed is already an object (not array), return it
+    if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {}
+
+  // Step 2: Direct JSON.parse fallback for clean JSON
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed;
+    }
+    throw new Error('Result is not a JSON object');
+  } catch (e) {
+    throw new Error(`Invalid JSON from AI response: ${e.message}`);
+  }
 }

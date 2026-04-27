@@ -3,7 +3,7 @@
  * Prepares git worktrees for PR review.
  */
 
-import fs from 'fs';
+import fs from '../utils/fs.js';
 import path from 'path';
 import { exec } from '../utils/exec.js';
 import { BASE_DIR } from '../utils/config.js';
@@ -28,30 +28,30 @@ export async function prepareReviewWorktree(repo, prNum, branchName, baseBranch,
   const worktreePath = path.resolve(worktreeRoot, branchName);
 
   // Ensure base clone exists
-  if (!fs.existsSync(reviewRoot)) {
-    fs.mkdirSync(reviewRoot, { recursive: true });
+  if (!fs.exists(reviewRoot)) {
+    fs.makeDir(reviewRoot, { recursive: true });
     exec(`git clone --depth=1 --branch ${baseBranch} "${cloneUrl}" "${reviewRoot}"`);
   }
 
   // Ensure worktree exists
-  if (fs.existsSync(worktreePath)) {
+  if (fs.exists(worktreePath)) {
     try {
       exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: worktreePath });
       exec(`git config pull.rebase true`, { cwd: worktreePath });
       exec(`git reset --hard FETCH_HEAD`, { cwd: worktreePath });
     } catch {
       // Pull failed — remove and recreate
-      fs.rmSync(worktreePath, { recursive: true, force: true });
+      fs.remove(worktreePath, { recursive: true, force: true });
     }
   }
 
-  if (!fs.existsSync(worktreePath)) {
+  if (!fs.exists(worktreePath)) {
     // Fetch PR branch ref
     try {
       exec(`git fetch origin refs/pull/${prNum}/head:${branchName}`, { cwd: reviewRoot });
     } catch {}
     // Create worktree
-    fs.mkdirSync(worktreeRoot, { recursive: true });
+    fs.makeDir(worktreeRoot, { recursive: true });
     try {
       exec(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: reviewRoot });
     } catch {

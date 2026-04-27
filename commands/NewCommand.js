@@ -1,12 +1,12 @@
 import { Commander } from './Commander.js';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { read, exists, makeDir } from '../utils/fs.js';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { log } from '../utils/log.js';
 import { getWip, saveWip } from '../utils/wip.js';
 import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
 import { getConfig, getLangLabel, BASE_DIR } from '../utils/config.js';
-import { callAI, resolveModel } from '../utils/ai.js';
+import { callAI, resolveModel, parseAIResponse } from '../utils/ai.js';
 
 export class NewCommand extends Commander {
   /**
@@ -25,7 +25,7 @@ export class NewCommand extends Commander {
     // Read full openclaw.json config for session.dmScope, session.identityLinks, session.mainKey
     let cfg = {};
     try {
-      cfg = JSON.parse(readFileSync(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
+      cfg = JSON.parse(read(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
     } catch {}
 
     const dmScope = cfg.session?.dmScope || 'main';
@@ -93,7 +93,7 @@ Output format (strict JSON only):
 JSON：`;
 
     // Ensure base dir exists for session file
-    mkdirSync(BASE_DIR, { recursive: true });
+    makeDir(BASE_DIR, { recursive: true });
 
     // langLabel controls output language only; prompt is always English
     const systemPrompt = `You extract implementation decisions from a discussion and output ONLY valid JSON.
@@ -104,33 +104,17 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     let rawText;
     try {
       rawText = await callAI(model, systemPrompt, prompt, agentId);
-      console.error('[gtw DEBUG] rawText length:', rawText.length, 'first 300:', JSON.stringify(rawText.slice(0, 300)));
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
-    // Parse new structured format with all fields
-    let parsed = null;
-    for (const strategy of [
-      () => JSON.parse(rawText),
-      () => { const inner = JSON.parse(rawText); return typeof inner === 'string' ? JSON.parse(inner) : inner; },
-      () => { const match = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim().match(/\{[\s\S]*?\}/); return match ? JSON.parse(match[0]) : null; },
-    ]) {
-      try {
-        const result = strategy();
-        if (result && typeof result === 'object' && !Array.isArray(result) && (result.title || result.target)) {
-          parsed = result;
-          break;
-        }
-      } catch {}
-    }
-
-    if (!parsed) {
-      // Log raw response for debugging
+    // Parse using jsonrepair to handle malformed JSON from LLM
+    let parsed;
+    try {
+      parsed = parseAIResponse(rawText);
+    } catch (e) {
       log('[parse-fail]', JSON.stringify({ timestamp: new Date().toISOString(), model, lang, rawTextLength: rawText.length, rawText }));
-
-      const preview = rawText.slice(0, 200).replace(/\n/g, ' ');
-      return { ok: false, message: `⚠️ AI didn't return valid JSON. Raw (${rawText.length} chars): ${preview}` };
+      return { ok: false, message: `⚠️ AI didn't return valid JSON: ${e.message}\n\nRaw (${rawText.length} chars): ${rawText.slice(0, 200)}` };
     }
 
     const title = parsed.title || '';

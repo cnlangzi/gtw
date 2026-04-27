@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'fs';
+import { exists, stat } from './fs.js';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 
@@ -41,7 +41,7 @@ export function expandPath(inputPath) {
     usesHomedir = true;
   }
 
-  const isValid = existsSync(expanded) && statSync(expanded).isDirectory();
+  const isValid = exists(expanded) && stat(expanded).isDirectory();
 
   return {
     expanded,
