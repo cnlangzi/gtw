@@ -3,6 +3,9 @@
   "name": "gtw",
   "description": "GitHub team workflow — slash commands for issues, PRs, reviews, and commits",
   "version": "1.0.0",
+  "activation": {
+    "onStartup": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
