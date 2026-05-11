@@ -49,7 +49,7 @@ function parseCommitResponse(rawText) {
   return null;
 }
 
-async function generateCommitMessage(diff, branch, sessionKey) {
+async function generateCommitMessage(diff, branch, sessionKey, api) {
   const { model } = await resolveModel(sessionKey);
   const branchType = getBranchType(branch);
 
@@ -74,7 +74,7 @@ ${truncated}
 
 Output ONLY valid JSON.`;
 
-  const rawText = await callAI(model, systemPrompt, userPrompt);
+  const rawText = await callAI(model, systemPrompt, userPrompt, sessionKey, api);
   const parsed = parseCommitResponse(rawText);
   return { title: parsed?.title, body: parsed?.body, rawText };
 }
@@ -111,7 +111,7 @@ export class PushCommand extends Commander {
 
     let msg;
     try {
-      msg = await generateCommitMessage(diff, branch, this.sessionKey);
+      msg = await generateCommitMessage(diff, branch, this.sessionKey, this.api);
     } catch (e) {
       return {
         ok: false,

@@ -3,17 +3,18 @@ import { homedir } from 'os';
 import { exists, read } from './fs.js';
 import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
-import { getSessionEntry } from './session.js';
+import { getSessionEntry, resolveRealSessionKey } from './session.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
  * Supports "model-id" (searches all providers) or "provider/model-id" (direct lookup).
  * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
  * @param {string} [agentId='main'] - Agent ID for models.json lookup
+ * @param {string} [customModelsPath] - Override models.json path
  * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
  */
-export function findModelProviderConfig(model, agentId = 'main') {
-  const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
+export function findModelProviderConfig(model, agentId = 'main', customModelsPath = null) {
+  const modelsPath = customModelsPath || join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
   if (!exists(modelsPath)) return null;
   try {
     const data = JSON.parse(read(modelsPath, 'utf8'));
@@ -54,14 +55,17 @@ export function findModelProviderConfig(model, agentId = 'main') {
 
 /**
  * Make an AI API call using OpenClaw's model + auth configuration.
- * Auth token priority:
- *   1. auth-profiles.json \\u2192 profiles[<provider>:default].access  (PAT / device flow token)
- *   2. auth-profiles.json \\u2192 profiles[<provider>:default].key    (api_key type)
- *   3. models.json        \\u2192 providers[<provider>].apiKey        (inline apiKey)
+ * Auth token priority (when api.runtime.modelAuth is available):
+ *   1. api.runtime.modelAuth.getApiKeyForModel() — resolves the full OpenClaw auth chain
+ *   2. auth-profiles.json → profiles[<provider>:default].access  (PAT / device flow token)
+ *   3. auth-profiles.json → profiles[<provider>:default].key    (api_key type)
+ *   4. models.json        → providers[<provider>].apiKey        (inline apiKey)
  * @param {string} model - Model id (with optional provider prefix)
  * @param {string} systemPrompt
  * @param {string} userPrompt
- * @param {string} [agentId='main'] - Agent ID for models.json lookup
+ * @param {string} [sessionKey] - Session key to resolve agentId and models path from
+ * @param {object} [api] - OpenClaw plugin api (optional, for modelAuth)
+ * @param {number} [timeoutSeconds] - Override default timeout; uses getLLMTimeoutSeconds() if not provided
  * @returns {Promise<string>} - Response text
  */
 export class TimeoutError extends Error {
@@ -78,17 +82,18 @@ export class TimeoutError extends Error {
  * @param {string} model
  * @param {string} systemPrompt
  * @param {string} userPrompt
- * @param {string} [agentId='main']
- * @param {number} [timeoutSeconds] - Override default timeout; uses getLLMTimeoutSeconds() if not provided
+ * @param {string} [sessionKey]
+ * @param {object} [api]
+ * @param {number} [timeoutSeconds]
  * @returns {Promise<string>}
  */
-export async function callAI(model, systemPrompt, userPrompt, agentId = 'main', timeoutSeconds) {
+export async function callAI(model, systemPrompt, userPrompt, sessionKey = null, api = null, timeoutSeconds) {
   const timeout = timeoutSeconds ?? getLLMTimeoutSeconds();
   let lastError;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      return await _callAIOnce(model, systemPrompt, userPrompt, agentId, timeout);
+      return await _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, timeout);
     } catch (err) {
       const isAbort = err.name === 'AbortError' || err.code === 'ETIMEDOUT' || err.message?.includes('network timeout');
       if (isAbort) {
@@ -109,27 +114,41 @@ export async function callAI(model, systemPrompt, userPrompt, agentId = 'main', 
  * Internal: single LLM API call with AbortController timeout.
  * @private
  */
-async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeconds) {
-  const providerConfig = findModelProviderConfig(model, agentId);
+async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, timeoutSeconds) {
+  // Resolve agentId and modelsPath from sessionKey (always use current session's models.json)
+  const agentId = sessionKey ? (sessionKey.split(':')[1] || 'main') : 'main';
+  const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
+
+  const providerConfig = findModelProviderConfig(model, agentId, modelsPath);
   if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
 
   const { provider, baseUrl, authHeader } = providerConfig;
   const modelId = model.includes('/') ? model.split('/')[1] : model;
   const authKey = `${provider}:default`;
-  const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
 
   const headers = { 'Content-Type': 'application/json' };
   let token = null;
 
-  // Priority 1+2: auth-profiles.json (access or key field)
-  try {
-    const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
-    const authData = JSON.parse(read(authPath, 'utf8'));
-    const profile = authData.profiles?.[authKey];
-    token = profile?.access || profile?.key || null;
-  } catch { /* no auth profile */ }
+  // Priority 1: api.runtime.modelAuth (uses the full OpenClaw auth chain)
+  if (api?.runtime?.modelAuth) {
+    try {
+      const cfg = api.runtime.config.current();
+      const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
+      token = auth?.apiKey || null;
+    } catch { /* modelAuth unavailable */ }
+  }
 
-  // Priority 3: models.json inline apiKey (e.g. minimax configured in openclaw.json)
+  // Priority 2+3: auth-profiles.json (access or key field)
+  if (!token) {
+    try {
+      const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
+      const authData = JSON.parse(read(authPath, 'utf8'));
+      const profile = authData.profiles?.[authKey];
+      token = profile?.access || profile?.key || null;
+    } catch { /* no auth profile */ }
+  }
+
+  // Priority 4: models.json inline apiKey
   if (!token) {
     try {
       const modelConf = JSON.parse(read(modelsPath, 'utf8'));
@@ -145,14 +164,14 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
     }
   }
 
-  const api = providerConfig.api || 'openai-chat';
+  const resolvedApi = providerConfig.api || 'openai-chat';
   let endpoint;
   let body;
 
   // Read models.json once for both api-specific config and maxTokens
   const modelConf = JSON.parse(read(modelsPath, 'utf8'));
 
-  if (api === 'anthropic-messages') {
+  if (resolvedApi === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
     const maxTokens = (
@@ -184,7 +203,7 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
   console.log(`[gtw] AI response ← ${endpoint} [${res.status}]`);
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
 
-  if (api === 'anthropic-messages') {
+  if (resolvedApi === 'anthropic-messages') {
     const data = await res.json();
     return (data.content || []).map((b) => (b.type === 'text' ? b.text : '')).join('');
   } else {
@@ -198,9 +217,10 @@ async function _callAIOnce(model, systemPrompt, userPrompt, agentId, timeoutSeco
  * Priority: /gtw model config (gtw/config.json) > current session model.
  * @param {string|null} [sessionKey=null] - Session key to read session model from.
  *        If not provided, only gtw/config.json is consulted.
+ * @param {object} [api] - OpenClaw plugin api (optional, for modelAuth in callAI)
  * @returns {{ model: string, modelProvider: string }}
  */
-export async function resolveModel(sessionKey = null) {
+export async function resolveModel(sessionKey = null, api = null) {
   // 1. Session model (if sessionKey provided — throws if session not found or model missing)
   let model = null;
   let modelProvider = null;
