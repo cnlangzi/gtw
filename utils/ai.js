@@ -133,9 +133,13 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
   if (api?.runtime?.modelAuth) {
     try {
       const cfg = api.runtime.config.current();
+      console.log('[gtw] modelAuth cfg keys:', Object.keys(cfg));
       const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
+      console.log('[gtw] modelAuth result:', JSON.stringify(auth));
       token = auth?.apiKey || null;
-    } catch { /* modelAuth unavailable */ }
+    } catch (e) {
+      console.log('[gtw] modelAuth error:', e.message);
+    }
   }
 
   // Priority 2+3: auth-profiles.json (access or key field)
