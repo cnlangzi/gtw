@@ -124,33 +124,49 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 
   const { provider, baseUrl, authHeader } = providerConfig;
   const modelId = model.includes('/') ? model.split('/')[1] : model;
-  const authKey = `${provider}:default`;
-
-  const headers = { 'Content-Type': 'application/json' };
   let token = null;
 
   // Priority 1: api.runtime.modelAuth (uses the full OpenClaw auth chain)
   if (api?.runtime?.modelAuth) {
     try {
       const cfg = api.runtime.config.current();
-      console.log('[gtw] modelAuth cfg keys:', Object.keys(cfg));
       const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
-      console.log('[gtw] modelAuth result:', JSON.stringify(auth));
       token = auth?.apiKey || null;
     } catch (e) {
       console.log('[gtw] modelAuth error:', e.message);
     }
   }
 
-  // Priority 2+3: auth-profiles.json (access or key field)
+  // Priority 2: auth-state.json lastGood (OpenClaw's verified working profile)
+  if (!token) {
+    try {
+      const statePath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-state.json');
+      const state = JSON.parse(read(statePath, 'utf8'));
+      const lastGoodProfile = state?.lastGood?.[provider];
+      if (lastGoodProfile) {
+        const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
+        const authData = JSON.parse(read(authPath, 'utf8'));
+        const profile = authData.profiles?.[lastGoodProfile];
+        token = profile?.access || profile?.key || null;
+      }
+    } catch { /* no auth state */ }
+  }
+
+  // Priority 3: auth-profiles.json — iterate all profiles for this provider
   if (!token) {
     try {
       const authPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'auth-profiles.json');
       const authData = JSON.parse(read(authPath, 'utf8'));
-      const profile = authData.profiles?.[authKey];
-      token = profile?.access || profile?.key || null;
+      for (const [key, profile] of Object.entries(authData.profiles || {})) {
+        if (key.startsWith(provider + ':')) {
+          const found = profile?.access || profile?.key || null;
+          if (found) { token = found; break; }
+        }
+      }
     } catch { /* no auth profile */ }
   }
+
+  const headers = { 'Content-Type': 'application/json' };
 
   // Priority 4: models.json inline apiKey
   if (!token) {
