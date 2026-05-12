@@ -100,10 +100,9 @@ JSON：`;
 Output exactly the JSON structure described. No markdown. No explanation.
 Generate all output content (title, solution, reason, constraints, etc.) in ${langLabel}.`;
 
-    const agentId = realSessionKey?.split(':')[1] || 'main';
     let rawText;
     try {
-      rawText = await callAI(model, systemPrompt, prompt, agentId);
+      rawText = await callAI(model, systemPrompt, prompt, realSessionKey, this.api);
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }

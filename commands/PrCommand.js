@@ -57,7 +57,7 @@ function parsePrResponse(rawText) {
 // Generate PR title/body via LLM
 // ---------------------------------------------------------------------------
 
-async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang, sessionKey }) {
+async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang, sessionKey, api }) {
   const { model } = await resolveModel(sessionKey);
 
   const langLabel = getLangLabel(lang);
@@ -96,7 +96,7 @@ ${diff}
 Output ONLY valid JSON.`;
   }
 
-  const rawText = await callAI(model, systemPrompt, userPrompt);
+  const rawText = await callAI(model, systemPrompt, userPrompt, sessionKey, api);
   const parsed = parsePrResponse(rawText);
   return { ...parsed, rawText };
 }
@@ -233,6 +233,7 @@ export class PrCommand extends Commander {
         baseBranch,
         sessionKey: this.sessionKey,
         lang,
+        api: this.api,
       });
     } catch (e) {
       return {

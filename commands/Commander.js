@@ -3,8 +3,14 @@
  * Each subclass implements execute(args) -> { ok, display?, message? }
  */
 export class Commander {
-  constructor({ log }) {
-    this.log = log || (() => {});
+  /**
+   * @param {{ api?: object, config?: object, sessionKey?: string, log?: function }} context
+   */
+  constructor(context) {
+    this.api = context.api;
+    this.config = context.config;
+    this.sessionKey = context.sessionKey;
+    this.log = context.log || (() => {});
   }
 
   /**
