@@ -24,7 +24,7 @@ import { MakeCommand } from './MakeCommand.js';
  */
 export class CommanderFactory {
   /**
-   * @param {{ api: object, config: object, sessionKey: string, extractMessages: function, injectMessage: function }} context
+   * @param {{ api: object, config: object, sessionKey: string, sessionFile: string|null }} context
    */
   constructor(context) {
     this.context = context;

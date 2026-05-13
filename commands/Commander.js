@@ -4,13 +4,14 @@
  */
 export class Commander {
   /**
-   * @param {{ api?: object, config?: object, sessionKey?: string, log?: function }} context
+   * @param {{ api?: object, config?: object, sessionKey?: string, sessionFile?: string|null, log?: function }} context
    */
   constructor(context) {
     this.api = context.api;
     this.config = context.config;
     this.sessionKey = context.sessionKey;
-    this.log = context.log || (() => {});
+    this.sessionFile = context.sessionFile ?? null;
+    this.log = context.log || console.log.bind(console);
   }
 
   /**
@@ -21,7 +22,28 @@ export class Commander {
     throw new Error('Not implemented');
   }
 
-  log(...args) {
-    this.log('[Commander]', ...args);
+  /**
+   * Enqueue a directive to be processed at the start of the next agent turn.
+   * Uses OpenClaw's enqueueNextTurnInjection API when available.
+   * @param {string} text - directive text to inject
+   * @returns {Promise<boolean>} true if enqueued successfully
+   */
+  async enqueueDirective(text) {
+    if (typeof this.api?.enqueueNextTurnInjection !== 'function') {
+      console.warn('[Commander] enqueueNextTurnInjection not available');
+      return false;
+    }
+    try {
+      const result = await this.api.enqueueNextTurnInjection({
+        sessionKey: this.sessionKey,
+        text,
+        placement: 'append_context',
+      });
+      this.log('[Commander] enqueueNextTurnInjection result:', result);
+      return result?.enqueued === true;
+    } catch (e) {
+      console.warn('[Commander] enqueueNextTurnInjection failed:', e.message);
+      return false;
+    }
   }
 }

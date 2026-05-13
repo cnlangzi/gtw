@@ -3,52 +3,58 @@ import { homedir } from 'os';
 import { exists, read } from './fs.js';
 import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
-import { getSessionEntry, resolveRealSessionKey } from './session.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
- * Supports "model-id" (searches all providers) or "provider/model-id" (direct lookup).
+ * Parses models.json once and returns the data for reuse in _callAIOnce.
  * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
  * @param {string} [agentId='main'] - Agent ID for models.json lookup
  * @param {string} [customModelsPath] - Override models.json path
- * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string } | null}
+ * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string, modelConf: object } | null}
  */
 export function findModelProviderConfig(model, agentId = 'main', customModelsPath = null) {
   const modelsPath = customModelsPath || join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
   if (!exists(modelsPath)) return null;
+  let modelConf;
   try {
-    const data = JSON.parse(read(modelsPath, 'utf8'));
+    modelConf = JSON.parse(read(modelsPath, 'utf8'));
+  } catch {
+    console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model} (models.json parse error)`);
+    return null;
+  }
 
-    // Direct lookup: "provider/model-id"
-    if (model.includes('/')) {
-      const [provider, modelId] = model.split('/');
-      const conf = data.providers?.[provider];
-      if (conf?.models?.some((m) => m.id === modelId)) {
-        console.log(`[gtw] findModelProviderConfig → ${provider}/${modelId} (api=${conf.api || 'anthropic-messages'})`);
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
-      return null;
+  // Direct lookup: "provider/model-id"
+  if (model.includes('/')) {
+    const [provider, modelId] = model.split('/');
+    const conf = modelConf.providers?.[provider];
+    if (conf?.models?.some((m) => m.id === modelId)) {
+      console.log(`[gtw] findModelProviderConfig → ${provider}/${modelId} (api=${conf.api || 'anthropic-messages'})`);
+      return {
+        provider,
+        baseUrl: conf.baseUrl || '',
+        authHeader: conf.authHeader !== false,
+        api: conf.api || 'anthropic-messages',
+        modelConf,
+      };
     }
+    return null;
+  }
 
-    // Fallback: search all providers for model id
-    for (const [provider, conf] of Object.entries(data.providers || {})) {
-      const hasModel = conf.models?.some((m) => m.id === model);
-      if (hasModel) {
-        console.log(`[gtw] findModelProviderConfig → ${provider}/${model} (api=${conf.api || 'anthropic-messages'})`);
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
+  // Fallback: search all providers for model id
+  for (const [provider, conf] of Object.entries(modelConf.providers || {})) {
+    const hasModel = conf.models?.some((m) => m.id === model);
+    if (hasModel) {
+      console.log(`[gtw] findModelProviderConfig → ${provider}/${model} (api=${conf.api || 'anthropic-messages'})`);
+      return {
+        provider,
+        baseUrl: conf.baseUrl || '',
+        authHeader: conf.authHeader !== false,
+        api: conf.api || 'anthropic-messages',
+        modelConf,
+      };
     }
-  } catch {}
+  }
+
   console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model}`);
   return null;
 }
@@ -102,7 +108,6 @@ export async function callAI(model, systemPrompt, userPrompt, sessionKey = null,
           lastError = err;
           continue;
         }
-        // Second attempt also timed out — throw with cause
         throw new TimeoutError(timeout, 2, lastError ?? err);
       }
       throw err;
@@ -112,18 +117,19 @@ export async function callAI(model, systemPrompt, userPrompt, sessionKey = null,
 
 /**
  * Internal: single LLM API call with AbortController timeout.
+ * Reads models.json exactly once and reuses the parsed object for all lookups.
  * @private
  */
 async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, timeoutSeconds) {
-  // Resolve agentId and modelsPath from sessionKey (always use current session's models.json)
   const agentId = sessionKey ? (sessionKey.split(':')[1] || 'main') : 'main';
   const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
 
-  const providerConfig = findModelProviderConfig(model, agentId, modelsPath);
-  if (!providerConfig) throw new Error(`Model ${model} not found in models.json`);
+  const result = findModelProviderConfig(model, agentId, modelsPath);
+  if (!result) throw new Error(`Model ${model} not found in models.json`);
 
-  const { provider, baseUrl, authHeader } = providerConfig;
+  const { provider, baseUrl, authHeader, api: resolvedApi, modelConf } = result;
   const modelId = model.includes('/') ? model.split('/')[1] : model;
+  const providerModels = modelConf.providers?.[provider]?.models || [];
   let token = null;
 
   // Priority 1: api.runtime.modelAuth (uses the full OpenClaw auth chain)
@@ -166,15 +172,12 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
     } catch { /* no auth profile */ }
   }
 
-  const headers = { 'Content-Type': 'application/json' };
-
-  // Priority 4: models.json inline apiKey
+  // Priority 4: models.json inline apiKey (already parsed in modelConf)
   if (!token) {
-    try {
-      const modelConf = JSON.parse(read(modelsPath, 'utf8'));
-      token = modelConf.providers?.[provider]?.apiKey || null;
-    } catch { /* no inline key */ }
+    token = modelConf.providers?.[provider]?.apiKey || null;
   }
+
+  const headers = { 'Content-Type': 'application/json' };
 
   if (token) {
     if (authHeader) {
@@ -184,21 +187,13 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
     }
   }
 
-  const resolvedApi = providerConfig.api || 'openai-chat';
   let endpoint;
   let body;
-
-  // Read models.json once for both api-specific config and maxTokens
-  const modelConf = JSON.parse(read(modelsPath, 'utf8'));
 
   if (resolvedApi === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
-    const maxTokens = (
-      (modelConf.providers?.[provider]?.models || [])
-        .find((m) => m.id === modelId)
-    )?.maxTokens || 8192;
-
+    const maxTokens = providerModels.find((m) => m.id === modelId)?.maxTokens || 8192;
     body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
   } else {
@@ -210,7 +205,6 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 
   console.log(`[gtw] AI request → ${endpoint}`);
 
-  // Apply timeout via AbortController
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
   let res;
@@ -234,25 +228,32 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 
 /**
  * Resolve the model to use for gtw commands.
- * Priority: /gtw model config (gtw/config.json) > current session model.
+ * Uses api.runtime.session (OpenClaw official API) when api is available,
+ * falls back to gtw/config.json override only.
  * @param {string|null} [sessionKey=null] - Session key to read session model from.
- *        If not provided, only gtw/config.json is consulted.
- * @param {object} [api] - OpenClaw plugin api (optional, for modelAuth in callAI)
+ * @param {object} [api] - OpenClaw plugin api (for api.runtime.session)
  * @returns {{ model: string, modelProvider: string }}
  */
 export async function resolveModel(sessionKey = null, api = null) {
-  // 1. Session model (if sessionKey provided — throws if session not found or model missing)
   let model = null;
   let modelProvider = null;
-  if (sessionKey) {
-    const cfg = getConfig();
-    const dmScope = cfg.session?.dmScope || 'main';
-    const entry = getSessionEntry(sessionKey, dmScope, cfg);
-    modelProvider = entry.modelProvider;
-    model = entry.model;
+
+  // 1. Session model via api.runtime.session (OpenClaw official API)
+  if (sessionKey && api?.runtime?.session) {
+    try {
+      const storePath = api.runtime.session.resolveStorePath({ agentId: sessionKey.split(':')[1] || 'main' });
+      const store = api.runtime.session.loadSessionStore(storePath);
+      const { existing: entry } = api.runtime.session.resolveSessionStoreEntry({ store, sessionKey });
+      if (entry?.modelProvider && entry?.model) {
+        modelProvider = entry.modelProvider;
+        model = entry.model;
+      }
+    } catch (e) {
+      console.debug('[resolveModel] api.runtime.session failed:', e.message);
+    }
   }
 
-  // 2. gtw/config.json override (always checked; applies on top of session model)
+  // 2. gtw/config.json override (always checked)
   try {
     if (exists(CONFIG_FILE)) {
       const gtwConfig = JSON.parse(read(CONFIG_FILE, 'utf8'));
@@ -260,7 +261,6 @@ export async function resolveModel(sessionKey = null, api = null) {
     }
   } catch {}
 
-  // 3. At this point model must be set (sessionKey ensures this, or config fallback)
   if (!model || !modelProvider) {
     throw new Error(
       sessionKey
@@ -274,22 +274,16 @@ export async function resolveModel(sessionKey = null, api = null) {
 
 /**
  * Parse LLM response text as JSON.
- * Uses jsonrepair to handle malformed JSON common in LLM outputs:
- * - Markdown code blocks (```json ... ```)
- * - Trailing commas, single quotes, unquoted keys
- * - Python keywords (True/False/None), unclosed quotes, missing colons
+ * Uses jsonrepair to handle malformed JSON common in LLM outputs.
  * @param {string} text - Raw response text from LLM
  * @returns {object} Parsed JSON object
  * @throws {Error} If JSON cannot be repaired or result is not an object
  */
 export function parseAIResponse(text) {
-  // Step 1: Try jsonrepair
   try {
     const repaired = jsonrepair(text);
     let parsed = JSON.parse(repaired);
 
-    // jsonrepair may return a string (double-encoded) or array (multi-object)
-    // Handle double-encoded: string containing JSON object
     if (typeof parsed === 'string') {
       try {
         const reparsed = JSON.parse(parsed);
@@ -299,21 +293,16 @@ export function parseAIResponse(text) {
       } catch {}
     }
 
-    // Handle array from jsonrepair (e.g., text before/after JSON or multi-object)
-    // Extract object if array contains exactly one object element
     if (Array.isArray(parsed)) {
-      // Find first object element (skip string elements like "comment" or "text before")
       const obj = parsed.find(el => typeof el === 'object' && !Array.isArray(el));
       if (obj) return obj;
     }
 
-    // If parsed is already an object (not array), return it
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed;
     }
   } catch {}
 
-  // Step 2: Direct JSON.parse fallback for clean JSON
   try {
     const parsed = JSON.parse(text);
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {

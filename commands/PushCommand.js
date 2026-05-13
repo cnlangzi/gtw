@@ -50,7 +50,7 @@ function parseCommitResponse(rawText) {
 }
 
 async function generateCommitMessage(diff, branch, sessionKey, api) {
-  const { model } = await resolveModel(sessionKey);
+  const { model } = await resolveModel(sessionKey, api);
   const branchType = getBranchType(branch);
 
   const systemPrompt = `You are a senior software engineer writing professional git commit messages.

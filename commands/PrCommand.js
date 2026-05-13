@@ -58,7 +58,7 @@ function parsePrResponse(rawText) {
 // ---------------------------------------------------------------------------
 
 async function generatePrTitleBody({ diff, branch, issueTitle, issueBody, issueId, baseBranch, lang, sessionKey, api }) {
-  const { model } = await resolveModel(sessionKey);
+  const { model } = await resolveModel(sessionKey, api);
 
   const langLabel = getLangLabel(lang);
 

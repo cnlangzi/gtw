@@ -1,6 +1,5 @@
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 import { CommanderFactory } from './commands/CommanderFactory.js';
-import { extractMessages, injectMessage } from './utils/session.js';
 import { log } from './utils/log.js';
 
 const USAGE = `gtw - GitHub Team Workflow
@@ -57,13 +56,11 @@ const gtw = definePluginEntry({
 
           log('[gtw] cmd=', cmd, 'args=', args, 'sessionKey=', ctx.sessionKey);
 
-          // Build factory with API context + session helpers
           const factory = new CommanderFactory({
             api,
             config: api.config,
             sessionKey: ctx.sessionKey,
-            extractMessages,
-            injectMessage,
+            sessionFile: ctx.sessionFile,
           });
 
           if (!factory.canHandle(cmd)) {
