@@ -17,9 +17,7 @@ export class OnCommand extends Commander {
     if (!isValid) throw new Error(`Directory not found: ${absWorkdir}`);
 
     const repo = getRemoteRepo(absWorkdir);
-    this.log('[OnCommand] sessionKey=%s, sessionFile=%s, workdir=%s, repo=%s', this.sessionKey, this.sessionFile, absWorkdir, repo);
-    const resolvedSessionFile = this._resolveSessionFile();
-    this.log('[OnCommand] resolvedSessionFile=%s', resolvedSessionFile);
+    this.log('[OnCommand] sessionKey=%s sessionFile=%s workdir=%s repo=%s', !!this.sessionKey, !!this.sessionFile, absWorkdir, repo);
     saveWip({ workdir: absWorkdir, repo, sessionKey: this.sessionKey, createdAt: new Date().toISOString() });
 
     const treeOutput = getDirectoryTree(absWorkdir);
@@ -63,7 +61,6 @@ export class OnCommand extends Commander {
       display: [
         `✅ Switched to ${repo}`,
         `📁 Workdir: ${absWorkdir}`,
-        `[Debug] sessionKey=${this.sessionKey} resolvedSessionFile=${this._resolveSessionFile()}`,
         '',
         `Let's discuss the requirements first — no code yet.`,
       ].join('\n'),

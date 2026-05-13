@@ -43,15 +43,17 @@ export class Commander {
       if (entry?.sessionFile && exists(entry.sessionFile)) {
         return entry.sessionFile;
       }
-    } catch {}
+    } catch (err) {
+      this.log('[Commander] _resolveSessionFile failed for %s: %s', sessionsPath, err?.message);
+    }
     return null;
   }
 
   /**
-   * Enqueue a directive to be processed at the start of the next agent turn.
-   * Uses enqueueNextTurnInjection API first, falls back to direct session file injection.
+   * Inject a directive as a user message directly into the session file.
+   * Uses sessions.json lookup to find the correct session file for the current session key.
    * @param {string} text - directive text to inject
-   * @returns {Promise<boolean>} true if enqueued successfully
+   * @returns {Promise<boolean>} true if injected successfully
    */
   async enqueueDirective(text) {
     // Always inject directly into session file as user message.

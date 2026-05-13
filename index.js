@@ -54,7 +54,7 @@ const gtw = definePluginEntry({
           const cmd = parts[0].toLowerCase();
           const args = parts.slice(1);
 
-          log('[gtw] cmd=%s args=%s sessionKey=%s sessionFile=%s', cmd, args, ctx.sessionKey, ctx.sessionFile);
+          log('[gtw] cmd=%s args=%s hasSessionKey=%s hasSessionFile=%s', cmd, args, !!ctx.sessionKey, !!ctx.sessionFile);
 
           const factory = new CommanderFactory({
             api,
