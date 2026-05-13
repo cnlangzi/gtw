@@ -1,4 +1,6 @@
-import { append } from '../utils/fs.js';
+import { append, read, exists } from '../utils/fs.js';
+import { join } from 'path';
+import { homedir } from 'os';
 
 /**
  * Commander — base interface for all gtw commands.
@@ -22,6 +24,27 @@ export class Commander {
    */
   async execute(args) {
     throw new Error('Not implemented');
+  }
+
+  /**
+   * Resolve the canonical session file path from sessionKey via sessions.json.
+   * This is the authoritative path — ctx.sessionFile may be wrong for feishu DMs.
+   * @returns {string|null}
+   */
+  _resolveSessionFile() {
+    const key = this.sessionKey;
+    if (!key) return null;
+    const agentId = key.split(':')[1] || 'main';
+    const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+    if (!exists(sessionsPath)) return null;
+    try {
+      const sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
+      const entry = sessionsData[key];
+      if (entry?.sessionFile && exists(entry.sessionFile)) {
+        return entry.sessionFile;
+      }
+    } catch {}
+    return null;
   }
 
   /**
@@ -50,11 +73,13 @@ export class Commander {
     }
 
     // Fallback: inject directly into session file as a user message
-    if (!this.sessionFile) {
+    // Use resolved session file (not ctx.sessionFile which may be wrong for feishu DMs)
+    const sessionFile = this._resolveSessionFile() || this.sessionFile;
+    if (!sessionFile) {
       console.warn('[Commander] No sessionFile — cannot inject fallback');
       return false;
     }
-    this.log('[Commander] enqueueDirective via sessionFile injection: %s', this.sessionFile);
+    this.log('[Commander] enqueueDirective via sessionFile injection: %s', sessionFile);
     try {
       const entry = JSON.stringify({
         type: 'message',
@@ -65,7 +90,7 @@ export class Commander {
           content: [{ type: 'text', text }],
         },
       });
-      append(this.sessionFile, entry + '\n');
+      append(sessionFile, entry + '\n');
       this.log('[Commander] sessionFile injection succeeded');
       return true;
     } catch (e) {
