@@ -33,13 +33,14 @@ export class Commander {
       console.warn('[Commander] enqueueNextTurnInjection not available');
       return false;
     }
+    this.log('[Commander] enqueueDirective sessionKey=%s, text.length=%d', this.sessionKey, text.length);
     try {
       const result = await this.api.enqueueNextTurnInjection({
         sessionKey: this.sessionKey,
         text,
-        placement: 'append_context',
+        placement: 'prepend_context',
       });
-      this.log('[Commander] enqueueNextTurnInjection result:', result);
+      this.log('[Commander] enqueueNextTurnInjection result: %o', result);
       return result?.enqueued === true;
     } catch (e) {
       console.warn('[Commander] enqueueNextTurnInjection failed:', e.message);
