@@ -157,6 +157,11 @@ export class FixCommand extends Commander {
     const injected = await this.enqueueDirective(directive);
     if (!injected) {
       console.error('[FixCommand] Failed to enqueue fix directive — subagent will not be spawned');
+      try {
+        await unclaimIssue(issueId, repo, client);
+      } catch (unclaimErr) {
+        console.error('[FixCommand] Warning: unclaimIssue() failed during injection failure recovery', unclaimErr);
+      }
       return {
         ok: false,
         message: 'Failed to enqueue fix directive — subagent will not be spawned',
