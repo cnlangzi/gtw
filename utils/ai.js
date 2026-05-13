@@ -3,7 +3,6 @@ import { homedir } from 'os';
 import { exists, read } from './fs.js';
 import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
-import { getSessionEntry, resolveRealSessionKey } from './session.js';
 
 /**
  * Find the provider config for a given model from OpenClaw's models.json.
@@ -16,39 +15,44 @@ import { getSessionEntry, resolveRealSessionKey } from './session.js';
 export function findModelProviderConfig(model, agentId = 'main', customModelsPath = null) {
   const modelsPath = customModelsPath || join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
   if (!exists(modelsPath)) return null;
+  let data;
   try {
-    const data = JSON.parse(read(modelsPath, 'utf8'));
+    data = JSON.parse(read(modelsPath, 'utf8'));
+  } catch {
+    console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model} (models.json parse error)`);
+    return null;
+  }
 
-    // Direct lookup: "provider/model-id"
-    if (model.includes('/')) {
-      const [provider, modelId] = model.split('/');
-      const conf = data.providers?.[provider];
-      if (conf?.models?.some((m) => m.id === modelId)) {
-        console.log(`[gtw] findModelProviderConfig → ${provider}/${modelId} (api=${conf.api || 'anthropic-messages'})`);
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
-      return null;
+  // Direct lookup: "provider/model-id"
+  if (model.includes('/')) {
+    const [provider, modelId] = model.split('/');
+    const conf = data.providers?.[provider];
+    if (conf?.models?.some((m) => m.id === modelId)) {
+      console.log(`[gtw] findModelProviderConfig → ${provider}/${modelId} (api=${conf.api || 'anthropic-messages'})`);
+      return {
+        provider,
+        baseUrl: conf.baseUrl || '',
+        authHeader: conf.authHeader !== false,
+        api: conf.api || 'anthropic-messages',
+      };
     }
+    return null;
+  }
 
-    // Fallback: search all providers for model id
-    for (const [provider, conf] of Object.entries(data.providers || {})) {
-      const hasModel = conf.models?.some((m) => m.id === model);
-      if (hasModel) {
-        console.log(`[gtw] findModelProviderConfig → ${provider}/${model} (api=${conf.api || 'anthropic-messages'})`);
-        return {
-          provider,
-          baseUrl: conf.baseUrl || '',
-          authHeader: conf.authHeader !== false,
-          api: conf.api || 'anthropic-messages',
-        };
-      }
+  // Fallback: search all providers for model id
+  for (const [provider, conf] of Object.entries(data.providers || {})) {
+    const hasModel = conf.models?.some((m) => m.id === model);
+    if (hasModel) {
+      console.log(`[gtw] findModelProviderConfig → ${provider}/${model} (api=${conf.api || 'anthropic-messages'})`);
+      return {
+        provider,
+        baseUrl: conf.baseUrl || '',
+        authHeader: conf.authHeader !== false,
+        api: conf.api || 'anthropic-messages',
+      };
     }
-  } catch {}
+  }
+
   console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model}`);
   return null;
 }
@@ -102,7 +106,6 @@ export async function callAI(model, systemPrompt, userPrompt, sessionKey = null,
           lastError = err;
           continue;
         }
-        // Second attempt also timed out — throw with cause
         throw new TimeoutError(timeout, 2, lastError ?? err);
       }
       throw err;
@@ -115,7 +118,6 @@ export async function callAI(model, systemPrompt, userPrompt, sessionKey = null,
  * @private
  */
 async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, timeoutSeconds) {
-  // Resolve agentId and modelsPath from sessionKey (always use current session's models.json)
   const agentId = sessionKey ? (sessionKey.split(':')[1] || 'main') : 'main';
   const modelsPath = join(homedir(), '.openclaw', 'agents', agentId, 'agent', 'models.json');
 
@@ -166,15 +168,15 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
     } catch { /* no auth profile */ }
   }
 
-  const headers = { 'Content-Type': 'application/json' };
-
-  // Priority 4: models.json inline apiKey
+  // Priority 4: models.json inline apiKey (read once with cached models.json data)
   if (!token) {
     try {
       const modelConf = JSON.parse(read(modelsPath, 'utf8'));
       token = modelConf.providers?.[provider]?.apiKey || null;
     } catch { /* no inline key */ }
   }
+
+  const headers = { 'Content-Type': 'application/json' };
 
   if (token) {
     if (authHeader) {
@@ -185,20 +187,18 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
   }
 
   const resolvedApi = providerConfig.api || 'openai-chat';
+
+  // Read models.json once for api-specific config and maxTokens
+  const modelConf = JSON.parse(read(modelsPath, 'utf8'));
+  const providerModels = modelConf.providers?.[provider]?.models || [];
+
   let endpoint;
   let body;
-
-  // Read models.json once for both api-specific config and maxTokens
-  const modelConf = JSON.parse(read(modelsPath, 'utf8'));
 
   if (resolvedApi === 'anthropic-messages') {
     headers['anthropic-version'] = '2023-06-01';
     endpoint = baseUrl.replace(/\/v1\/?$/, '') + '/v1/messages';
-    const maxTokens = (
-      (modelConf.providers?.[provider]?.models || [])
-        .find((m) => m.id === modelId)
-    )?.maxTokens || 8192;
-
+    const maxTokens = providerModels.find((m) => m.id === modelId)?.maxTokens || 8192;
     body = { model: modelId, max_tokens: maxTokens, messages: [{ role: 'user', content: userPrompt }] };
     if (systemPrompt) body.system = systemPrompt;
   } else {
@@ -210,7 +210,6 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 
   console.log(`[gtw] AI request → ${endpoint}`);
 
-  // Apply timeout via AbortController
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
   let res;
@@ -235,24 +234,49 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 /**
  * Resolve the model to use for gtw commands.
  * Priority: /gtw model config (gtw/config.json) > current session model.
+ * Uses api.runtime.session.loadSessionStore() when api is available,
+ * falls back to getConfig() + sessions.json lookup.
  * @param {string|null} [sessionKey=null] - Session key to read session model from.
  *        If not provided, only gtw/config.json is consulted.
- * @param {object} [api] - OpenClaw plugin api (optional, for modelAuth in callAI)
+ * @param {object} [api] - OpenClaw plugin api (for api.runtime.session)
  * @returns {{ model: string, modelProvider: string }}
  */
 export async function resolveModel(sessionKey = null, api = null) {
-  // 1. Session model (if sessionKey provided — throws if session not found or model missing)
   let model = null;
   let modelProvider = null;
-  if (sessionKey) {
-    const cfg = getConfig();
-    const dmScope = cfg.session?.dmScope || 'main';
-    const entry = getSessionEntry(sessionKey, dmScope, cfg);
-    modelProvider = entry.modelProvider;
-    model = entry.model;
+
+  // 1. Session model via api.runtime.session (preferred)
+  if (sessionKey && api?.runtime?.session) {
+    try {
+      const storePath = api.runtime.session.resolveStorePath({ agentId: sessionKey.split(':')[1] || 'main' });
+      const store = api.runtime.session.loadSessionStore(storePath);
+      const { existing: entry } = api.runtime.session.resolveSessionStoreEntry({ store, sessionKey });
+      if (entry?.modelProvider && entry?.model) {
+        modelProvider = entry.modelProvider;
+        model = entry.model;
+      }
+    } catch (e) {
+      console.debug('[resolveModel] api.runtime.session failed:', e.message);
+    }
   }
 
-  // 2. gtw/config.json override (always checked; applies on top of session model)
+  // 2. Fallback: manual sessions.json lookup via getConfig
+  if (!model || !modelProvider) {
+    try {
+      const cfg = getConfig();
+      const dmScope = cfg.session?.dmScope || 'main';
+      const { resolveRealSessionKey, getSessionEntry } = await import('./session.js');
+      const entry = getSessionEntry(sessionKey, dmScope, cfg);
+      if (entry?.modelProvider && entry?.model) {
+        modelProvider = entry.modelProvider;
+        model = entry.model;
+      }
+    } catch (e) {
+      console.debug('[resolveModel] sessions.json lookup failed:', e.message);
+    }
+  }
+
+  // 3. gtw/config.json override (always checked)
   try {
     if (exists(CONFIG_FILE)) {
       const gtwConfig = JSON.parse(read(CONFIG_FILE, 'utf8'));
@@ -260,7 +284,6 @@ export async function resolveModel(sessionKey = null, api = null) {
     }
   } catch {}
 
-  // 3. At this point model must be set (sessionKey ensures this, or config fallback)
   if (!model || !modelProvider) {
     throw new Error(
       sessionKey
@@ -283,13 +306,10 @@ export async function resolveModel(sessionKey = null, api = null) {
  * @throws {Error} If JSON cannot be repaired or result is not an object
  */
 export function parseAIResponse(text) {
-  // Step 1: Try jsonrepair
   try {
     const repaired = jsonrepair(text);
     let parsed = JSON.parse(repaired);
 
-    // jsonrepair may return a string (double-encoded) or array (multi-object)
-    // Handle double-encoded: string containing JSON object
     if (typeof parsed === 'string') {
       try {
         const reparsed = JSON.parse(parsed);
@@ -299,21 +319,16 @@ export function parseAIResponse(text) {
       } catch {}
     }
 
-    // Handle array from jsonrepair (e.g., text before/after JSON or multi-object)
-    // Extract object if array contains exactly one object element
     if (Array.isArray(parsed)) {
-      // Find first object element (skip string elements like "comment" or "text before")
       const obj = parsed.find(el => typeof el === 'object' && !Array.isArray(el));
       if (obj) return obj;
     }
 
-    // If parsed is already an object (not array), return it
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed;
     }
   } catch {}
 
-  // Step 2: Direct JSON.parse fallback for clean JSON
   try {
     const parsed = JSON.parse(text);
     if (typeof parsed === 'object' && !Array.isArray(parsed)) {

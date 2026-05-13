@@ -1,36 +1,16 @@
 import { Commander } from './Commander.js';
-import { read, exists, makeDir } from '../utils/fs.js';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
+import { makeDir } from '../utils/fs.js';
 import { log } from '../utils/log.js';
 import { getWip, saveWip } from '../utils/wip.js';
-import { extractMessages, resolveRealSessionKey } from '../utils/session.js';
+import { extractMessages } from '../utils/session.js';
 import { getConfig, getLangLabel, BASE_DIR } from '../utils/config.js';
 import { callAI, resolveModel, parseAIResponse } from '../utils/ai.js';
 
 export class NewCommand extends Commander {
-  /**
-   * @param {{ api: object, config: object }} context
-   */
-  constructor(context) {
-    super(context);
-    this.api = context.api;
-    this.config = context.config;
-    this.sessionKey = context.sessionKey;
-  }
-
   async execute(args) {
     const wip = getWip();
 
-    // Read full openclaw.json config for session.dmScope, session.identityLinks, session.mainKey
-    let cfg = {};
-    try {
-      cfg = JSON.parse(read(join(homedir(), '.openclaw', 'openclaw.json'), 'utf8'));
-    } catch {}
-
-    const dmScope = cfg.session?.dmScope || 'main';
-    const realSessionKey = resolveRealSessionKey(this.sessionKey, dmScope, cfg);
-    const { allMessages } = extractMessages(realSessionKey);
+    const { allMessages } = extractMessages(this.sessionFile);
 
     if (!allMessages.length) {
       return {
@@ -40,10 +20,9 @@ export class NewCommand extends Commander {
     }
 
     // Resolve model from session (throws if missing) + gtw/config.json override
-    const { model, modelProvider } = await resolveModel(realSessionKey);
+    const { model, modelProvider } = await resolveModel(this.sessionKey, this.api);
 
     // gtw model override (set via /gtw model or /gtw config set model)
-    // Resolve repo language: lang:<owner/repo> from config, default 'en'
     const repo = wip?.repo || null;
     const langKey = repo ? `lang:${repo}` : null;
     let lang = 'en';
@@ -53,13 +32,10 @@ export class NewCommand extends Commander {
       if (langKey) lang = gtwConfig[langKey] || 'en';
     } catch {}
 
-    // Language label for AI prompts (used in both prompt and systemPrompt below)
     const langLabel = getLangLabel(lang);
 
-    // Clean messages: strip role prefixes and any JSON-like metadata from discussion
     const cleanMessages = allMessages.map((m) => m.text.replace(/\[(?:User|Assistant)\s*\d+\]\s*/g, '').trim()).join('\n\n');
 
-    // Structured prompt — generates Implementation Brief (premise-driven, not rule-based)
     const prompt = `Extract from this discussion and generate an Implementation Brief.
 
 Discussion:
@@ -92,22 +68,19 @@ Output format (strict JSON only):
 }
 JSON：`;
 
-    // Ensure base dir exists for session file
     makeDir(BASE_DIR, { recursive: true });
 
-    // langLabel controls output language only; prompt is always English
     const systemPrompt = `You extract implementation decisions from a discussion and output ONLY valid JSON.
 Output exactly the JSON structure described. No markdown. No explanation.
 Generate all output content (title, solution, reason, constraints, etc.) in ${langLabel}.`;
 
     let rawText;
     try {
-      rawText = await callAI(model, systemPrompt, prompt, realSessionKey, this.api);
+      rawText = await callAI(model, systemPrompt, prompt, this.sessionKey, this.api);
     } catch (e) {
       return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
     }
 
-    // Parse using jsonrepair to handle malformed JSON from LLM
     let parsed;
     try {
       parsed = parseAIResponse(rawText);
@@ -117,7 +90,6 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     }
 
     const title = parsed.title || '';
-    // Build structured markdown body for AI readability and GitHub issue
     const body = [
       parsed.context ? `## Context\n${parsed.context}` : '',
       parsed.goal ? `## Goal\n${parsed.goal}` : '',

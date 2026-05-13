@@ -1,15 +1,12 @@
-import { read, append, exists } from './fs.js';
-import { join } from 'path';
-import { homedir } from 'os';
+import { read } from './fs.js';
 import { sh } from './exec.js';
 
 /**
- * Get directory tree using tree command (falls back to find).
+ * Get directory tree using tree command.
  * Uses exec.js to avoid dangerous code scanner.
  */
-function getDirectoryTree(workdir) {
+export function getDirectoryTree(workdir) {
   const excludedDirs = 'node_modules|.git|dist|build|coverage|.next|.nuxt|vendor|__pycache__|.pytest_cache|target|bin|obj|.cache|.tmp';
-  // Check if tree is available
   try {
     sh('which tree', { cwd: workdir, timeout: 3000 });
   } catch {
@@ -19,164 +16,23 @@ function getDirectoryTree(workdir) {
 }
 
 /**
- * Resolve the real session key for the main agent session from a channel-specific key.
- *
- * session.dmScope controls how DMs are grouped:
- * - main: all DMs share agent:{agentId}:{mainKey} (default: agent:{agentId}:main)
- * - per-peer: all channels share agent:{agentId}:{peerId}
- * - per-channel-peer: each channel has agent:{agentId}:{channel}:{peerId}
- * - per-account-channel-peer: agent:{agentId}:{accountId}:{channel}:{peerId}
- *
- * Strategy: look up sessions.json and find the entry that corresponds to the main
- * session for the current peer. Falls back to ctx.sessionKey itself.
- *
- * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
- * @param {string} dmScope - from openclaw.json session.dmScope
- * @param {object} cfg - full openclaw.json config (optional, for identityLinks/mainKey)
- * @returns {string|null}
- */
-export function resolveRealSessionKey(sessionKey, dmScope, cfg = {}) {
-  if (!sessionKey) return null;
-  const parts = sessionKey.split(':');
-  if (parts.length < 2) return null;
-  const agentId = parts[1];
-
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!exists(sessionsPath)) return sessionKey;
-
-  let sessionsData;
-  try {
-    sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
-  } catch {
-    return sessionKey;
-  }
-
-  // identityLinks: map provider-specific peerId to canonical identity
-  let peerId = parts[parts.length - 1];
-  const identityLinks = cfg.session?.identityLinks;
-  if (identityLinks && identityLinks[peerId]) {
-    peerId = identityLinks[peerId];
-  }
-
-  const mainKey = cfg.session?.mainKey || 'main';
-
-  let candidates = [];
-
-  if (dmScope === 'main') {
-    // All DMs share one main session
-    candidates.push(`${agentId}:${mainKey}`);
-  } else if (dmScope === 'per-peer') {
-    // Same peer across channels share one session
-    candidates.push(`${agentId}:${peerId}`);
-  } else if (dmScope === 'per-channel-peer') {
-    // Channel + peer combination
-    const channel = parts[2] || 'feishu';
-    candidates.push(`${agentId}:${channel}:${peerId}`);
-  } else if (dmScope === 'per-account-channel-peer') {
-    // Account + channel + peer
-    const accountId = parts[2] || 'default';
-    const channel = parts[3] || 'feishu';
-    candidates.push(`${agentId}:${accountId}:${channel}:${peerId}`);
-  }
-
-  // Find first candidate that exists in sessions.json
-  for (const candidate of candidates) {
-    const fullKey = `agent:${candidate}`;
-    if (sessionsData[fullKey]?.sessionFile) {
-      return fullKey;
-    }
-  }
-
-  // Fallback: construct the expected canonical session key from current context
-  // (used when dmScope != main and the peer hasn't been seen yet)
-  if (dmScope === 'per-peer') {
-    return `agent:${agentId}:${peerId}`;
-  } else if (dmScope === 'per-channel-peer') {
-    const channel = parts[2] || 'feishu';
-    return `agent:${agentId}:${channel}:${peerId}`;
-  } else if (dmScope === 'per-account-channel-peer') {
-    const accountId = parts[2] || 'default';
-    const channel = parts[3] || 'feishu';
-    return `agent:${agentId}:${accountId}:${channel}:${peerId}`;
-  }
-
-  // Final fallback: the current session itself
-  return sessionKey;
-}
-
-/**
- * Read the sessions.json data for a given agent.
- * @param {string} agentId - e.g. "main"
- * @returns {object} parsed sessions.json
- * @throws if sessions.json does not exist or is malformed
- */
-export function getSessionsData(agentId) {
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!exists(sessionsPath)) throw new Error(`Session store not found: ${sessionsPath}`);
-  return JSON.parse(read(sessionsPath, 'utf8'));
-}
-
-/**
- * Resolve the session entry for a given session key, using dmScope.
- * Throws if the sessions store or the resolved session entry does not exist.
- * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
- * @param {string} dmScope - from openclaw.json session.dmScope
- * @param {object} cfg - openclaw.json config (optional, for identityLinks/mainKey)
- * @returns {object} session entry from sessions.json
- */
-export function getSessionEntry(sessionKey, dmScope = 'main', cfg = {}) {
-  const agentId = sessionKey?.split(':')[1] || 'main';
-  const realKey = resolveRealSessionKey(sessionKey, dmScope, cfg);
-  const sessionsData = getSessionsData(agentId);
-  const entry = sessionsData[realKey];
-  if (!entry) throw new Error(`Session not found: ${realKey}`);
-  if (!entry.modelProvider) throw new Error(`Session ${realKey} has no modelProvider`);
-  if (!entry.model) throw new Error(`Session ${realKey} has no model`);
-  return entry;
-}
-
-/**
- * Get the session JSONL file path for a given session key.
- * @param {string} sessionKey - e.g. "agent:main:feishu:direct:ou_xxx"
- * @returns {string|null}
- */
-export function getSessionFile(sessionKey) {
-  const agentId = sessionKey?.split(':')[1]; // "main" from "agent:main:feishu:direct:ou_xxx"
-  if (!agentId) return null;
-  const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
-  if (!exists(sessionsPath)) return null;
-
-  try {
-    const sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
-    const entry = sessionsData[sessionKey];
-    if (!entry?.sessionFile) return null;
-    if (!exists(entry.sessionFile)) return null;
-    return entry.sessionFile;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Read and extract messages from a session JSONL.
- * @param {string} sessionKey
+ * @param {string} sessionFile - pre-resolved session file path from ctx.sessionFile
  * @returns {{ humanMessages: string[], allMessages: {role:string,text:string}[], cutoffIndex: number }}
  */
-export function extractMessages(sessionKey) {
-  const jsonlPath = getSessionFile(sessionKey);
-  if (!jsonlPath) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
+export function extractMessages(sessionFile) {
+  if (!sessionFile) return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
 
   try {
-    const content = read(jsonlPath, 'utf8');
+    const content = read(sessionFile, 'utf8');
     const lines = content.split('\n').filter(Boolean);
 
-    // 从后往前找 /gtw confirm
     let cutoffIndex = 0;
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const entry = JSON.parse(lines[i]);
         const msg = entry.message;
-        if (!msg) continue; // skip non-message entries (e.g. session metadata)
+        if (!msg) continue;
         const text = Array.isArray(msg.content)
           ? msg.content.map((c) => (c.type === 'text' ? c.text : '')).filter(Boolean).join(' ')
           : String(msg.content || '');
@@ -208,90 +64,5 @@ export function extractMessages(sessionKey) {
     return { humanMessages, allMessages, cutoffIndex };
   } catch {
     return { humanMessages: [], allMessages: [], cutoffIndex: 0 };
-  }
-}
-
-/**
- * Append a user message to a session JSONL.
- * @param {string} sessionKey
- * @param {string} text
- * @returns {boolean} success
- */
-export function injectMessage(sessionKey, text) {
-  const sessionFile = getSessionFile(sessionKey);
-  if (!sessionFile) return false;
-
-  try {
-    const entry = JSON.stringify({
-      type: 'message',
-      id: `inj-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text }],
-      },
-    });
-    append(sessionFile, entry + '\n');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Inject a PLAN MODE directive into the session JSONL for requirements clarification.
- * @param {string} sessionKey
- * @param {string} workdir
- * @param {string} repo
- * @returns {boolean} success
- */
-export function injectPlanModeDirective(sessionKey, workdir, repo) {
-  const sessionFile = getSessionFile(sessionKey);
-  if (!sessionFile) return false;
-
-  const treeOutput = getDirectoryTree(workdir);
-  const directive = [
-    `🚨 [gtw] PLAN MODE — Requirements Clarification`,
-    ``,
-    `Project Structure:`,
-    '\`\`\`',
-    treeOutput,
-    '\`\`\`',
-    ``,
-    `Workdir: ${workdir}`,
-    `Repo: ${repo}`,
-    ``,
-    `You are now in PLAN MODE for requirements clarification.`,
-    ``,
-    `RULES:`,
-    `1. The directory file tree is shown above. Study it to understand the project structure before reading any files.`,
-    `2. If \`README.md\` or \`AGENTS.md\` exists in the root directory, read and understand its contents — these files contain project-specific context and conventions you should be aware of.`,
-    `3. After the file tree and any root docs are loaded, wait for the user to ask questions or give further instructions.`,
-    `4. When the user asks a question, read only the relevant files they mention or ask about.`,
-    `5. After reading, respond with a structured reply:`,
-    `   ## 当前理解`,
-    `   [Describe what you understood from the code for the asked scope]`,
-    `   ## 疑问`,
-    `   [List any clarifying questions]`,
-    `6. Do NOT write, modify, or refactor any code.`,
-    `7. Do NOT propose fixes or implementation suggestions.`,
-    `8. Wait for the user to explicitly say "可以开始了" (or "you can start") before beginning implementation.`,
-  ].join('\n');
-
-  try {
-    const entry = JSON.stringify({
-      type: 'message',
-      id: `inj-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: directive }],
-      },
-    });
-    append(sessionFile, entry + '\n');
-    return true;
-  } catch (err) {
-    console.warn(`[injectPlanModeDirective] Failed to append directive for session ${sessionKey}: ${err?.message ?? err}`);
-    return false;
   }
 }

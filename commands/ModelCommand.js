@@ -1,18 +1,19 @@
 import { Commander } from './Commander.js';
 import { getConfig, saveConfig } from '../utils/config.js';
-import { getSessionEntry } from '../utils/session.js';
+import { resolveModel } from '../utils/ai.js';
 
 export class ModelCommand extends Commander {
-  constructor(context) {
-    super(context);
-    this.sessionKey = context.sessionKey;
-  }
-
   async execute(args) {
     const cfg = getConfig();
 
     // Resolve session default as "provider/model"
-    const sessionDefault = this._resolveSessionDefault();
+    let sessionDefault = null;
+    try {
+      const { model, modelProvider } = await resolveModel(this.sessionKey, this.api);
+      sessionDefault = `${modelProvider}/${model}`;
+    } catch {
+      sessionDefault = 'unknown (session model unavailable)';
+    }
 
     if (!args[0]) {
       const model = cfg.model || null;
@@ -32,12 +33,5 @@ export class ModelCommand extends Commander {
     cfg.model = args[0];
     saveConfig(cfg);
     return { ok: true, model: args[0], display: `gtw model set to: \`${args[0]}\`` };
-  }
-
-  _resolveSessionDefault() {
-    const cfg = getConfig();
-    const dmScope = cfg.session?.dmScope || 'main';
-    const entry = getSessionEntry(this.sessionKey, dmScope, cfg);
-    return `${entry.modelProvider}/${entry.model}`;
   }
 }
