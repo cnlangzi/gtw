@@ -1,3 +1,5 @@
+import { append } from '../utils/fs.js';
+
 /**
  * Commander — base interface for all gtw commands.
  * Each subclass implements execute(args) -> { ok, display?, message? }
@@ -24,26 +26,50 @@ export class Commander {
 
   /**
    * Enqueue a directive to be processed at the start of the next agent turn.
-   * Uses OpenClaw's enqueueNextTurnInjection API when available.
+   * Uses enqueueNextTurnInjection API first, falls back to direct session file injection.
    * @param {string} text - directive text to inject
    * @returns {Promise<boolean>} true if enqueued successfully
    */
   async enqueueDirective(text) {
-    if (typeof this.api?.enqueueNextTurnInjection !== 'function') {
-      console.warn('[Commander] enqueueNextTurnInjection not available');
+    // Try official API first with prepend_context (highest priority)
+    if (typeof this.api?.enqueueNextTurnInjection === 'function') {
+      this.log('[Commander] enqueueDirective via API sessionKey=%s, text.length=%d', this.sessionKey, text.length);
+      try {
+        const result = await this.api.enqueueNextTurnInjection({
+          sessionKey: this.sessionKey,
+          text,
+          placement: 'prepend_context',
+        });
+        this.log('[Commander] enqueueNextTurnInjection result: %o', result);
+        if (result?.enqueued === true) return true;
+      } catch (e) {
+        this.log('[Commander] enqueueNextTurnInjection failed: %s', e.message);
+      }
+    } else {
+      this.log('[Commander] enqueueNextTurnInjection not available');
+    }
+
+    // Fallback: inject directly into session file as a user message
+    if (!this.sessionFile) {
+      console.warn('[Commander] No sessionFile — cannot inject fallback');
       return false;
     }
-    this.log('[Commander] enqueueDirective sessionKey=%s, text.length=%d', this.sessionKey, text.length);
+    this.log('[Commander] enqueueDirective via sessionFile injection: %s', this.sessionFile);
     try {
-      const result = await this.api.enqueueNextTurnInjection({
-        sessionKey: this.sessionKey,
-        text,
-        placement: 'prepend_context',
+      const entry = JSON.stringify({
+        type: 'message',
+        id: `inj-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text }],
+        },
       });
-      this.log('[Commander] enqueueNextTurnInjection result: %o', result);
-      return result?.enqueued === true;
+      append(this.sessionFile, entry + '\n');
+      this.log('[Commander] sessionFile injection succeeded');
+      return true;
     } catch (e) {
-      console.warn('[Commander] enqueueNextTurnInjection failed:', e.message);
+      console.warn('[Commander] sessionFile injection failed: %s', e.message);
       return false;
     }
   }
