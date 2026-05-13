@@ -156,11 +156,19 @@ export class FixCommand extends Commander {
     const directive = this._buildFixDirective(issueId, workdir, branchName, issueTitle, issueBody);
     const injected = await this.enqueueDirective(directive);
     if (!injected) {
-      console.error('[FixCommand] Warning: failed to enqueue fix directive');
+      console.error('[FixCommand] Failed to enqueue fix directive — subagent will not be spawned');
+      return {
+        ok: false,
+        message: 'Failed to enqueue fix directive — subagent will not be spawned',
+        branch: branchName,
+        issueId,
+        issueTitle,
+        workdir,
+      };
     }
 
     const displayLines = [
-      `🌿 Fix workflow started`,
+      `🌿 Fix workflow scheduled`,
       ``,
       `Issue: #${issueId}`,
       `Title: ${issueTitle}`,
@@ -168,12 +176,7 @@ export class FixCommand extends Commander {
       ``,
       `GitHub: https://github.com/${repo}/issues/${issueId}`,
       ``,
-      `⏳ Subagent spawned — the main session will now:`,
-      `1. Spawn coding subagent to fix the issue`,
-      `2. Wait for subagent to finish`,
-      `3. Run push + confirm automatically`,
-      ``,
-      `You'll be notified when push completes.`,
+      `⏳ Directive enqueued — subagent will be spawned when you confirm.`,
     ];
 
     return {
@@ -182,7 +185,7 @@ export class FixCommand extends Commander {
       issueId,
       issueTitle,
       workdir,
-      message: '🌿 Fix workflow started — subagent is being spawned',
+      message: '🌿 Fix workflow scheduled — confirm to spawn subagent',
       display: displayLines.join('\n'),
     };
   }
