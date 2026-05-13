@@ -54,32 +54,15 @@ export class Commander {
    * @returns {Promise<boolean>} true if enqueued successfully
    */
   async enqueueDirective(text) {
-    // Try official API first with prepend_context (highest priority)
-    if (typeof this.api?.enqueueNextTurnInjection === 'function') {
-      this.log('[Commander] enqueueDirective via API sessionKey=%s, text.length=%d', this.sessionKey, text.length);
-      try {
-        const result = await this.api.enqueueNextTurnInjection({
-          sessionKey: this.sessionKey,
-          text,
-          placement: 'prepend_context',
-        });
-        this.log('[Commander] enqueueNextTurnInjection result: %o', result);
-        if (result?.enqueued === true) return true;
-      } catch (e) {
-        this.log('[Commander] enqueueNextTurnInjection failed: %s', e.message);
-      }
-    } else {
-      this.log('[Commander] enqueueNextTurnInjection not available');
-    }
-
-    // Fallback: inject directly into session file as a user message
-    // Use resolved session file (not ctx.sessionFile which may be wrong for feishu DMs)
+    // Always inject directly into session file as user message.
+    // enqueueNextTurnInjection with prepend_context/append_context stores in
+    // pluginNextTurnInjections which may not be accessible to feishu channel.
     const sessionFile = this._resolveSessionFile() || this.sessionFile;
     if (!sessionFile) {
-      console.warn('[Commander] No sessionFile — cannot inject fallback');
+      console.warn('[Commander] No sessionFile — cannot inject directive');
       return false;
     }
-    this.log('[Commander] enqueueDirective via sessionFile injection: %s', sessionFile);
+    this.log('[Commander] enqueueDirective sessionFile=%s text.length=%d', sessionFile, text.length);
     try {
       const entry = JSON.stringify({
         type: 'message',
