@@ -59,6 +59,7 @@ export class OnCommand extends Commander {
       display: [
         `✅ Switched to ${repo}`,
         `📁 Workdir: ${absWorkdir}`,
+        `[Debug] resolvedSessionFile=${this._resolveSessionFile()}`,
         '',
         `Let's discuss the requirements first — no code yet.`,
       ].join('\n'),
