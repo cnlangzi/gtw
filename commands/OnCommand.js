@@ -22,48 +22,50 @@ export class OnCommand extends Commander {
 
     const treeOutput = getDirectoryTree(absWorkdir);
     const directive = [
-      `🚨 [gtw] You are a Senior Product Manager conducting requirements clarification.`,
+      `You are a Senior Product Manager and Architect conducting requirements clarification.`,
       ``,
-      `📁 Workdir: ${absWorkdir}`,
-      `📂 Repo: ${repo}`,
+      `Project: ${repo}`,
+      `Workdir: ${absWorkdir}`,
       ``,
-      `Project Structure:`,
-      '```',
-      treeOutput,
-      '```',
+      `**Your Persona:**`,
+      `You are a rigorous product manager and technical architect. You ask targeted questions to uncover what the user truly needs, then discuss and align on high-level technical approaches. You probe for edge cases, ambiguous specs, and unspoken assumptions.`,
       ``,
-      `Your role: Understand what the user wants to build, probe gaps in understanding, and ensure the implementation plan is solid before any code is written.`,
+      `**Your Responsibilities:**`,
+      `1. Understand the user's goal through structured dialogue`,
+      `2. Identify gaps, contradictions, and incomplete specs`,
+      `3. Discuss and align on technical approaches and architecture`,
+      `4. Explore the codebase when needed to understand existing patterns`,
+      `5. Propose a clear Implementation Brief when requirements and approach are solid`,
       ``,
-      `As a Senior Product Manager, your focus is on:`,
-      `- Understanding user needs and translating them into clear requirements`,
-      `- Identifying ambiguous or incomplete specifications`,
-      `- Exploring the codebase to understand existing patterns and constraints`,
-      `- Asking targeted questions to fill knowledge gaps`,
-      `- Structuring a clear implementation brief when ready`,
+      `**Rules:**`,
+      `- You are NOT the coder. Discuss architecture and approach, but do not write code.`,
+      `- Do NOT carry context from previous projects. Treat each session as standalone.`,
+      `- If requirements or technical approach is unclear, ask questions until they are aligned.`,
+      `- Proceed only when you understand WHAT to build, WHY it matters, and HOW to approach it.`,
       ``,
-      `Implementation is handled by a separate coding phase — you are not the coder.`,
-      ``,
-      `## Exit Rule`,
-      `When you have fully understood the requirements and the user explicitly says "可以开始了" or "start implementation", the coding phase will begin. No other phrase triggers implementation — not "analyze", "check", "review", "look at", or any other natural language request.`,
+      `**Trigger Phrase:**`,
+      `When the user says "可以开始了" or "start implementation", respond with "Implementation phase started." and wait — a separate agent will handle the build.`,
     ].join('\n');
 
-    const injected = await this.enqueueDirective(directive);
-    if (!injected) {
-      console.warn(`[OnCommand] Failed to enqueue PLAN MODE directive for session ${this.sessionKey}`);
+    const result = await this.enqueueDirective(directive);
+    this.log('[OnCommand] directive injection result=%j', result);
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        display: `⚠️ Injection failed (${result.reason}${result.error ? ': ' + result.error : ''}). Run /gtw on again.\n[Debug] ctx.sessionKey=${this.sessionKey} ctx.sessionFile=${this.sessionFile}`,
+      };
     }
 
     return {
       ok: true,
-      workdir: absWorkdir,
-      repo,
       display: [
         `✅ Switched to ${repo}`,
         `📁 Workdir: ${absWorkdir}`,
-        `[Debug] resolvedSessionFile=${this._resolveSessionFile()}`,
+        `[Debug] ctx.sessionKey=${this.sessionKey} ctx.sessionFile=${this.sessionFile} injectionId=${result.id}`,
         '',
         `Let's discuss the requirements first — no code yet.`,
       ].join('\n'),
-      message: `workdir set to ${absWorkdir}, repo: ${repo}`,
     };
   }
 }
