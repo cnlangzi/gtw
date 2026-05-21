@@ -17,54 +17,55 @@ export class OnCommand extends Commander {
     if (!isValid) throw new Error(`Directory not found: ${absWorkdir}`);
 
     const repo = getRemoteRepo(absWorkdir);
-    this.log('[OnCommand] sessionKey=%s, sessionFile=%s, workdir=%s, repo=%s', this.sessionKey, this.sessionFile, absWorkdir, repo);
+    this.log('[OnCommand] sessionKey=%s sessionFile=%s workdir=%s repo=%s', !!this.sessionKey, !!this.sessionFile, absWorkdir, repo);
     saveWip({ workdir: absWorkdir, repo, sessionKey: this.sessionKey, createdAt: new Date().toISOString() });
 
     const treeOutput = getDirectoryTree(absWorkdir);
     const directive = [
-      `🚨 [gtw] PLAN MODE — Requirements Clarification`,
+      `You are a Senior Product Manager and Architect conducting requirements clarification.`,
       ``,
-      `Project Structure:`,
-      '```',
-      treeOutput,
-      '```',
-      ``,
+      `Project: ${repo}`,
       `Workdir: ${absWorkdir}`,
-      `Repo: ${repo}`,
       ``,
-      `You are now in PLAN MODE for requirements clarification.`,
+      `**Your Persona:**`,
+      `You are a rigorous product manager and technical architect. You ask targeted questions to uncover what the user truly needs, then discuss and align on high-level technical approaches. You probe for edge cases, ambiguous specs, and unspoken assumptions.`,
       ``,
-      `RULES:`,
-      `1. The directory file tree is shown above. Study it to understand the project structure before reading any files.`,
-      `2. If \`README.md\` or \`AGENTS.md\` exists in the root directory, read and understand its contents — these files contain project-specific context and conventions you should be aware of.`,
-      `3. After the file tree and any root docs are loaded, wait for the user to ask questions or give further instructions.`,
-      `4. When the user asks a question, read only the relevant files they mention or ask about.`,
-      `5. After reading, respond with a structured reply:`,
-      `   ## 当前理解`,
-      `   [Describe what you understood from the code for the asked scope]`,
-      `   ## 疑问`,
-      `   [List any clarifying questions]`,
-      `6. Do NOT write, modify, or refactor any code.`,
-      `7. Do NOT propose fixes or implementation suggestions.`,
-      `8. Wait for the user to explicitly say "可以开始了" (or "you can start") before beginning implementation.`,
+      `**Your Responsibilities:**`,
+      `1. Understand the user's goal through structured dialogue`,
+      `2. Identify gaps, contradictions, and incomplete specs`,
+      `3. Discuss and align on technical approaches and architecture`,
+      `4. Explore the codebase when needed to understand existing patterns`,
+      `5. Propose a clear Implementation Brief when requirements and approach are solid`,
+      ``,
+      `**Rules:**`,
+      `- You are NOT the coder. Discuss architecture and approach, but do not write code.`,
+      `- Do NOT carry context from previous projects. Treat each session as standalone.`,
+      `- If requirements or technical approach is unclear, ask questions until they are aligned.`,
+      `- Proceed only when you understand WHAT to build, WHY it matters, and HOW to approach it.`,
+      ``,
+      `**Trigger Phrase:**`,
+      `When the user says "可以开始了" or "start implementation", respond with "Implementation phase started." and wait — a separate agent will handle the build.`,
     ].join('\n');
 
-    const injected = await this.enqueueDirective(directive);
-    if (!injected) {
-      console.warn(`[OnCommand] Failed to enqueue PLAN MODE directive for session ${this.sessionKey}`);
+    const result = await this.enqueueDirective(directive);
+    this.log('[OnCommand] directive injection result=%j', result);
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        display: `⚠️ Injection failed (${result.reason}${result.error ? ': ' + result.error : ''}). Run /gtw on again.\n[Debug] ctx.sessionKey=${this.sessionKey} ctx.sessionFile=${this.sessionFile}`,
+      };
     }
 
     return {
       ok: true,
-      workdir: absWorkdir,
-      repo,
       display: [
         `✅ Switched to ${repo}`,
         `📁 Workdir: ${absWorkdir}`,
+        `[Debug] ctx.sessionKey=${this.sessionKey} ctx.sessionFile=${this.sessionFile} injectionId=${result.id}`,
         '',
         `Let's discuss the requirements first — no code yet.`,
       ].join('\n'),
-      message: `workdir set to ${absWorkdir}, repo: ${repo}`,
     };
   }
 }

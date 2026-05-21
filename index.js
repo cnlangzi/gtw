@@ -1,6 +1,10 @@
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 import { CommanderFactory } from './commands/CommanderFactory.js';
 import { log } from './utils/log.js';
+import { getWip, saveWip } from './utils/wip.js';
+import { getDirectoryTree } from './utils/session.js';
+import { expandPath } from './utils/path.js';
+import { getRemoteRepo } from './utils/git.js';
 
 const USAGE = `gtw - GitHub Team Workflow
 
@@ -31,12 +35,29 @@ Auth:
   - /gtw login --pat xxx # Personal Access Token
   - GITHUB_TOKEN env var # CI environments`;
 
+// In-memory directive store: sessionKey -> text
+const pendingDirectives = new Map();
+
 const gtw = definePluginEntry({
   id: 'gtw',
   name: 'GitHub Team Workflow',
   description: 'GitHub team workflow. Workflow: /gtw on <workdir> -> /gtw new -> /gtw confirm',
   acceptsArgs: true,
   register(api) {
+    log('[gtw] register called');
+    log('[gtw] api.on=%s', typeof api.on);
+
+    // Register before_prompt_build hook to inject stored directives
+    // Fires BEFORE each agent turn — works for both new and mid-session
+    api.on('before_prompt_build', async (event, ctx) => {
+      const key = ctx.sessionKey;
+      if (!key) return;
+      const directive = pendingDirectives.get(key);
+      if (!directive) return;
+      pendingDirectives.delete(key);
+      return { prependContext: directive };
+    });
+
     api.registerCommand({
       name: 'gtw',
       description: 'GitHub team workflow. Workflow: /gtw on <workdir> -> /gtw new -> /gtw confirm',
@@ -54,13 +75,14 @@ const gtw = definePluginEntry({
           const cmd = parts[0].toLowerCase();
           const args = parts.slice(1);
 
-          log('[gtw] cmd=', cmd, 'args=', args, 'sessionKey=', ctx.sessionKey);
+          log('[gtw] cmd=%s args=%s hasSessionKey=%s hasSessionFile=%s', cmd, args, !!ctx.sessionKey, !!ctx.sessionFile);
 
           const factory = new CommanderFactory({
             api,
             config: api.config,
             sessionKey: ctx.sessionKey,
             sessionFile: ctx.sessionFile,
+            pendingDirectives,
           });
 
           if (!factory.canHandle(cmd)) {
@@ -71,10 +93,10 @@ const gtw = definePluginEntry({
           const result = await commander.execute(args);
 
           if (!result.ok) {
-            return { text: result.message || 'Failed' };
+            return { text: result.display || 'Failed' };
           }
 
-          return { text: result.display || result.message || 'OK' };
+          return { text: result.display || 'OK' };
         } catch (err) {
           log('[gtw] handler exception:', err.message, err.stack);
           return { text: `❌ ${err.message}` };
