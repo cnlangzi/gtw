@@ -5,6 +5,16 @@ import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
 
 /**
+ * Resolve the path to sessions.json for a given agentId.
+ * Centralizes the ~/.openclaw directory layout to avoid drift.
+ * @param {string} agentId
+ * @returns {string}
+ */
+function resolveSessionsPath(agentId) {
+  return join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+}
+
+/**
  * Find the provider config for a given model from OpenClaw's models.json.
  * Parses models.json once and returns the data for reuse in _callAIOnce.
  * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
@@ -230,10 +240,15 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
  * Resolve the model to use for gtw commands.
  * Priority:
  *   1. gtw/config.json model override (set via /gtw model)
+ *      - If the model string contains a provider prefix (e.g. "github/gpt-4o"),
+ *        the provider is extracted from it.
+ *      - If the model has no prefix (e.g. "gpt-4o"), sessions.json is consulted
+ *        to backfill the provider while keeping the config model name.
  *   2. Current session model from sessions.json (sessionKey required)
  * @param {string|null} [sessionKey=null] - Session key to read session model from.
- * @param {object} [api] - OpenClaw plugin api (unused, kept for compatibility)
+ * @param {object} [api] - OpenClaw plugin api (deprecated, unused)
  * @returns {{ model: string, modelProvider: string }}
+ * @deprecated The `api` parameter is no longer used. Pass null or omit it.
  */
 export async function resolveModel(sessionKey = null, api = null) {
   let model = null;
@@ -245,23 +260,31 @@ export async function resolveModel(sessionKey = null, api = null) {
       const gtwConfig = JSON.parse(read(CONFIG_FILE, 'utf8'));
       if (gtwConfig.model) {
         model = gtwConfig.model;
-        // Derive modelProvider from the model string (e.g. "github/gpt-4o" → "github")
-        modelProvider = model.includes('/') ? model.split('/')[0] : null;
+        // Derive modelProvider from the model string if it has a provider prefix
+        if (model.includes('/')) {
+          const [provider, modelId] = model.split('/');
+          modelProvider = provider;
+          model = modelId; // strip provider prefix so downstream never sees "github/gpt-4o" as model
+        }
       }
     }
   } catch {}
 
   // 2. Fallback: read current session model directly from sessions.json
-  if (!model && sessionKey) {
+  // Use sessions.json to backfill modelProvider when config gave a bare model name,
+  // or to supply both model+provider when config is absent entirely.
+  // Trigger whenever modelProvider is missing (config may have set a bare model name).
+  if (!modelProvider && sessionKey) {
     try {
       const agentId = sessionKey.split(':')[1] || 'main';
-      const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+      const sessionsPath = resolveSessionsPath(agentId);
       if (exists(sessionsPath)) {
         const sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
         const entry = sessionsData[sessionKey];
         if (entry?.modelProvider && entry?.model) {
-          modelProvider = entry.modelProvider;
-          model = entry.model;
+          // Only fill in what is still missing; prefer config's model name if set
+          if (!modelProvider) modelProvider = entry.modelProvider;
+          if (!model) model = entry.model;
         }
       }
     } catch (e) {
