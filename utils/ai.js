@@ -228,38 +228,46 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
 
 /**
  * Resolve the model to use for gtw commands.
- * Uses api.runtime.session (OpenClaw official API) when api is available,
- * falls back to gtw/config.json override only.
+ * Priority:
+ *   1. gtw/config.json model override (set via /gtw model)
+ *   2. Current session model from sessions.json (sessionKey required)
  * @param {string|null} [sessionKey=null] - Session key to read session model from.
- * @param {object} [api] - OpenClaw plugin api (for api.runtime.session)
+ * @param {object} [api] - OpenClaw plugin api (unused, kept for compatibility)
  * @returns {{ model: string, modelProvider: string }}
  */
 export async function resolveModel(sessionKey = null, api = null) {
   let model = null;
   let modelProvider = null;
 
-  // 1. Session model via api.runtime.session (OpenClaw official API)
-  if (sessionKey && api?.runtime?.session) {
-    try {
-      const storePath = api.runtime.session.resolveStorePath({ agentId: sessionKey.split(':')[1] || 'main' });
-      const store = api.runtime.session.loadSessionStore(storePath);
-      const { existing: entry } = api.runtime.session.resolveSessionStoreEntry({ store, sessionKey });
-      if (entry?.modelProvider && entry?.model) {
-        modelProvider = entry.modelProvider;
-        model = entry.model;
-      }
-    } catch (e) {
-      console.debug('[resolveModel] api.runtime.session failed:', e.message);
-    }
-  }
-
-  // 2. gtw/config.json override (always checked)
+  // 1. gtw/config.json override (set via /gtw model)
   try {
     if (exists(CONFIG_FILE)) {
       const gtwConfig = JSON.parse(read(CONFIG_FILE, 'utf8'));
-      if (gtwConfig.model) model = gtwConfig.model;
+      if (gtwConfig.model) {
+        model = gtwConfig.model;
+        // Derive modelProvider from the model string (e.g. "github/gpt-4o" → "github")
+        modelProvider = model.includes('/') ? model.split('/')[0] : null;
+      }
     }
   } catch {}
+
+  // 2. Fallback: read current session model directly from sessions.json
+  if (!model && sessionKey) {
+    try {
+      const agentId = sessionKey.split(':')[1] || 'main';
+      const sessionsPath = join(homedir(), '.openclaw', 'agents', agentId, 'sessions', 'sessions.json');
+      if (exists(sessionsPath)) {
+        const sessionsData = JSON.parse(read(sessionsPath, 'utf8'));
+        const entry = sessionsData[sessionKey];
+        if (entry?.modelProvider && entry?.model) {
+          modelProvider = entry.modelProvider;
+          model = entry.model;
+        }
+      }
+    } catch (e) {
+      console.debug('[resolveModel] sessions.json read failed:', e.message);
+    }
+  }
 
   if (!model || !modelProvider) {
     throw new Error(
