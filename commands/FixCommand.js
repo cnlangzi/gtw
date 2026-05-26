@@ -66,19 +66,19 @@ export class FixCommand extends Commander {
   async execute(args) {
     const issueIdArg = args[0];
     if (!issueIdArg) {
-      return { ok: false, message: '⚠️ Usage: /gtw fix <issue_id>\nExample: /gtw fix 13' };
+      return { ok: false, display: '⚠️ Usage: /gtw fix <issue_id>\nExample: /gtw fix 13' };
     }
     const issueId = parseInt(issueIdArg, 10);
     if (isNaN(issueId) || issueId <= 0) {
-      return { ok: false, message: `⚠️ Invalid issue ID: "${issueIdArg}". Must be a positive integer.` };
+      return { ok: false, display: `⚠️ Invalid issue ID: "${issueIdArg}". Must be a positive integer.` };
     }
 
     const wip = getWip();
     if (!wip.workdir) {
-      return { ok: false, message: '⚠️ No workdir set. Run /gtw on <workdir> first' };
+      return { ok: false, display: '⚠️ No workdir set. Run /gtw on <workdir> first' };
     }
     if (!wip.repo) {
-      return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
+      return { ok: false, display: '⚠️ No repo set. Run /gtw on <workdir> first' };
     }
 
     const workdir = wip.workdir;
@@ -92,12 +92,12 @@ export class FixCommand extends Commander {
       issue = await fetchIssue(issueId, repo, client);
     } catch (e) {
       if (e.message.includes('404')) {
-        return { ok: false, message: `⚠️ Issue #${issueId} not found in ${repo}. Check the issue number or repo.` };
+        return { ok: false, display: `⚠️ Issue #${issueId} not found in ${repo}. Check the issue number or repo.` };
       }
       if (e.message.includes('401') || e.message.includes('403')) {
-        return { ok: false, message: '⚠️ GitHub API auth failed. Run: gh auth login' };
+        return { ok: false, display: '⚠️ GitHub API auth failed. Run: gh auth login' };
       }
-      return { ok: false, message: `⚠️ Failed to fetch issue #${issueId}: ${e.message}` };
+      return { ok: false, display: `⚠️ Failed to fetch issue #${issueId}: ${e.message}` };
     }
 
     const issueTitle = issue.title || '(no title)';
@@ -108,19 +108,19 @@ export class FixCommand extends Commander {
       if (!claimResult.ok) {
         return {
           ok: false,
-          message: `⚠️ Issue #${issueId} is already claimed by another process (gtw/wip label present). Aborting to avoid conflicts.`,
+          display: `⚠️ Issue #${issueId} is already claimed by another process (gtw/wip label present). Aborting to avoid conflicts.`,
         };
       }
     } catch (e) {
       if (e.message.includes('401') || e.message.includes('403')) {
-        return { ok: false, message: '⚠️ GitHub API auth failed. Run: gh auth login' };
+        return { ok: false, display: '⚠️ GitHub API auth failed. Run: gh auth login' };
       }
-      return { ok: false, message: `⚠️ Failed to claim issue #${issueId}: ${e.message}` };
+      return { ok: false, display: `⚠️ Failed to claim issue #${issueId}: ${e.message}` };
     }
 
     const baseBranchName = formatBranchName(issueTitle);
     if (!baseBranchName) {
-      return { ok: false, message: '⚠️ Could not derive branch name from issue title. Title may contain only special characters.' };
+      return { ok: false, display: '⚠️ Could not derive branch name from issue title. Title may contain only special characters.' };
     }
 
     let branchName;
@@ -137,7 +137,7 @@ export class FixCommand extends Commander {
       } catch (unclaimErr) {
         console.error('[FixCommand] Warning: unclaimIssue() failed during git error recovery', unclaimErr);
       }
-      return { ok: false, message: `⚠️ Git branch creation failed: ${e.message}` };
+      return { ok: false, display: `⚠️ Git branch creation failed: ${e.message}` };
     }
 
     const now = new Date().toISOString();
@@ -164,7 +164,7 @@ export class FixCommand extends Commander {
       }
       return {
         ok: false,
-        message: 'Failed to enqueue fix directive — subagent will not be spawned',
+        display: 'Failed to enqueue fix directive — subagent will not be spawned',
         branch: branchName,
         issueId,
         issueTitle,
@@ -190,7 +190,6 @@ export class FixCommand extends Commander {
       issueId,
       issueTitle,
       workdir,
-      message: '🌿 Fix workflow scheduled — confirm to spawn subagent',
       display: displayLines.join('\n'),
     };
   }

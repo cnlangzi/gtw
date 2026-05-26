@@ -78,7 +78,7 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     try {
       rawText = await callAI(model, systemPrompt, prompt, this.sessionKey, this.api);
     } catch (e) {
-      return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
+      return { ok: false, display: `⚠️ AI call failed: ${e.message}` };
     }
 
     let parsed;
@@ -86,7 +86,7 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
       parsed = parseAIResponse(rawText);
     } catch (e) {
       log('[parse-fail]', JSON.stringify({ timestamp: new Date().toISOString(), model, lang, rawTextLength: rawText.length, rawText }));
-      return { ok: false, message: `⚠️ AI didn't return valid JSON: ${e.message}\n\nRaw (${rawText.length} chars): ${rawText.slice(0, 200)}` };
+      return { ok: false, display: `⚠️ AI didn't return valid JSON: ${e.message}\n\nRaw (${rawText.length} chars): ${rawText.slice(0, 200)}` };
     }
 
     const title = parsed.title || '';

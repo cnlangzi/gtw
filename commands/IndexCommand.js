@@ -32,12 +32,12 @@ export class IndexCommand extends Commander {
     const repo = wip.repo;
 
     if (!repo) {
-      return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
+      return { ok: false, display: '⚠️ No repo set. Run /gtw on <workdir> first' };
     }
 
     const workdir = wip.workdir;
     if (!workdir) {
-      return { ok: false, message: '⚠️ No workdir set. Run /gtw on <workdir> first' };
+      return { ok: false, display: '⚠️ No workdir set. Run /gtw on <workdir> first' };
     }
 
     const flags = args.filter((a) => a.startsWith('--'));
@@ -68,7 +68,7 @@ export class IndexCommand extends Commander {
     try {
       getOrBuildIndex(workdir, repo, branch, { force });
     } catch (e) {
-      return { ok: false, message: `⚠️ Index build failed: ${e.message}` };
+      return { ok: false, display: `⚠️ Index build failed: ${e.message}` };
     }
 
     const existing = loadIndex(repo, branch);
