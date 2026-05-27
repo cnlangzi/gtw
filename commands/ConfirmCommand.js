@@ -31,7 +31,6 @@ export class ConfirmCommand extends Commander {
         } catch (pushErr) {
           return {
             ok: false,
-            display: `❌ Failed to push branch ${headBranch}: ${pushErr.message}`,
             display: [
               `❌ Failed to push branch`,
               ``,

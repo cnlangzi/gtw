@@ -289,7 +289,7 @@ describe('WF4: Watch list + review integration', () => {
 
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     const r = await cmd.execute(['add', 'cnlangzi/gtw']);
-    assert.ok(r.message.includes('already'));
+    assert.ok(r.display.includes('already'));
     assert.strictEqual(readConfig().watchList.length, 1);
   });
 
@@ -353,7 +353,6 @@ describe('WF6: Command execution paths', () => {
   it('WatchCommand: unknown subcommand → returns usage', async () => {
     const cmd = new WatchCommand({ api: {}, config: {}, sessionKey: 'test' });
     const r = await cmd.execute(['foobar']);
-    assert.ok(r.message.includes('Usage'));
     assert.ok(r.display.includes('Usage'));
   });
 
@@ -368,7 +367,7 @@ describe('WF6: Command execution paths', () => {
     writeConfig({ watchList: ['a/b'] });
     const r = await cmd.execute(['rm', 'c/d']);
     assert.strictEqual(r.ok, true);
-    assert.ok(r.message.includes('not in the watch list'));
+    assert.ok(r.display.includes('not in the watch list'));
     assert.strictEqual(readConfig().watchList.length, 1);
   });
 });

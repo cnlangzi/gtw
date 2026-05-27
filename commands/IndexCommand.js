@@ -94,7 +94,6 @@ export class IndexCommand extends Commander {
     if (!existing) {
       return {
         ok: true,
-        display: `🔍 **No index found** for ${repo}@${targetBranch}\n\nRun `/gtw index` to build one.`,
         display: `🔍 **No index found** for ${repo}@${targetBranch}\n\nRun \`/gtw index\` to build one.`,
       };
     }
@@ -119,11 +118,8 @@ export class IndexCommand extends Commander {
     return {
       ok: true,
       display: removed
-        ? `✅ Index removed for ${repo}@${branch}`
-        : `⚠️ No index found for ${repo}@${branch}`,
-      display: removed
         ? `✅ **Index removed** for ${repo}@${branch}`
-        : `⚠️ **No index found** for ${repo}@${branch}`,
+        : `⚠️ No index found for ${repo}@${branch}`,
     };
   }
 
@@ -133,7 +129,6 @@ export class IndexCommand extends Commander {
     if (branches.length === 0) {
       return {
         ok: true,
-        display: `🔍 No indexes found for ${repo}`,
         display: `🔍 **No indexes found** for ${repo}`,
       };
     }

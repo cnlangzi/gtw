@@ -120,6 +120,11 @@ export class FixCommand extends Commander {
 
     const baseBranchName = formatBranchName(issueTitle);
     if (!baseBranchName) {
+      try {
+        await unclaimIssue(issueId, repo, client);
+      } catch (unclaimErr) {
+        console.error('[FixCommand] Warning: unclaimIssue() failed during branch-name derivation failure', unclaimErr);
+      }
       return { ok: false, display: '⚠️ Could not derive branch name from issue title. Title may contain only special characters.' };
     }
 

@@ -284,7 +284,6 @@ export class ReviewCommand extends Commander {
       items: duplicateResults.items,
       cleanups: cleanupResults.cleanups || [],
       display: summary.join('\n'),
-      display: summary.join('\n'),
     };
   }
 

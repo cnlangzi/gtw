@@ -79,7 +79,6 @@ export class MakeCommand extends Commander {
       ok: true,
       exitCode,
       display: output + exitMsg,
-      display: output + exitMsg,
     };
   }
 }
