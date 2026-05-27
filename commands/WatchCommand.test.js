@@ -50,7 +50,7 @@ describe('WatchCommand (AC6)', () => {
     const result = await cmd.execute(['list']);
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.watchList.length, 2);
-    assert.ok(result.message.includes('a/b'));
+    assert.ok(result.display.includes('a/b'));
     cleanup();
   });
 
@@ -69,7 +69,7 @@ describe('WatchCommand (AC6)', () => {
     const cmd = new WatchCommand(makeContext());
     const result = await cmd.execute(['add', 'octocat/Hello-World']);
     assert.strictEqual(result.ok, true);
-    assert.ok(result.message.includes('already'));
+    assert.ok(result.display.includes('already'));
     assert.strictEqual(readConfig().watchList.length, 1); // unchanged
     cleanup();
   });
@@ -114,7 +114,7 @@ describe('WatchCommand (AC6)', () => {
     const cmd = new WatchCommand(makeContext());
     const result = await cmd.execute(['rm', 'nonexistent/repo']);
     assert.strictEqual(result.ok, true);
-    assert.ok(result.message.includes('not in the watch list'));
+    assert.ok(result.display.includes('not in the watch list'));
     assert.strictEqual(readConfig().watchList.length, 1);
     cleanup();
   });
@@ -142,7 +142,7 @@ describe('WatchCommand (AC6)', () => {
     const cmd = new WatchCommand(makeContext());
     const result = await cmd.execute(['unknown']);
     assert.strictEqual(result.ok, true);
-    assert.ok(result.message.includes('Usage'));
+    assert.ok(result.display.includes('Usage'));
     cleanup();
   });
 });
