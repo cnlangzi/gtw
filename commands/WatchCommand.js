@@ -30,7 +30,6 @@ export class WatchCommand extends Commander {
     } else {
       return {
         ok: true,
-        message: 'Usage:\n  /gtw watch list          Show watched repos\n  /gtw watch add <owner>/<repo>   Add repo to watch list\n  /gtw watch rm <owner>/<repo>    Remove repo from watch list',
         display: `Usage:\n  /gtw watch list              Show watched repos\n  /gtw watch add <owner>/<repo>   Add repo to watch list\n  /gtw watch rm <owner>/<repo>    Remove repo from watch list`,
       };
     }
@@ -42,7 +41,7 @@ export class WatchCommand extends Commander {
     if (!parsed) {
       return {
         ok: false,
-        message: `⚠️ Invalid format. Use: /gtw watch add <owner>/<repo>\nExample: /gtw watch add octocat/Hello-World`,
+        display: `⚠️ Invalid format. Use: /gtw watch add <owner>/<repo>\nExample: /gtw watch add octocat/Hello-World`,
       };
     }
 
@@ -53,7 +52,6 @@ export class WatchCommand extends Commander {
     if (watchList.includes(fullName)) {
       return {
         ok: true,
-        message: `ℹ️ ${fullName} is already in the watch list`,
         display: `ℹ️ ${fullName} is already being watched`,
       };
     }
@@ -64,7 +62,6 @@ export class WatchCommand extends Commander {
     return {
       ok: true,
       added: fullName,
-      message: `✅ Added ${fullName} to watch list`,
       display: `✅ Now watching: ${fullName}\n\nTotal watched repos: ${config.watchList.length}`,
     };
   }
@@ -75,7 +72,7 @@ export class WatchCommand extends Commander {
     if (!parsed) {
       return {
         ok: false,
-        message: `⚠️ Invalid format. Use: /gtw watch rm <owner>/<repo>\nExample: /gtw watch rm octocat/Hello-World`,
+        display: `⚠️ Invalid format. Use: /gtw watch rm <owner>/<repo>\nExample: /gtw watch rm octocat/Hello-World`,
       };
     }
 
@@ -86,7 +83,6 @@ export class WatchCommand extends Commander {
     if (!watchList.includes(fullName)) {
       return {
         ok: true,
-        message: `ℹ️ ${fullName} is not in the watch list`,
         display: `ℹ️ ${fullName} is not in the watch list`,
       };
     }
@@ -97,7 +93,6 @@ export class WatchCommand extends Commander {
     return {
       ok: true,
       removed: fullName,
-      message: `✅ Removed ${fullName} from watch list`,
       display: `✅ Removed: ${fullName}\n\nTotal watched repos: ${config.watchList.length}`,
     };
   }
@@ -110,7 +105,6 @@ export class WatchCommand extends Commander {
       return {
         ok: true,
         watchList: [],
-        message: '🔍 Watch list is empty',
         display: '🔍 Watch list is empty\n\nAdd repos:\n  /gtw watch add <owner>/<repo>',
       };
     }
@@ -119,7 +113,6 @@ export class WatchCommand extends Commander {
     return {
       ok: true,
       watchList,
-      message: `Watching ${watchList.length} repos:\n${lines}`,
       display: `👁 Watching ${watchList.length} repo(s):\n\n${lines}`,
     };
   }

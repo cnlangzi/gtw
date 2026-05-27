@@ -31,7 +31,7 @@ export class ConfirmCommand extends Commander {
         } catch (pushErr) {
           return {
             ok: false,
-            message: `Failed to push branch ${headBranch}: ${pushErr.message}`,
+            display: `❌ Failed to push branch ${headBranch}: ${pushErr.message}`,
             display: [
               `❌ Failed to push branch`,
               ``,
@@ -68,7 +68,7 @@ export class ConfirmCommand extends Commander {
         return {
           ok: false,
           branch: headBranch,
-          message: `GitHub API error: ${e.message}`,
+          display: `❌ GitHub API error: ${e.message}`,
           display: [
             `❌ GitHub API error — PR not created`,
             ``,

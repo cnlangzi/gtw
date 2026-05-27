@@ -76,7 +76,6 @@ export class IndexCommand extends Commander {
 
     return {
       ok: true,
-      message: `✅ Index ${action} complete for ${repo}@${branch}\n\nBranch: ${branch}\nLast commit: ${meta.lastCommit || 'unknown'}\nLast updated: ${meta.lastUpdated || 'unknown'}\nFiles indexed: ${meta.stats?.indexedFiles || 0}\nFunctions: ${meta.stats?.totalFunctions || 0}`,
       display: `✅ **Index ${action} complete**\n\n| | |
 |---|---|
 | **Repo** | ${repo} |
@@ -95,7 +94,7 @@ export class IndexCommand extends Commander {
     if (!existing) {
       return {
         ok: true,
-        message: `🔍 No index found for ${repo}@${targetBranch}\n\nRun /gtw index to build one.`,
+        display: `🔍 **No index found** for ${repo}@${targetBranch}\n\nRun `/gtw index` to build one.`,
         display: `🔍 **No index found** for ${repo}@${targetBranch}\n\nRun \`/gtw index\` to build one.`,
       };
     }
@@ -105,7 +104,6 @@ export class IndexCommand extends Commander {
 
     return {
       ok: true,
-      message: `📊 Index stats for ${repo}@${targetBranch}\n\nLast commit: ${meta.lastCommit || 'unknown'}\nLast updated: ${meta.lastUpdated || 'unknown'}\nFiles indexed: ${meta.stats?.indexedFiles || 0}\nFunctions: ${meta.stats?.totalFunctions || 0}\n\nAll indexed branches: ${branches.join(', ')}`,
       display: `📊 **Index stats** for ${repo}@${targetBranch}\n\n| Metric | Value |
 |---|---|
 | Last commit | \`${meta.lastCommit || 'unknown'}\` |
@@ -120,7 +118,7 @@ export class IndexCommand extends Commander {
     const removed = removeIndex(repo, branch);
     return {
       ok: true,
-      message: removed
+      display: removed
         ? `✅ Index removed for ${repo}@${branch}`
         : `⚠️ No index found for ${repo}@${branch}`,
       display: removed
@@ -135,14 +133,13 @@ export class IndexCommand extends Commander {
     if (branches.length === 0) {
       return {
         ok: true,
-        message: `🔍 No indexes found for ${repo}`,
+        display: `🔍 No indexes found for ${repo}`,
         display: `🔍 **No indexes found** for ${repo}`,
       };
     }
 
     return {
       ok: true,
-      message: `📦 Indexed branches for ${repo}:\n\n${branches.map((b) => `  - ${b}`).join('\n')}`,
       display: `📦 **Indexed branches** for ${repo}:\n\n${branches.map((b) => `- \`${b}\``).join('\n')}`,
     };
   }

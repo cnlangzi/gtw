@@ -15,7 +15,7 @@ export class NewCommand extends Commander {
     if (!allMessages.length) {
       return {
         ok: false,
-        message: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
+        display: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
       };
     }
 
@@ -117,7 +117,6 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     return {
       ok: true,
       wip: updated,
-      message: `Issue draft generated: "${title}"`,
       display: `Draft saved:\n\nTitle: ${title}\n\nBody:\n${body}\n\nRun /gtw confirm to create the issue.`,
     };
   }

@@ -23,7 +23,6 @@ export class ConfigCommand extends Commander {
     } else {
       return {
         ok: true,
-        message: 'Usage:\n  /gtw config list              List all config keys\n  /gtw config get <key>         Get a config value\n  /gtw config set <key> <value> Set a config value\n  /gtw config delete <key>      Delete a config key',
         display: `Usage:\n  /gtw config list              List all config keys\n  /gtw config get <key>         Get a config value\n  /gtw config set <key> <value> Set a config value\n  /gtw config delete <key>      Delete a config key`,
       };
     }
@@ -35,7 +34,6 @@ export class ConfigCommand extends Commander {
       return {
         ok: true,
         entries: [],
-        message: 'No config keys set.',
         display: 'No config keys set.',
       };
     }
@@ -43,7 +41,6 @@ export class ConfigCommand extends Commander {
     return {
       ok: true,
       entries,
-      message: `Config:\n${lines}`,
       display: `Config:\n\n${lines}`,
     };
   }
@@ -53,7 +50,7 @@ export class ConfigCommand extends Commander {
     if (!key) {
       return {
         ok: false,
-        message: 'Usage: /gtw config get <key>',
+        display: 'Usage: /gtw config get <key>',
       };
     }
     const value = getConfigKey(key);
@@ -62,7 +59,6 @@ export class ConfigCommand extends Commander {
         ok: true,
         key,
         value: null,
-        message: `Key not set: ${key}`,
         display: `${key} is not set.`,
       };
     }
@@ -70,7 +66,6 @@ export class ConfigCommand extends Commander {
       ok: true,
       key,
       value,
-      message: `${key}=${value}`,
       display: `${key}=${value}`,
     };
   }
@@ -79,7 +74,7 @@ export class ConfigCommand extends Commander {
     if (args.length < 2) {
       return {
         ok: false,
-        message: 'Usage: /gtw config set <key> <value>',
+        display: 'Usage: /gtw config set <key> <value>',
       };
     }
     const key = args[0];
@@ -89,7 +84,6 @@ export class ConfigCommand extends Commander {
       ok: true,
       key,
       value,
-      message: `${key}=${value}`,
       display: `Set: ${key}=${value}`,
     };
   }
@@ -99,7 +93,7 @@ export class ConfigCommand extends Commander {
     if (!key) {
       return {
         ok: false,
-        message: 'Usage: /gtw config delete <key>',
+        display: 'Usage: /gtw config delete <key>',
       };
     }
     const existed = deleteConfigKey(key);
@@ -108,7 +102,6 @@ export class ConfigCommand extends Commander {
         ok: true,
         key,
         deleted: false,
-        message: `Key not found: ${key}`,
         display: `${key} was not set.`,
       };
     }
@@ -116,7 +109,6 @@ export class ConfigCommand extends Commander {
       ok: true,
       key,
       deleted: true,
-      message: `Deleted: ${key}`,
       display: `Deleted: ${key}`,
     };
   }

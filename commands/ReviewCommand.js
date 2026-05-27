@@ -114,7 +114,7 @@ export class ReviewCommand extends Commander {
     if (labels.some((l) => l.name === 'gtw/stuck')) {
       return {
         ok: true,
-        message: `⏸ PR #${prNum} is stuck. Manual intervention required.`,
+        display: `⏸ PR #${prNum} is stuck. Manual intervention required.`,
       };
     }
 
@@ -130,7 +130,7 @@ export class ReviewCommand extends Commander {
     if (preempted) {
       return {
         ok: false,
-        message: `⚠️ PR #${prNum} was claimed by another runner.`,
+        display: `⚠️ PR #${prNum} was claimed by another runner.`,
       };
     }
 
@@ -283,7 +283,7 @@ export class ReviewCommand extends Commander {
       verdict: finalLabel,
       items: duplicateResults.items,
       cleanups: cleanupResults.cleanups || [],
-      message: summary.join('\n'),
+      display: summary.join('\n'),
       display: summary.join('\n'),
     };
   }

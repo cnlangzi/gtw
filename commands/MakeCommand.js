@@ -23,7 +23,6 @@ export class MakeCommand extends Commander {
         if (!pathArg || pathArg.startsWith('-')) {
           return {
             ok: false,
-            message: '/gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
             display: '❌ /gtw make --on requires a path argument. Usage: /gtw make [target] --on <path>',
           };
         }
@@ -33,7 +32,6 @@ export class MakeCommand extends Commander {
         if (!isValid) {
           return {
             ok: false,
-            message: `Not a directory: ${expanded}`,
             display: `❌ Not a directory: ${expanded}`,
           };
         }
@@ -49,7 +47,6 @@ export class MakeCommand extends Commander {
       if (!wip?.workdir) {
         return {
           ok: false,
-          message: 'No workdir set. Run /gtw on <workdir> first.',
           display: '❌ No workdir set. Run /gtw on <workdir> first.',
         };
       }
@@ -81,7 +78,7 @@ export class MakeCommand extends Commander {
     return {
       ok: true,
       exitCode,
-      message: output + exitMsg,
+      display: output + exitMsg,
       display: output + exitMsg,
     };
   }

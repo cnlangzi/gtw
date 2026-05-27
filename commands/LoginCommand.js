@@ -39,7 +39,6 @@ export class LoginCommand extends Commander {
         const user = await client.getCurrentUser();
         return {
           ok: true,
-          message: '✅ Login successful! PAT validated and cached',
           user: { login: user.login, name: user.name, id: user.id },
           token: { source: 'pat', cached_at: Date.now() },
           display: this.createLoginSuccessDisplay(user, 'pat'),
@@ -47,14 +46,14 @@ export class LoginCommand extends Commander {
       } else {
         return {
           ok: false,
-          message: '❌ Invalid token. Please check it has repo and workflow scopes',
+          display: '❌ Invalid token. Please check it has repo and workflow scopes',
         };
       }
     }
 
     return {
       ok: false,
-      message: `❌ No PAT provided
+      display: `❌ No PAT provided
 
 Usage:
   /gtw login --pat <your_token>      # Provide token directly
@@ -77,7 +76,6 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
             const user = await client.getCurrentUser();
             return {
               ok: true,
-              message: '✅ Token valid, gtw commands are ready to use',
               user: { login: user.login, name: user.name, id: user.id },
               display: this.createLoginSuccessDisplay(user),
             };
@@ -94,7 +92,6 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
         if (state.status === 'pending' && state.expires_at > Date.now()) {
           return {
             ok: false,
-            message: '⏳ Authorization still in progress',
             display: [
               '🔐 **Authorization in progress...**',
               '',
@@ -111,7 +108,6 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
           const user = await client.getCurrentUser();
           return {
             ok: true,
-            message: '✅ Token valid, gtw commands are ready to use',
             user: { login: user.login, name: user.name, id: user.id },
             display: this.createLoginSuccessDisplay(user),
           };
@@ -123,7 +119,7 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
     return {
       ok: false,
-      message: '❌ No authorization flow detected. Run /gtw login to start one',
+      display: '❌ No authorization flow detected. Run /gtw login to start one',
     };
   }
 
@@ -173,13 +169,12 @@ Generate a token: https://github.com/settings/tokens (requires repo and workflow
 
       return {
         ok: true,
-        message: 'GitHub OAuth login started',
         display: this.createDeviceCodeDisplay(deviceCode),
       };
     } catch (e) {
       return {
         ok: false,
-        message: `❌ Failed to get device code: ${e.message}`,
+        display: `❌ Failed to get device code: ${e.message}`,
       };
     }
   }

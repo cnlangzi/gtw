@@ -15,7 +15,7 @@ export class IssueCommand extends Commander {
     const data = await client.request('GET', `/repos/${repo}/issues?${params}`);
     const issues = data.filter((i) => !i.pull_request);
     if (!issues.length) {
-      return { ok: true, repo, issues: [], message: `No open issues in ${repo}`, display: `📋 No open issues visible` };
+      return { ok: true, repo, issues: [], display: `📋 No open issues visible` };
     }
     return {
       ok: true,
