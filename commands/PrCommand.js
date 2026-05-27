@@ -193,7 +193,7 @@ export class PrCommand extends Commander {
         ok: true,
         branch: headBranch,
         noDiff: true,
-        message: 'No commit differences found between branch and default branch. Nothing to PR.',
+        display: '📭 No commits found between this branch and the default branch. Nothing to PR.',
         display: [
           noDiffMessage,
           ``,
@@ -258,7 +258,7 @@ export class PrCommand extends Commander {
       return {
         ok: false,
         branch: headBranch,
-        message: `LLM returned invalid response`,
+        display: `⚠️ LLM returned invalid response`,
         display: [
           `❌ LLM returned invalid JSON. Could not extract PR title.`,
           ``,
@@ -307,7 +307,7 @@ export class PrCommand extends Commander {
       ok: true,
       branch: headBranch,
       pendingPr,
-      message: `🔍 PR draft ready — run /gtw confirm to create PR`,
+      display: `🔍 PR draft ready — run /gtw confirm to create PR`,
       display: [
         `🔍 PR draft — run /gtw confirm to create PR`,
         ``,

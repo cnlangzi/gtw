@@ -96,7 +96,7 @@ export class PushCommand extends Commander {
 
     const stats = getStagedStats(workdir);
     if (!stats) {
-      return { ok: true, branch, message: 'No changes to commit', display: `✅ No changes to commit\n\nBranch: ${branch}` };
+      return { ok: true, branch, display: `✅ No changes to commit\n\nBranch: ${branch}` };
     }
 
     const diff = getStagedDiff(workdir);
@@ -116,7 +116,7 @@ export class PushCommand extends Commander {
       return {
         ok: false,
         branch,
-        message: `⚠️ LLM call failed: ${e.message}`,
+        display: `⚠️ LLM call failed: ${e.message}`,
         display: [
           `❌ LLM generation failed`,
           ``,
@@ -135,7 +135,7 @@ export class PushCommand extends Commander {
       return {
         ok: false,
         branch,
-        message: `⚠️ LLM returned invalid response`,
+        display: `⚠️ LLM returned invalid response`,
         display: [
           `❌ LLM returned invalid JSON. Could not extract title.`,
           ``,
@@ -158,7 +158,7 @@ export class PushCommand extends Commander {
       ok: true,
       branch,
       pendingCommit: pending.pendingCommit,
-      message: `🔍 Commit draft ready — run /gtw confirm to push`,
+      display: `🔍 Commit draft ready — run /gtw confirm to push`,
       display: [
         `🔍 Commit draft — run /gtw confirm to push`,
         ``,

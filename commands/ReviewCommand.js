@@ -77,7 +77,7 @@ export class ReviewCommand extends Commander {
     const repo = wip.repo;
 
     if (!repo) {
-      return { ok: false, message: '⚠️ No repo set. Run /gtw on <workdir> first' };
+      return { ok: false, display: '⚠️ No repo set. Run /gtw on <workdir> first' };
     }
 
     // Parse optional PR number argument
@@ -91,7 +91,7 @@ export class ReviewCommand extends Commander {
     }
 
     if (!targetPrNum) {
-      return { ok: false, message: '⚠️ PR number required. Usage: /gtw review <pr-number>' };
+      return { ok: false, display: '⚠️ PR number required. Usage: /gtw review <pr-number>' };
     }
 
     return this._reviewPr(targetPrNum, repo, wip);
@@ -106,7 +106,7 @@ export class ReviewCommand extends Commander {
     try {
       prData = await this._fetchPrDetails(prNum, client, repo);
     } catch (e) {
-      return { ok: false, message: `⚠️ Failed to fetch PR #${prNum}: ${e.message}` };
+      return { ok: false, display: `⚠️ Failed to fetch PR #${prNum}: ${e.message}` };
     }
 
     // Check stuck
@@ -114,7 +114,7 @@ export class ReviewCommand extends Commander {
     if (labels.some((l) => l.name === 'gtw/stuck')) {
       return {
         ok: true,
-        message: `⏸ PR #${prNum} is stuck. Manual intervention required.`,
+        display: `⏸ PR #${prNum} is stuck. Manual intervention required.`,
       };
     }
 
@@ -124,13 +124,13 @@ export class ReviewCommand extends Commander {
       const result = await setPrLabel({ prNum, repo, client, isPR: true }, 'gtw/wip');
       preempted = result.preempted;
     } catch (e) {
-      return { ok: false, message: `⚠️ ${e.message}` };
+      return { ok: false, display: `⚠️ ${e.message}` };
     }
 
     if (preempted) {
       return {
         ok: false,
-        message: `⚠️ PR #${prNum} was claimed by another runner.`,
+        display: `⚠️ PR #${prNum} was claimed by another runner.`,
       };
     }
 
@@ -283,7 +283,6 @@ export class ReviewCommand extends Commander {
       verdict: finalLabel,
       items: duplicateResults.items,
       cleanups: cleanupResults.cleanups || [],
-      message: summary.join('\n'),
       display: summary.join('\n'),
     };
   }

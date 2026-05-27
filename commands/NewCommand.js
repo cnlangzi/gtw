@@ -15,7 +15,7 @@ export class NewCommand extends Commander {
     if (!allMessages.length) {
       return {
         ok: false,
-        message: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
+        display: "⚠️ No conversation found. Try describing what you want to create in the chat first.",
       };
     }
 
@@ -78,7 +78,7 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     try {
       rawText = await callAI(model, systemPrompt, prompt, this.sessionKey, this.api);
     } catch (e) {
-      return { ok: false, message: `⚠️ AI call failed: ${e.message}` };
+      return { ok: false, display: `⚠️ AI call failed: ${e.message}` };
     }
 
     let parsed;
@@ -86,7 +86,7 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
       parsed = parseAIResponse(rawText);
     } catch (e) {
       log('[parse-fail]', JSON.stringify({ timestamp: new Date().toISOString(), model, lang, rawTextLength: rawText.length, rawText }));
-      return { ok: false, message: `⚠️ AI didn't return valid JSON: ${e.message}\n\nRaw (${rawText.length} chars): ${rawText.slice(0, 200)}` };
+      return { ok: false, display: `⚠️ AI didn't return valid JSON: ${e.message}\n\nRaw (${rawText.length} chars): ${rawText.slice(0, 200)}` };
     }
 
     const title = parsed.title || '';
@@ -117,7 +117,6 @@ Generate all output content (title, solution, reason, constraints, etc.) in ${la
     return {
       ok: true,
       wip: updated,
-      message: `Issue draft generated: "${title}"`,
       display: `Draft saved:\n\nTitle: ${title}\n\nBody:\n${body}\n\nRun /gtw confirm to create the issue.`,
     };
   }

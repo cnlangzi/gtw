@@ -18,7 +18,6 @@ export class UpdateCommand extends Commander {
     return {
       ok: true,
       wip: updated,
-      message: `Issue #${id} update draft saved`,
       display: `📝 Issue #${id} update draft saved`,
     };
   }
