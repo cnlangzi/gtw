@@ -17,6 +17,14 @@ function resolveSessionsPath(agentId) {
 /**
  * Merge two provider configs: override fields win, base fills gaps.
  * Special handling: `models` is a list merged by id (override wins on duplicate).
+ *
+ * Missing scalar fields fall back to safe defaults (`''`, `'anthropic-messages'`,
+ * `true`) rather than `undefined`. This is intentional: the only caller
+ * (`_callAIOnce`) treats `baseUrl` as a string it can `replace()` against and
+ * `authHeader` as a boolean flag for header selection, and the merged config
+ * flows through JSON serialization + string concat. Defaulting to `undefined`
+ * would force every caller to guard against it; defaulting to empty/typed
+ * values keeps the merged shape stable.
  * @param {object} base
  * @param {object} override
  * @returns {object}
@@ -33,6 +41,8 @@ export function mergeProviderConfig(base = {}, override = {}) {
 
 /**
  * Merge two models[] arrays by id; override entries win on duplicate.
+ * Always returns a new array — never aliases the input — so callers can
+ * safely mutate the result without corrupting the source lists.
  * @param {Array|null|undefined} base
  * @param {Array|null|undefined} override
  * @returns {Array}
@@ -40,8 +50,7 @@ export function mergeProviderConfig(base = {}, override = {}) {
 export function mergeModels(base, override) {
   const a = Array.isArray(base) ? base : [];
   const b = Array.isArray(override) ? override : [];
-  if (a.length === 0) return b;
-  if (b.length === 0) return a;
+  if (a.length === 0 && b.length === 0) return [];
   const map = new Map();
   for (const m of a) if (m?.id) map.set(m.id, m);
   for (const m of b) if (m?.id) map.set(m.id, m);
@@ -254,7 +263,13 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
   const agentId = sessionKey ? (sessionKey.split(':')[1] || 'main') : 'main';
 
   const result = findModelProviderConfig(model, agentId, null);
-  if (!result) throw new Error(`Model ${model} not found in models.json`);
+  if (!result) {
+    throw new Error(
+      `Model ${model} not found in model configuration (agent ${agentId}: ` +
+      `checked ~/.openclaw/agents/${agentId}/agent/models.json and ` +
+      `~/.openclaw/openclaw.json models.providers)`
+    );
+  }
 
   const { provider, baseUrl, authHeader, api: resolvedApi, modelConf } = result;
   const modelId = model.includes('/') ? model.split('/')[1] : model;

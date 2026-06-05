@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { TimeoutError, findModelProviderConfig, loadModelsWithFallback, mergeProviderConfig, mergeModels } from './ai.js';
+import { findModelProviderConfig, loadModelsWithFallback, mergeProviderConfig, mergeModels } from './ai.js';
 
 // ─── Test fixtures ───────────────────────────────────────────────
 //
@@ -82,6 +82,25 @@ describe('mergeModels (pure)', () => {
   it('handles both null/undefined', () => {
     assert.deepStrictEqual(mergeModels(null, null), []);
     assert.deepStrictEqual(mergeModels(undefined, undefined), []);
+  });
+
+  it('returns a fresh array (no aliasing of inputs)', () => {
+    // Regression: callers must be able to mutate the result without
+    // corrupting the source lists. Returning a new array each time
+    // (even when one side is empty) is the contract.
+    const base = [{ id: 'A' }];
+    const override = [];
+    const result = mergeModels(base, override);
+    assert.notStrictEqual(result, base);
+    result.push({ id: 'B' });
+    assert.strictEqual(base.length, 1, 'source list must not be mutated');
+
+    const base2 = [];
+    const override2 = [{ id: 'X' }];
+    const result2 = mergeModels(base2, override2);
+    assert.notStrictEqual(result2, override2);
+    result2.push({ id: 'Y' });
+    assert.strictEqual(override2.length, 1, 'source list must not be mutated');
   });
 });
 
