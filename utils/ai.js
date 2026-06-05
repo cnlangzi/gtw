@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { exists, read } from './fs.js';
 import { jsonrepair } from 'jsonrepair';
 import { getConfig, CONFIG_FILE, getLLMTimeoutSeconds } from './config.js';
+import { readJSON } from './api.js';
 
 /**
  * Resolve the path to sessions.json for a given agentId.
@@ -18,13 +19,9 @@ function resolveSessionsPath(agentId) {
  * Merge two provider configs: override fields win, base fills gaps.
  * Special handling: `models` is a list merged by id (override wins on duplicate).
  *
- * Missing scalar fields fall back to safe defaults (`''`, `'anthropic-messages'`,
- * `true`) rather than `undefined`. This is intentional: the only caller
- * (`_callAIOnce`) treats `baseUrl` as a string it can `replace()` against and
- * `authHeader` as a boolean flag for header selection, and the merged config
- * flows through JSON serialization + string concat. Defaulting to `undefined`
- * would force every caller to guard against it; defaulting to empty/typed
- * values keeps the merged shape stable.
+ * Missing scalar fields fall back to typed defaults (`''`, `'anthropic-messages'`,
+ * `true`) rather than `undefined` so the merged shape stays usable through
+ * string concat / JSON serialization without per-caller guards.
  * @param {object} base
  * @param {object} override
  * @returns {object}
@@ -41,8 +38,8 @@ export function mergeProviderConfig(base = {}, override = {}) {
 
 /**
  * Merge two models[] arrays by id; override entries win on duplicate.
- * Always returns a new array — never aliases the input — so callers can
- * safely mutate the result without corrupting the source lists.
+ * Always returns a new array (never aliases the input) so callers can
+ * safely mutate the result.
  * @param {Array|null|undefined} base
  * @param {Array|null|undefined} override
  * @returns {Array}
@@ -58,8 +55,9 @@ export function mergeModels(base, override) {
 }
 
 /**
- * Resolve the model source paths for an agent. Allows tests to inject
- * custom paths via `options` to avoid touching the real ~/.openclaw dir.
+ * Resolve the model source paths for an agent. The `options.agentPath` /
+ * `options.globalPath` overrides exist for tests so they can inject
+ * fixtures without touching the real ~/.openclaw dir.
  * @param {string} agentId
  * @param {object} [options] - { agentPath, globalPath }
  * @returns {{ agent: string, global: string }}
@@ -72,94 +70,69 @@ export function resolveModelSourcePaths(agentId, options = {}) {
   };
 }
 
-// ─── Source readers (each returns a providers object, or {} on miss/error) ───
-
-function readAgentModels(agentPath) {
-  if (!exists(agentPath)) return {};
-  try {
-    return JSON.parse(read(agentPath, 'utf8')).providers || {};
-  } catch (e) {
-    console.log(`[gtw] skip ${agentPath}: ${e.message}`);
-    return {};
+/**
+ * Read providers from an OpenClaw models catalog file. The agent file
+ * holds `providers` at the top; the global file nests them under
+ * `models.providers` and adds a `models.mode` switch — `wrap` adapts.
+ * @param {string} path
+ * @param {'agent'|'global'} source
+ * @returns {object}
+ */
+function readProvidersFromFile(path, source) {
+  const data = readJSON(path);
+  if (!data) {
+    if (exists(path)) console.log(`[gtw] skip ${path}: invalid JSON`);
+    return source === 'global' ? { providers: {}, mode: 'merge' } : {};
   }
+  if (source === 'global') {
+    return {
+      providers: data.models?.providers || {},
+      mode: data.models?.mode ?? 'merge',
+    };
+  }
+  return data.providers || {};
 }
 
-function readGlobalModels(globalPath) {
-  if (!exists(globalPath)) return { providers: {}, mode: 'merge' };
-  try {
-    const data = JSON.parse(read(globalPath, 'utf8'));
-    return {
-      providers: data.models?.providers || {},  // openclaw.json has `models.providers` (one level deeper)
-      mode: data.models?.mode ?? 'merge',        // matches OpenClaw default
-    };
-  } catch (e) {
-    console.log(`[gtw] skip ${globalPath}: ${e.message}`);
-    return { providers: {}, mode: 'merge' };
-  }
+// Apply a list of (name, config) provider entries into `target` via mergeProviderConfig.
+function applyProviders(target, entries) {
+  for (const [p, c] of Object.entries(entries)) target[p] = mergeProviderConfig(target[p] || {}, c);
+  return target;
 }
 
 /**
- * Load and merge model providers from 2 sources with priority cascade
- * that mirrors OpenClaw's `models.mode` semantics:
- *   - mode "merge"   (default): merge global → agent (agent wins on field conflict;
- *                          models[] dedupes by id, higher-priority entry replaces)
- *   - mode "replace"          : use only the global (cfg.models.providers); skip the
- *                          agent models.json entirely, matching OpenClaw's
- *                          loadModelCatalog short-circuit for `mode === "replace"`.
- *
+ * Load and merge model providers from the agent `models.json` and the
+ * global `openclaw.json` `models.providers`, mirroring OpenClaw's
+ * `models.mode` semantics:
+ *   - "merge"   (default): global → agent, agent wins on field conflict
+ *   - "replace"          : use only the global, skip the agent file
+ * `options.agentPath` / `options.globalPath` are test-injection overrides.
  * @param {string} agentId
- * @param {object} [options] - { agentPath, globalPath } for testing
- * @returns {object} providers object keyed by provider name
+ * @param {object} [options]
+ * @returns {object} providers keyed by name
  */
 export function loadModelsWithFallback(agentId, options = {}) {
   const paths = resolveModelSourcePaths(agentId, options);
-  const { providers: global, mode } = readGlobalModels(paths.global);
+  const { providers: global, mode } = readProvidersFromFile(paths.global, 'global');
 
-  // "replace" matches OpenClaw: ignore the agent's models.json, use cfg.models.providers only.
   if (mode === 'replace') {
-    const out = {};
-    for (const [p, c] of Object.entries(global)) out[p] = mergeProviderConfig({}, c);
-    return out;
+    // OpenClaw's mode=replace short-circuit: drop the agent file entirely.
+    return applyProviders({}, global);
   }
 
-  // Default "merge": agent > global (low to high; higher overrides).
-  const agent = readAgentModels(paths.agent);
-  const merged = {};
-  for (const [p, c] of Object.entries(global)) merged[p] = mergeProviderConfig({}, c);
-  for (const [p, c] of Object.entries(agent))  merged[p] = mergeProviderConfig(merged[p] || {}, c);
-  return merged;
+  const agent = readProvidersFromFile(paths.agent, 'agent');
+  return applyProviders(applyProviders({}, global), agent);
 }
 
 /**
- * Find the provider config for a given model.
- * By default uses the same source cascade as OpenClaw's `loadModelCatalog`:
- *   - openclaw.json (`models.providers`) — always read
- *   - agent `models.json`                  — read unless `models.mode === "replace"`
- * Field-level merge: agent wins on field conflict; `models[]` is deduped by id
- * with the higher-priority entry replacing the lower one.
- *
+ * Find the provider config for a given model via the OpenClaw cascade
+ * (global `models.providers` + agent `models.json`, honoring `models.mode`).
  * @param {string} model - Model id (e.g. MiniMax-M2.7 or github/gpt-5-mini)
- * @param {string} [agentId='main'] - Agent ID for lookup
- * @param {string} [customModelsPath] - If provided, bypasses fallback (legacy single-file mode)
+ * @param {string} [agentId='main']
  * @param {object} [options] - { agentPath, globalPath } for testing
- * @returns {{ provider: string, baseUrl: string, authHeader: boolean, api: string, modelConf: object } | null}
+ * @returns {{ provider, baseUrl, authHeader, api, modelConf } | null}
  */
-export function findModelProviderConfig(model, agentId = 'main', customModelsPath = null, options = null) {
-  let modelConf;
-  if (customModelsPath) {
-    // Legacy single-file mode (preserved for backward compat with tests that pass a single file)
-    if (!exists(customModelsPath)) return null;
-    try {
-      modelConf = JSON.parse(read(customModelsPath, 'utf8'));
-    } catch {
-      console.log(`[gtw] findModelProviderConfig → NOT FOUND: ${model} (parse error: ${customModelsPath})`);
-      return null;
-    }
-  } else {
-    // New: 3-source fallback chain, merged by priority
-    const providers = loadModelsWithFallback(agentId, options || {});
-    modelConf = { providers };
-  }
+export function findModelProviderConfig(model, agentId = 'main', options = null) {
+  const modelConf = { providers: loadModelsWithFallback(agentId, options || {}) };
 
   // Direct lookup: "provider/model-id"
   if (model.includes('/')) {
@@ -262,13 +235,9 @@ export async function callAI(model, systemPrompt, userPrompt, sessionKey = null,
 async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, timeoutSeconds) {
   const agentId = sessionKey ? (sessionKey.split(':')[1] || 'main') : 'main';
 
-  const result = findModelProviderConfig(model, agentId, null);
+  const result = findModelProviderConfig(model, agentId);
   if (!result) {
-    throw new Error(
-      `Model ${model} not found in model configuration (agent ${agentId}: ` +
-      `checked ~/.openclaw/agents/${agentId}/agent/models.json and ` +
-      `~/.openclaw/openclaw.json models.providers)`
-    );
+    throw new Error(`Model ${model} not found for agent ${agentId} (checked agent models.json + openclaw.json models.providers)`);
   }
 
   const { provider, baseUrl, authHeader, api: resolvedApi, modelConf } = result;

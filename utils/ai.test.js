@@ -287,7 +287,7 @@ describe('loadModelsWithFallback — models.mode', () => {
 describe('findModelProviderConfig — fallback chain', () => {
   it('finds direct "provider/model" in agent', () => {
     writeAgent({ providers: { minimax: { baseUrl: 'https://a.com', models: [{ id: 'M3' }] } } });
-    const result = findModelProviderConfig('minimax/M3', 'main', null, opts());
+    const result = findModelProviderConfig('minimax/M3', 'main', opts());
     assert.strictEqual(result.provider, 'minimax');
     assert.strictEqual(result.baseUrl, 'https://a.com');
   });
@@ -295,13 +295,13 @@ describe('findModelProviderConfig — fallback chain', () => {
   it('finds bare model name in global when agent is empty', () => {
     writeAgent({ providers: {} });
     writeGlobal({ models: { providers: { minimax: { baseUrl: 'https://global.com', models: [{ id: 'M3' }] } } } });
-    const result = findModelProviderConfig('M3', 'main', null, opts());
+    const result = findModelProviderConfig('M3', 'main', opts());
     assert.strictEqual(result.provider, 'minimax');
     assert.strictEqual(result.baseUrl, 'https://global.com');
   });
 
   it('returns null when no source has the model', () => {
-    const result = findModelProviderConfig('M3', 'main', null, opts());
+    const result = findModelProviderConfig('M3', 'main', opts());
     assert.strictEqual(result, null);
   });
 
@@ -326,22 +326,9 @@ describe('findModelProviderConfig — fallback chain', () => {
       },
     });
     // This should now work via fallback
-    const result = findModelProviderConfig('MiniMax-M3', 'main', null, opts());
+    const result = findModelProviderConfig('MiniMax-M3', 'main', opts());
     assert.strictEqual(result.provider, 'minimax');
     assert.strictEqual(result.baseUrl, 'https://api.minimaxi.com/anthropic');
     assert.strictEqual(result.api, 'anthropic-messages');
-  });
-});
-
-describe('findModelProviderConfig — backward compat', () => {
-  it('customModelsPath bypasses fallback (single-file mode)', () => {
-    // When 4th arg is null, uses fallback. When customModelsPath is provided,
-    // should use that single file (old behavior preserved).
-    const customPath = join(tmpDir, 'custom-models.json');
-    writeFileSync(customPath, JSON.stringify({ providers: { foo: { baseUrl: 'https://foo.com', models: [{ id: 'F' }] } } }), 'utf8');
-    // Also write an agent that doesn't have it
-    writeAgent({ providers: {} });
-    const result = findModelProviderConfig('F', 'main', customPath, opts());
-    assert.strictEqual(result.provider, 'foo');
   });
 });
