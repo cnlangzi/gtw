@@ -4,7 +4,7 @@
  * All git operations are wrappers around the `git` CLI.
  * Uses execGit (spawnSync) internally — no isomorphic-git dependency.
  */
-import { exec } from './exec.js';
+import { exec, spawnSync } from './exec.js';
 import fs from '../utils/fs.js';
 import path from 'path';
 import { join, resolve, dirname, basename } from 'path';
@@ -35,6 +35,35 @@ export function git(cmd, cwd) {
 function execGit(cmd, cwd) {
   try {
     return exec(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch (e) {
+    throw new Error(`Git error: ${e.message}`);
+  }
+}
+
+/**
+ * Execute a git command with stdin input (avoids shell escaping issues).
+ * Splits cmd into command + args to avoid shell interpretation.
+ * Uses spawnSync with input option.
+ */
+export function gitStdin(cmd, stdinContent, cwd) {
+  const parts = cmd.split(' ');
+  const command = parts[0];
+  const args = parts.slice(1);
+  try {
+    const result = spawnSync(command, args, {
+      cwd,
+      encoding: 'utf8',
+      input: stdinContent,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (result.error) {
+      throw new Error(`Git error: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+      const err = result.stderr || result.stdout || 'Unknown error';
+      throw new Error(`Git error: ${typeof err === 'string' ? err : err.message}`);
+    }
+    return result.stdout || '';
   } catch (e) {
     throw new Error(`Git error: ${e.message}`);
   }
