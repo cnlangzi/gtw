@@ -2,7 +2,7 @@ import { Commander } from './Commander.js';
 import { getWip, clearWip, saveWip } from '../utils/wip.js';
 import { getValidToken } from '../utils/api.js';
 import { GitHubClient } from '../utils/github.js';
-import { git } from '../utils/git.js';
+import { git, gitStdin } from '../utils/git.js';
 
 export class ConfirmCommand extends Commander {
   async execute(args) {
@@ -115,7 +115,7 @@ export class ConfirmCommand extends Commander {
     if (wip.pendingCommit) {
       const { title, body, branch, workdir, files, totalAdd, totalDel } = wip.pendingCommit;
 
-      git(`git commit -m "${title.replace(/"/g, '\\"')}" -m "${body.replace(/"/g, '\\"')}"`, workdir);
+      gitStdin(`git commit -F -`, `${title}\n\n${body}`, workdir);
       git(`git push -u origin ${branch}`, workdir);
 
       // Keep workdir/repo, clear pendingCommit
