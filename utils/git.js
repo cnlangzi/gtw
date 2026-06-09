@@ -42,21 +42,28 @@ function execGit(cmd, cwd) {
 
 /**
  * Execute a git command with stdin input (avoids shell escaping issues).
+ * Splits cmd into command + args to avoid shell interpretation.
  * Uses spawnSync with input option.
  */
 export function gitStdin(cmd, stdinContent, cwd) {
+  const parts = cmd.split(' ');
+  const command = parts[0];
+  const args = parts.slice(1);
   try {
-    const result = spawnSync(cmd, {
+    const result = spawnSync(command, args, {
       cwd,
       encoding: 'utf8',
       input: stdinContent,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    if (result.status !== 0) {
-      const err = result.stderr || result.stdout || new Error('Unknown error');
-      throw new Error(`Git error: ${err.message || err}`);
+    if (result.error) {
+      throw new Error(`Git error: ${result.error.message}`);
     }
-    return (result.stdout || '').trim();
+    if (result.status !== 0) {
+      const err = result.stderr || result.stdout || 'Unknown error';
+      throw new Error(`Git error: ${typeof err === 'string' ? err : err.message}`);
+    }
+    return result.stdout || '';
   } catch (e) {
     throw new Error(`Git error: ${e.message}`);
   }
