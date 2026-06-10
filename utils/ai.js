@@ -173,9 +173,12 @@ export function findModelProviderConfig(model, agentId = 'main', options = null)
 /**
  * Make an AI API call using OpenClaw's model + auth configuration.
  * Auth token priority (when api.runtime.modelAuth is available):
- *   1. api.runtime.modelAuth.getApiKeyForModel() — resolves the full OpenClaw auth chain
- *   2. auth-profiles.json → profiles[<provider>:default].access  (PAT / device flow token)
- *   3. auth-profiles.json → profiles[<provider>:default].key    (api_key type)
+ *   1. api.runtime.modelAuth.resolveApiKeyForProvider() — resolves the full
+ *      OpenClaw auth chain (incl. SQLite-backed auth profiles in current
+ *      OpenClaw; the legacy JSON files at Priority 2/3 are auto-imported and
+ *      kept only as bak archives).
+ *   2. auth-profiles.json → profiles[<provider>:default].access  (PAT / device flow token) — legacy fallback
+ *   3. auth-profiles.json → profiles[<provider>:default].key    (api_key type) — legacy fallback
  *   4. models.json        → providers[<provider>].apiKey        (inline apiKey)
  * @param {string} model - Model id (with optional provider prefix)
  * @param {string} systemPrompt
@@ -245,14 +248,19 @@ async function _callAIOnce(model, systemPrompt, userPrompt, sessionKey, api, tim
   const providerModels = modelConf.providers?.[provider]?.models || [];
   let token = null;
 
-  // Priority 1: api.runtime.modelAuth (uses the full OpenClaw auth chain)
-  if (api?.runtime?.modelAuth) {
+  // Priority 1: api.runtime.modelAuth (uses the full OpenClaw auth chain).
+  // Use resolveApiKeyForProvider — getApiKeyForModel requires a Model object,
+  // not a string, so it can't be called here without reconstructing the model
+  // descriptor. resolveApiKeyForProvider only needs the provider name, which
+  // we already resolved via findModelProviderConfig.
+  if (api?.runtime?.modelAuth?.resolveApiKeyForProvider) {
     try {
-      const cfg = api.runtime.config.current();
-      const auth = await api.runtime.modelAuth.getApiKeyForModel({ model, cfg });
+      const cfg = api.runtime.config?.current?.();
+      const auth = await api.runtime.modelAuth.resolveApiKeyForProvider({ provider, cfg });
       token = auth?.apiKey || null;
+      if (token) console.log(`[gtw] modelAuth resolved ${provider} via ${auth.source} (${auth.mode})`);
     } catch (e) {
-      console.log('[gtw] modelAuth error:', e.message);
+      console.log(`[gtw] modelAuth.resolveApiKeyForProvider failed for ${provider}: ${e.message}`);
     }
   }
 
