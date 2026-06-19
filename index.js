@@ -51,9 +51,17 @@ const gtw = definePluginEntry({
     // Fires BEFORE each agent turn — works for both new and mid-session
     api.on('before_prompt_build', async (event, ctx) => {
       const key = ctx.sessionKey;
-      if (!key) return;
+      log('[gtw] before_prompt_build fired, sessionKey=%s, pendingDirectives.size=%d', key, pendingDirectives.size);
+      if (!key) {
+        log('[gtw] before_prompt_build: no sessionKey, returning');
+        return;
+      }
       const directive = pendingDirectives.get(key);
-      if (!directive) return;
+      if (!directive) {
+        log('[gtw] before_prompt_build: no directive for key=%s', key);
+        return;
+      }
+      log('[gtw] before_prompt_build: injecting directive for key=%s, length=%d', key, directive.length);
       pendingDirectives.delete(key);
       return { prependContext: directive };
     });
